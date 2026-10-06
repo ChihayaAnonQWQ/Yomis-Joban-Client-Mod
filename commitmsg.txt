@@ -1,0 +1,18 @@
+feat(script): port TextUtil's part-splitting helpers from JCM 2.x
+
+The 1A PIDS now opens the YJCM config screen and accepts a preset -- the reporter
+confirms the screen appears -- but choosing one left the panel black. The log names
+the cause rather than the symptom:
+
+  Java class ScriptEngine$TextUtil has no public instance field or method named
+  getNonCjkParts.   (jsblock:scripts/nyc_subway_a_div.js#40)
+
+The preset asks TextUtil for the Latin half of an MTR string on line 40, before it
+draws anything, so the whole frame -- background included -- was lost. Rendering was
+never the problem: the log shows both halves of the panel running the script.
+
+getCjkParts, getNonCjkParts, getExtraParts, getNonExtraParts, getNonCjkAndExtraParts
+and isCjk are ported from JCM 2.x's TextUtilJS, reproduced rather than reimplemented
+so the exact single-pipe and double-pipe splitting a preset depends on is preserved.
+That file is MIT licensed, Copyright (c) 2022-present Zbx1425, and the attribution is
+kept in the source. Null inputs return an empty string instead of throwing.

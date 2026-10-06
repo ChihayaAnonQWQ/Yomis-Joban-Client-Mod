@@ -280,6 +280,77 @@ public final class ScriptEngine {
 				return System.currentTimeMillis() / 50L;
 			}
 		}
+
+		/*
+		 * The part-splitting helpers below are ported from JCM 2.x's TextUtilJS
+		 * (fabric/src/main/java/com/lx862/mtrscripting/mod/impl/mtr/util/TextUtilJS.java),
+		 * MIT License, Copyright (c) 2022-present Zbx1425. They are reproduced here rather
+		 * than reimplemented so a preset that depends on their exact splitting keeps working.
+		 *
+		 * MTR strings carry two separators: "|" between language variants, and "||" between
+		 * the main text and an extra part. getNonCjkParts("抵達|Arriving") returns "Arriving",
+		 * which is how the NYC preset picks the Latin half to draw.
+		 */
+
+		/** {@code TextUtil.getCjkParts(s)} — the variant that is Chinese. */
+		public static String getCjkParts(String src) {
+			return getCjkMatching(src, true);
+		}
+
+		/** {@code TextUtil.getNonCjkParts(s)} — the variant that is not Chinese. */
+		public static String getNonCjkParts(String src) {
+			return getCjkMatching(src, false);
+		}
+
+		/** {@code TextUtil.getExtraParts(s)} — the part after the "||" separator. */
+		public static String getExtraParts(String src) {
+			return getExtraMatching(src, true);
+		}
+
+		/** {@code TextUtil.getNonExtraParts(s)} — the part before the "||" separator. */
+		public static String getNonExtraParts(String src) {
+			return getExtraMatching(src, false);
+		}
+
+		/** {@code TextUtil.getNonCjkAndExtraParts(s)}. */
+		public static String getNonCjkAndExtraParts(String src) {
+			final String extraParts = getExtraMatching(src, true).trim();
+			return getCjkMatching(src, false).trim() + (extraParts.isEmpty() ? "" : "|" + extraParts);
+		}
+
+		/** {@code TextUtil.isCjk(s)}. */
+		public static boolean isCjk(String src) {
+			return src != null && mtr.data.IGui.isCjk(src);
+		}
+
+		private static String getExtraMatching(String src, boolean extra) {
+			if (src == null) {
+				return "";
+			}
+			if (src.contains("||")) {
+				return src.split("\\|\\|", 2)[extra ? 1 : 0].trim();
+			}
+			return extra ? "" : src;
+		}
+
+		private static String getCjkMatching(String src, boolean cjk) {
+			if (src == null) {
+				return "";
+			}
+			if (src.contains("||")) {
+				src = src.split("\\|\\|", 2)[0];
+			}
+			final StringBuilder result = new StringBuilder();
+			for (String part : src.split("\\|", -1)) {
+				if (mtr.data.IGui.isCjk(part) == cjk) {
+					if (result.length() > 0) {
+						result.append(' ');
+					}
+					result.append(part);
+				}
+			}
+			return result.toString().trim();
+		}
 	}
 
 	/** {@code MinecraftClient.worldDayTime()} — the value JCM 2.x hands to PIDSUtil.formatTime. */
