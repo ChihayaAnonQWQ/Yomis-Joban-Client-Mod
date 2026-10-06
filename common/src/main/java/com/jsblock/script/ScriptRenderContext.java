@@ -33,14 +33,20 @@ import java.util.List;
 public class ScriptRenderContext {
 
 	/**
-	 * Depth step between successive draw calls, in <b>script units</b>.
+	 * Depth step between successive draw calls, in <b>script units</b>, applied as a
+	 * <b>negative</b> offset.
 	 *
-	 * <p>One script unit is 1/96 block, so this is ~0.002 blocks per layer. JCM 2.x uses
-	 * 0.0002 <em>blocks</em> per call; taking that number as script units instead gave
-	 * 2e-6 blocks, far too small to separate the background from the advert and the text,
-	 * and the panel flickered as the depth test resolved differently per frame.</p>
+	 * <p>The panel is drawn inside a space that has been rotated 180 degrees about Z, so
+	 * positive Z points <em>into</em> the block — the same reason YJCM's own renderers pull
+	 * their geometry out with a negative {@code SMALL_OFFSET}. Offsetting later calls
+	 * <em>outward</em> therefore both separates them from the background and keeps them clear
+	 * of the block's own screen face, instead of burying them behind it.</p>
+	 *
+	 * <p>One script unit is 1/96 block, so this is about 0.001 blocks per layer. JCM 2.x's own
+	 * 0.0002 gives 2e-6 blocks here, which is too little to stop the background, the advert and
+	 * the text from resolving differently frame to frame — that was the flicker.</p>
 	 */
-	public static final float Z_ORDER_STEP = 0.2F;
+	public static final float Z_ORDER_STEP = -0.1F;
 
 	public final PoseStack matrices;
 	public final MultiBufferSource vertexConsumers;
