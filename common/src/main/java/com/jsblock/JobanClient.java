@@ -86,7 +86,10 @@ public class JobanClient {
             final RenderRVPIDS<PIDS1A.TileEntityBlockPIDS1A> renderer = new RenderRVPIDS<>(dispatcher, PIDS1A.TileEntityBlockPIDS1A.MAX_ARRIVALS, 1, 9.5F, 6, 8.8F, 30, true, false, 0xFF9900, 0);
             /* PIDS1ARenderer's own literals; the base defaults are the RV ones and put
                this panel about a quarter block off its screen. */
-            renderer.setScriptPanelProfile(-0.47F, -0.155F, -0.130F, 186, 60);
+            /* JCM 2.x's PIDS1ARenderer literals. The Z is raised by 0.018 from that file's
+       -0.130 to cancel most of the shared outward lift, which suits the thicker RV and
+       LCD panels but pushed this one clear of its block. */
+    renderer.setScriptPanelProfile(-0.47F, -0.155F, -0.112F, 186, 60);
             return renderer;
         });
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_LCD_TILE_ENTITY.get(), dispatcher -> new RenderLCDPIDS<>(dispatcher, PIDSLCD.TileEntityBlockPIDS4.MAX_ARRIVALS, 5.7F, 9.5F, 6, 11.5F, 21, true, false, false, 0xEFE29E, 0));
