@@ -1,0 +1,40 @@
+# Gradle / build output
+.gradle/
+build/
+out/
+classes/
+*/build/
+*/.gradle/
+
+# Generated MTR dev jars and dependency checkouts
+libs/
+checkouts/
+
+# Development runs
+run/
+run-server/
+*/run/
+*/run-server/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.settings/
+.vscode/
+bin/
+.classpath
+.project
+
+# OS
+*.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+latest.log
+
+# Scratch
+zipsrc.zip

@@ -6,8 +6,14 @@ import com.jsblock.block.PIDSRVBase;
 import com.jsblock.client.ClientConfig;
 import com.jsblock.client.JobanCustomResources;
 import com.jsblock.data.PIDSPreset;
+import com.jsblock.pids.PIDSContext;
+import com.jsblock.pids.PIDSGeometry;
+import com.jsblock.pids.PIDSGraphics;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import mtr.MTRClient;
+import mtr.block.IBlock;
 import mtr.client.ClientData;
 import mtr.client.IDrawing;
 import mtr.data.IGui;
@@ -16,11 +22,13 @@ import mtr.data.RailwayData;
 import mtr.data.ScheduleEntry;
 import mtr.mappings.BlockEntityMapper;
 import mtr.mappings.BlockEntityRendererMapper;
+import mtr.mappings.UtilitiesClient;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -143,11 +151,81 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
             hidePlatforms = false;
         }
 
+        /* A preset that declares a "components" array drives the whole panel; the built-in
+           hard-coded element positions are skipped entirely (see com.jsblock.pids). */
+        if (preset != null && preset.layout != null) {
+            renderLayout(entity, world, preset, customMessages, hideArrivals, platformIds, delta, matrices, vertexConsumers);
+            return;
+        }
+
         try {
             render(entity, world, customMessages, hideArrivals, hidePlatforms, preset, platformIds, delta, matrices, vertexConsumers, light, overlay);
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Renders a component-based layout preset, bypassing the renderer's hard-coded element
+     * positions.
+     *
+     * <p>The matrix setup deliberately mirrors the block the concrete renderers use for their
+     * background artwork, so a layout lands exactly on the panel: translate to the block
+     * centre, apply the facing/90-degree rotations, move to the panel origin, then divide by
+     * {@link PIDSGeometry#scale}.</p>
+     */
+    protected void renderLayout(T entity, Level world, PIDSPreset preset, String[] customMessages,
+                                boolean[] hideArrivals, List<Long> platformIds, float delta,
+                                PoseStack matrices, MultiBufferSource vertexConsumers) {
+        final PIDSGeometry geometry = getLayoutGeometry();
+        if (geometry == null) {
+            return;
+        }
+
+        final BlockPos pos = entity.getBlockPos();
+        final Direction facing = IBlock.getStatePropertySafe(world, pos, HorizontalDirectionalBlock.FACING);
+
+        final List<ScheduleEntry> scheduleList = new ArrayList<>();
+        if (!platformIds.isEmpty()) {
+            for (long platformId : platformIds) {
+                scheduleList.addAll(ClientData.SCHEDULES_FOR_PLATFORM.getOrDefault(platformId, Collections.emptySet()));
+            }
+        } else {
+            final long closestPlatformId = RailwayData.getClosePlatformId(ClientData.PLATFORMS, ClientData.DATA_CACHE, pos);
+            scheduleList.addAll(ClientData.SCHEDULES_FOR_PLATFORM.getOrDefault(closestPlatformId, Collections.emptySet()));
+        }
+        Collections.sort(scheduleList);
+
+        final PIDSContext context = new PIDSContext(world, pos, facing, customMessages, scheduleList,
+                platformIds, hideArrivals, delta, (long) Math.floor(MTRClient.getGameTick()));
+        final int textColor = preset.color == null ? geometry.defaultTextColor : preset.color;
+        final String font = preset.font == null ? geometry.defaultFont : preset.font;
+
+        matrices.pushPose();
+        matrices.translate(0.5, 0, 0.5);
+        UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
+        UtilitiesClient.rotateZDegrees(matrices, 180);
+        UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);
+        matrices.translate((geometry.startX - 8) / 16, -geometry.startY / 16, (geometry.startZ - 8) / 16 - SMALL_OFFSET * 2);
+        matrices.scale(1F / geometry.scale, 1F / geometry.scale, 1F / geometry.scale);
+
+        final MultiBufferSource.BufferSource immediate = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
+        final PIDSGraphics graphics = new PIDSGraphics(matrices, vertexConsumers, immediate, facing,
+                MAX_LIGHT_GLOWING, textColor, font, 1F);
+
+        preset.layout.render(context, graphics,
+                geometry.startX - geometry.panelWidth / 2F, 0F, geometry.panelWidth, geometry.panelHeight);
+
+        immediate.endBatch();
+        matrices.popPose();
+    }
+
+    /**
+     * @return the panel geometry for this renderer, or {@code null} when component layouts
+     * are not supported for this PIDS variant.
+     */
+    protected PIDSGeometry getLayoutGeometry() {
+        return null;
     }
 
     public abstract void render(T entity, Level world, String[] customMessages, boolean[] hideArrivals, boolean hidePlatforms, PIDSPreset preset, List<Long> platformId, float delta, PoseStack matrices, MultiBufferSource vertexConsumers, int light, int overlay);

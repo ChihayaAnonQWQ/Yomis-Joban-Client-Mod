@@ -2,6 +2,7 @@ package com.jsblock.data;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.jsblock.pids.PIDSLayout;
 import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
 import net.minecraft.resources.ResourceLocation;
 
@@ -14,6 +15,18 @@ public class PIDSPreset {
     public boolean customTextPushArrival;
     public boolean showWeather;
     public boolean showClock;
+
+    /**
+     * Optional component-based layout.
+     *
+     * <p>When a preset declares a {@code components} array, this holds the parsed layout and
+     * renderers draw it instead of the hard-coded element positions. When {@code null}, the
+     * preset behaves exactly as it did before layouts existed, so old resource packs keep
+     * working unchanged.</p>
+     *
+     * @see PIDSLayout
+     */
+    public PIDSLayout layout;
 
     public PIDSPreset(ResourceLocation image, boolean showWeather, boolean showClock, boolean customTextPushArrival, boolean[] visibility, Integer color, String font, Int2IntArrayMap carLengthColorMap) {
         this.image = image;
@@ -61,7 +74,13 @@ public class PIDSPreset {
                 }
             }
         }
-        return new PIDSPreset(background, showWeather, showClock, customTextPushArrival, hideRowArray, color, fonts, carLengthColorMap);
+        final PIDSPreset preset = new PIDSPreset(background, showWeather, showClock, customTextPushArrival, hideRowArray, color, fonts, carLengthColorMap);
+        /* Optional component-based layout. A preset without a "components" array keeps
+           layout == null and is drawn by the built-in renderers as before. */
+        if (element.isJsonObject()) {
+            preset.layout = PIDSLayout.fromJson(element.getAsJsonObject());
+        }
+        return preset;
     }
 
     public Integer getCarColor(int car) {

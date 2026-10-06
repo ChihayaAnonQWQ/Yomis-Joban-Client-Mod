@@ -84,6 +84,17 @@ public class RenderRVPIDS<T extends BlockEntityMapper> extends RenderPIDSBase<T>
         this.rotation = rotation;
     }
 
+    /**
+     * Exposes this renderer's panel geometry so {@link RenderPIDSBase} can draw
+     * component-based layout presets onto exactly the same panel rectangle as the
+     * built-in elements.
+     */
+    @Override
+    protected com.jsblock.pids.PIDSGeometry getLayoutGeometry() {
+        return new com.jsblock.pids.PIDSGeometry(startX, startY, startZ, scale,
+                BACKGROUND_WIDTH, BACKGROUND_HEIGHT, rotate90, rotation, defaultFont, defaultTextColor);
+    }
+
     @Override
     public void render(T entity, Level world, String[] customMessages, boolean[] hideArrivals, boolean hidePlatforms, PIDSPreset preset, List<Long> filteredPlatformIds, float delta, PoseStack matrices, MultiBufferSource vertexConsumers, int light, int overlay) {
         final BlockPos pos = entity.getBlockPos();
