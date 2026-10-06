@@ -119,3 +119,4 @@ public class JobanClient {
     public static void registerParticle(SimpleParticleType particle, ParticleProvider<SimpleParticleType> provider) {
     }
 }
+
