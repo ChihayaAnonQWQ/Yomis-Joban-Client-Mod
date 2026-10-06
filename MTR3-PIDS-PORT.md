@@ -277,3 +277,102 @@ powershell -NoProfile -File tools\run-pids-check.ps1
 | `PIDSPresetBase.BASE_SCALE` | 由 `PIDSLayout` 的 `size` 画布等比换算 |
 | `Text.translatable`（MTR 4） | `mtr.mappings.Text.translatable` |
 | `ComponentParser` / `PIDSComponent.componentList` | 同名接口 / `PIDSComponent.COMPONENTS`（同样可被第三方扩展） |
+
+
+---
+
+# 附录：1A PIDS（`jsblock:pids_1a`）预设支持 —— 现状与交接
+
+## 已完成（游戏内已验证）
+
+2026-10-07。目标是让 `jsblock:pids_1a` 像 LCD / RV 型号一样支持「刷子右键切换显示格式（预设）」。
+
+改动只有两处父类上移和一处渲染器替换，都能编译、且**界面已在游戏内确认出现**：
+
+```java
+// PIDS1A.java
+public class PIDS1A extends JobanPIDSBase {                       // 原 BlockPIDSBaseHorizontal
+public static class TileEntityBlockPIDS1A
+        extends JobanPIDSBase.TileEntityBlockJobanPIDS { ... }    // 原 ...TileEntityBlockPIDSBaseHorizontal
+
+// JobanClient.java:85
+new RenderRVPIDS<>(...)                                           // 原 MTR 的 RenderPIDS<>
+```
+
+**为什么两行就够了**：预设存储、自动切换、消息、站台筛选和它们的 NBT 读写**全部在 `JobanPIDSBase.TileEntityBlockJobanPIDS` 里**，而它继承的正是 `TileEntityBlockPIDS1A` 原本用的 `TileEntityBlockPIDSBaseHorizontal`；`JobanPIDSBase.use()` 也已实现了「刷子 → 带预设框的配置界面」。1A 只是没接入这个继承体系。
+
+而原渲染器是 MTR 的 `RenderPIDS<>`（配置界面也是 MTR 自带的 `PIDSScreen`，因此**没有预设字段** —— 界面上有「页码」是识别它的标志）。换成 `RenderRVPIDS<>` 后即接入 `RenderPIDSBase` 的 `renderScripted` 路径；两者构造函数签名兼容，原参数原样映射。
+
+日志证明脚本管线已通（两格都在渲染）：
+
+```
+[PIDS] running script preset=nyc_subway_a_div canvas=133x72 scriptScale=1.0 outward=0.02 at -2,-59,10
+[PIDS] running script preset=nyc_subway_a_div ...                                at -1,-59,10
+```
+
+## 未解决：面板陷进方块（横向偏 0.26 方块）
+
+**根因已定量确定。** 脚本面板的变换链照搬自 JCM 2.x，其中面板偏移是每个渲染器**各自的硬编码字面量**：
+
+| 渲染器 | 硬编码 translate | 画布 |
+|---|---|---|
+| `RVPIDSRenderer` | `(-0.21, -0.14, -0.128)` | 136 × 76 |
+| **`PIDS1ARenderer`** | **`(-0.47, -0.155, -0.130)`** | **186 × 60** |
+| `LCDPIDSRenderer` | `(-0.19, -0.125, -0.130)` | 133 × 72 |
+
+1A 现在经 `RenderRVPIDS` 渲染，走的是**基类默认值 = RV 的字面量**：
+
+```
+X 方向差值 = |-0.47 - (-0.21)| = 0.26 方块
+```
+
+**四分之一格的横向偏移，足以让面板陷进方块内部** —— 与 RV 型号此前出现过的"重叠"现象同类。
+
+`RenderPIDSBase` 中已预留可覆写的钩子（`scriptPanelTranslateX/Y/Z()`、`scriptCanvasWidth/Height()`），`RenderLCDPIDS` 正是这样覆写的。
+
+## 两次失败的接法（勿重复）
+
+目的都是让 1A 的注册处采用 `(-0.47, -0.155, -0.130)` + `186×60`。两次都在类型系统上失败，均**已回退、构建保持绿色**：
+
+| 尝试 | 写法 | 报错 |
+|---|---|---|
+| 1 | 块 lambda + 声明 `RenderRVPIDS<PIDS1A.TileEntityBlockPIDS1A> renderer = new RenderRVPIDS<>(...)`，再调 setter | `JobanClient.java:86: 无法推断 RenderRVPIDS<> 的类型参数` |
+| 2 | 让 `setScriptPanelProfile` 返回 `this` 并链式调用 `new RenderRVPIDS<>(...).setScriptPanelProfile(...)` | `JobanClient.java:85: 找不到符号` |
+
+**失败原因（推断，未证实）**：两次都建立在"`RenderRVPIDS` 有一个与 MTR `RenderPIDS` 同形的 13 参数构造函数"这一**未经核实的假设**上。该行最初能编译，是因为 `new RenderPIDS<>(...)` 与 `new RenderRVPIDS<>(...)` 在**替换时**恰好都通过；但一旦需要接住实例（声明变量或链式调用），类型推断就暴露了假设不成立。
+
+## 建议的下一步：先读，再改
+
+**关键教训**：以上两次都是"改一行 → 编译报错 → 再改"，没有先读清类型。下一步应当**一次性读完这三处**，再动手：
+
+1. `render/RenderRVPIDS.java` —— **全部构造函数重载**及其返回类型（尤其：那个 13 参数的究竟是不是 `RenderRVPIDS` 的，还是继承自别处）
+2. `RegistryClient.registerTileEntityRenderer(...)` 的**参数类型**（期望 `BlockEntityRenderer<T>` 还是别的）
+3. `JobanClient.java:92-95` —— **LCD / RV / RV-SIL 那四行的确切写法**（它们能编译，照它们的形状写）
+
+然后按其中一条实现：
+
+- **A**：新建 `render/RenderPIDS1A.java`，照抄 `RenderRVPIDS` 的构造函数签名并覆写那 5 个 getter —— 最直白
+- **B**：在 `RenderPIDSBase` 上加一个返回 `RenderPIDSBase<T>` 的**普通 setter**（非链式），在注册处改用块 lambda 并在其中调用，**但变量类型要照 RV 行的写法**（例如用与注册处相同泛型实参的显式类型）
+
+改动完成后**紧跟一次编译**，通过后再更新 jar 并做游戏内验证。
+
+## 备份与回滚点
+
+```
+tag                 backup-before-pids1a-config   （1A 改动之前的最后一版）
+branch              backup/pids1a-start
+HEAD               61b7ff0
+jar 备份            yjcm-recon\backup-jar\
+```
+
+回滚 1A 全部改动：
+
+```powershell
+git checkout backup-before-pids1a-config -- common/src/main/java/com/jsblock/block/PIDS1A.java
+git checkout backup-before-pids1a-config -- common/src/main/java/com/jsblock/JobanClient.java
+```
+
+## 另需留意
+
+- **1A 的字面量 `(-0.47, -0.155, -0.130)` / `186×60` 来自 JCM 2.x 的 `PIDS1ARenderer`**，已在上表记录，无需再去翻源码。
+- 同一个方法（`TextUtil` 补齐那次）暴露出的教训仍然有效：**验证要覆盖多个预设**。当时把检查从 1 个预设扩到 3 个 × 3 种班车数，立刻抓出 3 个真 bug（`departureTime()` 未守空、缺 `worldIsRaining` / `worldIsThundering`、缺 `route()`）。1A 的面板偏移问题同样属于"换个型号就暴露"的类型。
