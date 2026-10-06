@@ -260,6 +260,30 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         return null;
     }
 
+    /**
+     * Finds the head block of the multi-block PIDS this block belongs to.
+     *
+     * <p>JCM 2.x stores the structure's origin on the block entity and renders from it, so
+     * that every half produces the same geometry. MTR 3's PIDS blocks do not carry that, but
+     * the head is reachable: walk backwards along the facing axis for as long as the blocks
+     * are the same type.</p>
+     *
+     * @return the head block's position, or {@code pos} if this is already the head
+     */
+    private static BlockPos headBlock(Level world, BlockPos pos, Direction facing) {
+        final net.minecraft.world.level.block.Block block = world.getBlockState(pos).getBlock();
+        BlockPos current = pos;
+        final Direction backwards = facing.getOpposite();
+        for (int i = 0; i < 8; i++) {
+            final BlockPos candidate = current.relative(backwards);
+            if (world.getBlockState(candidate).getBlock() != block) {
+                return current;
+            }
+            current = candidate;
+        }
+        return current;
+    }
+
     /** Block positions already reported, so the panel diagnostics do not repeat every frame. */
     private static final java.util.Set<String> REPORTED_PANELS = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -347,7 +371,15 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList);
 
         matrices.pushPose();
-        matrices.translate(0.5, 0, 0.5);
+        /* JCM 2.x renders every half of a two-block PIDS from the structure's origin --
+           PIDSRenderer builds its transform at "0.5 + blockEntity.getPos2()" and passes
+           getPos2() to the preset -- so both renderer calls emit identical geometry that
+           simply overlaps. Drawing from each half's own position instead put the same panel
+           at two different places, and the two copies traded places in the depth buffer every
+           frame, which is the flicker. Walk back along the facing axis to the head block and
+           offset by the difference. */
+        final BlockPos origin = headBlock(world, pos, facing);
+        matrices.translate(0.5 + origin.getX() - pos.getX(), 0, 0.5 + origin.getZ() - pos.getZ());
         UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
         UtilitiesClient.rotateZDegrees(matrices, 180);
         UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);
