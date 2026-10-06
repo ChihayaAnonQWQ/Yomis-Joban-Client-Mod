@@ -329,6 +329,20 @@ public class PIDSWrapper {
 		}
 
 		/**
+		 * {@code arrival.route()} — the service this train is running, for route-map views.
+		 *
+		 * <p>HKR's presets draw the calling pattern with
+		 * {@code route.getPlatforms().get(i).getStationName()}, so this hands back a wrapper
+		 * rather than MTR 3's {@code Route}: a route stores platform ids only, and the station
+		 * names have to be resolved through each platform.</p>
+		 *
+		 * @return {@code null} for the absent placeholder, matching JCM 2.x's nullable accessor
+		 */
+		public RouteInfo route() {
+			return entry == null ? null : new RouteInfo(PIDSData.route(entry.routeId));
+		}
+
+		/**
 		 * @return the arrival time. MTR 3's {@code ScheduleEntry} carries a single timestamp for
 		 * the stop, so there is no separate departure time to report; JCM 2.x scripts that read
 		 * this get the stop time rather than an exception.
@@ -377,6 +391,79 @@ public class PIDSWrapper {
 
 		private Platform platformRef() {
 			return entry == null ? null : PIDSData.platform(PIDSData.platformIdOf(entry));
+		}
+	}
+
+	/**
+	 * {@code route} view handed to scripts as {@code arrival.route()}.
+	 *
+	 * <p>HKR's route-map presets walk {@code getPlatforms()} in order and print each stop's
+	 * station name, so the list has to resolve names the way MTR 3 stores them: a route holds
+	 * platform ids, and the name lives on the station that platform belongs to.</p>
+	 */
+	public static class RouteInfo {
+		private final Route route;
+
+		RouteInfo(Route route) {
+			this.route = route;
+		}
+
+		/** {@code route.getPlatforms()} — the stops this service calls at, in order. */
+		public RouteStopList getPlatforms() {
+			return new RouteStopList(route);
+		}
+
+		/** {@code route.getName()} — MTR 4 spells it this way, so both are offered. */
+		public String getName() {
+			return route == null || route.name == null ? "" : route.name;
+		}
+
+		/** @return the number of stops, or 0 when the route could not be resolved. */
+		public int getPlatformCount() {
+			return route == null || route.platformIds == null ? 0 : route.platformIds.size();
+		}
+	}
+
+	/** The platform list of a {@link RouteInfo}, addressed as {@code get(i)} like JCM 2.x's. */
+	public static class RouteStopList {
+		private final Route route;
+
+		RouteStopList(Route route) {
+			this.route = route;
+		}
+
+		public int size() {
+			return route == null || route.platformIds == null ? 0 : route.platformIds.size();
+		}
+
+		/**
+		 * @return the stop at {@code i}; past the end this is an unnamed stop rather than null,
+		 * because HKR's loops iterate to the list's own size and a null would abort the frame
+		 */
+		public RouteStopInfo get(int i) {
+			if (route == null || route.platformIds == null || i < 0 || i >= route.platformIds.size()) {
+				return new RouteStopInfo(0L);
+			}
+			return new RouteStopInfo(route.platformIds.get(i).platformId);
+		}
+	}
+
+	/** One stop of a route, as read by {@code getPlatforms().get(i)}. */
+	public static class RouteStopInfo {
+		private final long platformId;
+
+		RouteStopInfo(long platformId) {
+			this.platformId = platformId;
+		}
+
+		/** {@code getStationName()} — MTR 4's spelling; this is what HKR prints. */
+		public String getStationName() {
+			final Station station = PIDSData.stationOf(platformId);
+			return station == null || station.name == null ? "" : station.name;
+		}
+
+		public long getPlatformId() {
+			return platformId;
 		}
 	}
 
