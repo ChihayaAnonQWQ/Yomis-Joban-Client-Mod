@@ -303,18 +303,42 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * PIDS1ARenderer {@code (-0.47, -0.155, -0.130)}. Subclasses override these with their
      * own values; the default is the RV set.</p>
      */
+    /* Mutable so a renderer can adopt another PIDS shape's JCM 2.x literals at registration
+       time, without a subclass per shape. Defaults are RVPIDSRenderer's. */
+    private float panelTranslateX = -0.21F;
+    private float panelTranslateY = -0.14F;
+    private float panelTranslateZ = -0.128F;
+    private int canvasWidth = 136;
+    private int canvasHeight = 76;
+
+    /**
+     * Adopts another PIDS shape's JCM 2.x panel transform and canvas.
+     *
+     * <p>JCM 2.x gives each renderer its own literals -- RVPIDSRenderer
+     * {@code (-0.21, -0.14, -0.128)} with a 136x76 canvas, PIDS1ARenderer
+     * {@code (-0.47, -0.155, -0.130)} with 186x60, LCDPIDSRenderer {@code (-0.19, -0.125,
+     * -0.130)} with 133x72. Using the wrong set puts the panel roughly a quarter block off its
+     * screen, which is what happened when the 1A PIDS borrowed the RV ones.</p>
+     */
+    public void setScriptPanelProfile(float x, float y, float z, int canvasW, int canvasH) {
+        this.panelTranslateX = x;
+        this.panelTranslateY = y;
+        this.panelTranslateZ = z;
+        this.canvasWidth = canvasW;
+        this.canvasHeight = canvasH;
+    }
     protected float scriptPanelTranslateX() {
-        return -0.21F;
+        return panelTranslateX;
     }
 
     /** @see #scriptPanelTranslateX() */
     protected float scriptPanelTranslateY() {
-        return -0.14F;
+        return panelTranslateY;
     }
 
     /** @see #scriptPanelTranslateX() */
     protected float scriptPanelTranslateZ() {
-        return -0.128F;
+        return panelTranslateZ;
     }
 
     /**
@@ -325,12 +349,12 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * numbers their author wrote against.</p>
      */
     protected int scriptCanvasWidth() {
-        return 136;
+        return canvasWidth;
     }
 
     /** @see #scriptCanvasWidth() */
     protected int scriptCanvasHeight() {
-        return 76;
+        return canvasHeight;
     }
 
     /** Block positions already reported, so the panel diagnostics do not repeat every frame. */
