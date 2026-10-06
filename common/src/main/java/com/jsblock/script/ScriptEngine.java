@@ -55,11 +55,15 @@ public final class ScriptEngine {
 	 * @return the compiled program for a preset, compiling and caching it on first use.
 	 * Returns {@code null} when the preset has no scripts or none of them compiled.
 	 */
-	public static Program programFor(PIDSPreset preset) {
+	public static Program programFor(PIDSPreset preset, net.minecraft.core.BlockPos pos) {
 		if (preset == null || !preset.isScripted()) {
 			return null;
 		}
-		final String key = preset.displayName() + "@" + preset.id;
+		/* JCM 2.x keys script instances by UniqueKey("pids", getId(), x, y, z), so each
+		   PIDS block owns its state. Sharing one state between blocks -- and between the
+		   two halves of a panel, which each get a renderer call -- runs a preset's frame
+		   counters at double speed and lets two draws of the same panel disagree. */
+		final String key = preset.displayName() + "@" + preset.id + (pos == null ? "" : "#" + pos.asLong());
 		final Program cached = PROGRAMS.get(key);
 		if (cached != null) {
 			return cached;

@@ -334,13 +334,16 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         if (geometry == null) {
             return;
         }
-        final com.jsblock.script.ScriptEngine.Program program = com.jsblock.script.ScriptEngine.programFor(preset);
+        final BlockPos pos = entity.getBlockPos();
+        final Direction facing = IBlock.getStatePropertySafe(world, pos, HorizontalDirectionalBlock.FACING);
+
+        /* Keyed by position: JCM 2.x gives each PIDS its own script state, see
+           ScriptEngine.programFor. Both halves of a panel would otherwise share one
+           state.cycleTimer and disagree about which view they are showing. */
+        final com.jsblock.script.ScriptEngine.Program program = com.jsblock.script.ScriptEngine.programFor(preset, pos);
         if (program == null) {
             return;
         }
-
-        final BlockPos pos = entity.getBlockPos();
-        final Direction facing = IBlock.getStatePropertySafe(world, pos, HorizontalDirectionalBlock.FACING);
 
         final List<ScheduleEntry> scheduleList = new ArrayList<>();
         if (!platformIds.isEmpty()) {
@@ -376,6 +379,13 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         UtilitiesClient.rotateZDegrees(matrices, 180);
         UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);
         matrices.translate((geometry.startX - 8) / 16, -geometry.startY / 16, (geometry.startZ - 8) / 16 - SMALL_OFFSET * 2);
+        /* JCM 2.x lifts the finished panel out of its block by exactly this much:
+           ScriptPIDSPreset.render runs graphicsHolder.translate(0, 0, -0.005) after the script
+           has queued its draw calls and before they are replayed, so every layer moves
+           together. Without it the panel sits on the block's surface and fights it in the
+           depth buffer -- the overlap the reporter saw. Applied in the same block space, so
+           0.005 blocks: a tenth of the value tried earlier, which floated the picture off. */
+        matrices.translate(0F, 0F, -0.005F);
         matrices.scale(1F / geometry.scale, 1F / geometry.scale, 1F / geometry.scale);
         /* Move to the panel's top-left corner: scripts position everything from there.
            panelLeft()/panelOffsetY are already expressed in this post-scale space, which is
