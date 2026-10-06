@@ -48,19 +48,31 @@ public final class ScriptApiCheck {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 1) {
-			System.out.println("usage: ScriptApiCheck <script.js> [resourceRoot ...]");
+			System.out.println("usage: ScriptApiCheck <script.js> [resourceRoot ...] [--arrivals=N] [--iterations=N]");
 			System.exit(2);
 		}
-		final Path script = Paths.get(args[0]);
-		for (int i = 1; i < args.length; i++) {
-			RESOURCE_ROOTS.add(Paths.get(args[i]));
+		String scriptArg = null;
+		int arrivalCount = 2;
+		int iterations = 1;
+		for (String arg : args) {
+			if (arg.startsWith("--arrivals=")) {
+				arrivalCount = Integer.parseInt(arg.substring("--arrivals=".length()));
+			} else if (arg.startsWith("--iterations=")) {
+				iterations = Integer.parseInt(arg.substring("--iterations=".length()));
+			} else if (scriptArg == null) {
+				scriptArg = arg;
+			} else {
+				RESOURCE_ROOTS.add(Paths.get(arg));
+			}
 		}
+		final Path script = Paths.get(scriptArg);
 		if (!Files.isRegularFile(script)) {
 			System.out.println("FAIL script not found: " + script);
 			System.exit(2);
 		}
 
 		System.out.println("== script: " + script);
+		System.out.println("   arrivals simulated: " + arrivalCount + ", render iterations: " + iterations);
 		System.out.println("   resource roots: " + RESOURCE_ROOTS);
 
 		final Context cx = Context.enter();
@@ -83,17 +95,19 @@ public final class ScriptApiCheck {
 			state.setPrototype(ScriptableObject.getObjectPrototype(scope));
 			state.setParentScope(scope);
 
-			final PIDSWrapper pids = stubPids();
+			final PIDSWrapper pids = stubPids(arrivalCount);
 			System.out.println("OK   stub pids: " + pids.width + "x" + pids.height
 					+ " type=" + pids.type + " arrivals=" + pids.arrivals().size());
 
 			failures += callLifecycle(cx, scope, "create", state, pids);
 
-			// render(ctx, state, pids) with a recording context.
-			final ScriptRenderContext ctx = ScriptRenderContext.dryRun(pids.width, pids.height, 1F);
-			failures += callRender(cx, scope, state, pids, ctx);
-
-			final List<String> recorded = ctx.recordedCalls();
+			// render(ctx, state, pids) with a recording context, repeated to catch state drift.
+			List<String> recorded = Collections.emptyList();
+			for (int i = 0; i < iterations; i++) {
+				final ScriptRenderContext ctx = ScriptRenderContext.dryRun(pids.width, pids.height, 1F);
+				failures += callRender(cx, scope, state, pids, ctx, i);
+				recorded = ctx.recordedCalls();
+			}
 			System.out.println("     draw calls recorded: " + recorded.size());
 			for (String call : recorded) {
 				System.out.println("       " + call);
@@ -121,12 +135,17 @@ public final class ScriptApiCheck {
 
 	// ------------------------------------------------------------------
 
-	private static PIDSWrapper stubPids() {
+	/**
+	 * @param count how many upcoming trains to simulate. JCM 2.x's {@code arrivals().get(i)}
+	 *              returns null past the end, which is exactly the case a preset must survive
+	 *              on a platform with no trains -- so 0 is a case worth running.
+	 */
+	private static PIDSWrapper stubPids(int count) {
 		final long now = System.currentTimeMillis();
-		final List<ScheduleEntry> schedule = Arrays.asList(
-				new ScheduleEntry(now + 90_000L, 6, 1L, 2),
-				new ScheduleEntry(now + 260_000L, 4, 2L, 5)
-		);
+		final List<ScheduleEntry> schedule = new ArrayList<>();
+		for (int i = 0; i < count; i++) {
+			schedule.add(new ScheduleEntry(now + 90_000L * (i + 1), 6 - i, 1L + i, 2 + i));
+		}
 		return new PIDSWrapper("crt_pids", 3, 128, 72, new BlockPos(0, 64, 0),
 				Collections.<Long>emptyList(),
 				new String[]{"欢迎乘坐重庆轨道交通", "", ""},
@@ -151,7 +170,7 @@ public final class ScriptApiCheck {
 	}
 
 	private static int callRender(Context cx, Scriptable scope, ScriptableObject state,
-								  PIDSWrapper pids, ScriptRenderContext ctx) {
+								  PIDSWrapper pids, ScriptRenderContext ctx, int iteration) {
 		final Object fn = scope.get("render", scope);
 		if (!(fn instanceof Function)) {
 			System.out.println("FAIL no render() defined");
@@ -159,10 +178,12 @@ public final class ScriptApiCheck {
 		}
 		try {
 			((Function) fn).call(cx, scope, scope, new Object[]{ctx, state, pids});
-			System.out.println("OK   render() ran");
+			if (iteration == 0) {
+				System.out.println("OK   render() ran");
+			}
 			return 0;
 		} catch (Exception e) {
-			System.out.println("FAIL render() threw: " + e);
+			System.out.println("FAIL render() threw on iteration " + iteration + ": " + e);
 			return 1;
 		}
 	}
