@@ -5,13 +5,19 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.jsblock.data.PIDSPreset;
+import mtr.data.ScheduleEntry;
+import net.minecraft.core.BlockPos;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
- * Standalone check that the presets YJCM ships actually parse into component layouts.
+ * Standalone check that the presets YJCM ships actually parse into component layouts, and
+ * that the row semantics layouts rely on match the built-in renderers.
  *
  * <p>Compiling proves nothing about whether {@link PIDSLayout} understands the JSON in
  * {@code assets/jsblock/joban_custom_resources.json}, so this runs the real
@@ -19,7 +25,7 @@ import java.nio.charset.StandardCharsets;
  * produced. It also feeds one deliberately malformed preset through to confirm a single bad
  * element is skipped instead of taking the whole preset down.</p>
  *
- * <p>Run via the {@code pidsPresetCheck} task (see {@code tools/init-pids-check.gradle}).</p>
+ * <p>Run via {@code tools/run-pids-check.ps1}.</p>
  */
 public final class PIDSPresetCheck {
 
@@ -33,10 +39,96 @@ public final class PIDSPresetCheck {
 
 		failures += checkShippedPresets(args.length > 0 ? args[0] : DEFAULT_RESOURCE);
 		failures += checkMalformedPresetIsSurvivable();
+		failures += checkRowMapping();
 
 		System.out.println();
 		System.out.println(failures == 0 ? "RESULT: ALL CHECKS PASSED" : "RESULT: " + failures + " FAILURE(S)");
 		System.exit(failures == 0 ? 0 : 1);
+	}
+
+	/**
+	 * Verifies that a component's {@code row} indexes <em>display</em> rows using the same
+	 * consumption rule as {@code RenderLCDPIDS} / {@code RenderRVPIDS}: a hidden row does
+	 * not consume an arrival, so the arrival surfaces in the next visible row.
+	 *
+	 * <p>The expected values below are hand-derived from the renderer loop: it iterates
+	 * {@code i} over the display rows, draws {@code schedule[entryIndex]}, and only runs
+	 * {@code entryIndex++} when the row was not skipped by {@code hideArrivals[i]}.</p>
+	 */
+	private static int checkRowMapping() {
+		System.out.println();
+		System.out.println("== display-row mapping ==");
+		int failures = 0;
+
+		// Five arrivals; arrivalMillis 1000..5000 so the "shown arrival" is its 1-based index.
+		final List<ScheduleEntry> schedule = new ArrayList<>();
+		for (int i = 0; i < 5; i++) {
+			schedule.add(new ScheduleEntry(1000L * (i + 1), 4, 100L + i, i));
+		}
+
+		failures += expectRows("no hidden rows",
+				new boolean[]{false, false, false, false}, schedule,
+				new long[]{1, 2, 3, 4});
+
+		// Row 1 hidden -> consumes nothing, so row 2 shows schedule[1] and row 3 shows
+		// schedule[2]; schedule[3] and schedule[4] never reach a display row.
+		failures += expectRows("row 1 hidden",
+				new boolean[]{false, true, false, false}, schedule,
+				new long[]{1, -1, 2, 3});
+
+		failures += expectRows("row 0 hidden",
+				new boolean[]{true, false, false, false}, schedule,
+				new long[]{-1, 1, 2, 3});
+
+		failures += expectRows("more rows than arrivals",
+				new boolean[]{false, false, false, false}, schedule.subList(0, 2),
+				new long[]{1, 2, -1, -1});
+
+		return failures;
+	}
+
+	/**
+	 * @param expected arrival number per display row, where {@code -1} means "no arrival".
+	 *                 Numbering starts at 1 so 0 stays unambiguous.
+	 */
+	private static int expectRows(String label, boolean[] hidden, List<ScheduleEntry> schedule, long[] expected) {
+		final PIDSContext context = new PIDSContext(
+				null, new BlockPos(0, 0, 0), null, new String[hidden.length],
+				new ArrayList<>(schedule), Collections.emptyList(), hidden, 0D, 0L);
+
+		final StringBuilder actual = new StringBuilder();
+		boolean ok = true;
+		for (int row = 0; row < expected.length; row++) {
+			final ScheduleEntry entry = context.arrival(row);
+			final long shown = entry == null ? -1 : entry.arrivalMillis / 1000L;
+			if (row > 0) {
+				actual.append(", ");
+			}
+			actual.append(shown);
+			if (shown != expected[row]) {
+				ok = false;
+			}
+		}
+
+		if (ok) {
+			System.out.println("OK   " + label + " -> rows [" + actual + "]");
+			return 0;
+		}
+		System.out.println("FAIL " + label
+				+ "\n       expected [" + join(expected) + "]"
+				+ "\n       actual   [" + actual + "]");
+		return 1;
+	}
+
+	private static String join(long[] values) {
+		final StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < values.length; i++) {
+			if (i > 0) {
+				builder.append(", ");
+			}
+			builder.append(values[i]);
+		}
+		return builder.toString();
 	}
 
 	private static int checkShippedPresets(String resourcePath) throws Exception {
