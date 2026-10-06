@@ -96,4 +96,26 @@ public final class PIDSData {
 		final Route route = entry == null ? null : route(entry.routeId);
 		return route == null ? fallback : route.color;
 	}
+
+	/**
+	 * Resolves the platform an arrival is heading to.
+	 *
+	 * <p>MTR 4's {@code ArrivalResponse} carries its platform id directly. MTR 3's
+	 * {@link ScheduleEntry} does not, but {@code currentStationIndex} is the index of the stop
+	 * the train is heading to, so the platform is that entry of the route's platform list —
+	 * the same platform the panel is announcing.</p>
+	 *
+	 * @return the platform id, or {@code 0} when it cannot be resolved
+	 */
+	public static long platformIdOf(ScheduleEntry entry) {
+		final Route route = entry == null ? null : route(entry.routeId);
+		if (route == null || route.platformIds == null) {
+			return 0L;
+		}
+		final int index = entry.currentStationIndex;
+		if (index < 0 || index >= route.platformIds.size()) {
+			return 0L;
+		}
+		return route.platformIds.get(index).platformId;
+	}
 }

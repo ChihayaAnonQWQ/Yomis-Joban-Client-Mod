@@ -27,6 +27,8 @@ dependencies {
 
 	common(project(path: ":common", configuration: "namedElements")) { transitive false }
 	shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive = false }
+	/* Bundled so the released jar carries the PIDS scripting engine (see gradle.properties). */
+	shadowCommon "org.mozilla:rhino:${rootProject.rhino_version}"
 }
 
 processResources {

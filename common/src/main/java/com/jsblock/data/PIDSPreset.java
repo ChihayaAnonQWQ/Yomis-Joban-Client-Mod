@@ -7,7 +7,13 @@ import com.jsblock.pids.PIDSLayout;
 import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
 import net.minecraft.resources.ResourceLocation;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 public class PIDSPreset {
+    /** The key this preset is registered under in {@code JobanCustomResources.PIDSPresets}. */
+    public String id;
     public ResourceLocation image;
     public Integer color;
     public String font;
@@ -29,6 +35,34 @@ public class PIDSPreset {
      */
     public PIDSLayout layout;
 
+    /**
+     * Human-readable name shown in the PIDS config screen.
+     *
+     * <p>JCM 2.x field. Falls back to the preset id when absent, matching how JCM 2.x's
+     * {@code PIDSPresetBase} treats a null name.</p>
+     */
+    public String name;
+
+    /** Whether the preset ships with the mod rather than coming from a resource pack. JCM 2.x field. */
+    public boolean builtin;
+
+    /**
+     * Script files that draw this preset, in load order.
+     *
+     * <p>JCM 2.x field: a JCM 2.x preset is a JavaScript file rather than a list of
+     * components. An empty list means the preset is not scripted, and the JSON-component
+     * ({@link #layout}) or built-in renderer path applies instead.</p>
+     */
+    public List<String> scriptFiles = Collections.emptyList();
+
+    /**
+     * PIDS block types this preset refuses to run on, by type name.
+     *
+     * <p>JCM 2.x field. JCM 2.x also keeps a global per-type blacklist in the preset name
+     * space; here the list is consulted through {@link #allowsType(String)}.</p>
+     */
+    public List<String> blacklist = Collections.emptyList();
+
     public PIDSPreset(ResourceLocation image, boolean showWeather, boolean showClock, boolean customTextPushArrival, boolean[] visibility, Integer color, String font, Int2IntArrayMap carLengthColorMap) {
         this.image = image;
         this.showWeather = showWeather;
@@ -38,6 +72,21 @@ public class PIDSPreset {
         this.font = font;
         this.customTextPushArrival = customTextPushArrival;
         this.carLengthColorMap = carLengthColorMap;
+    }
+
+    /** @return {@code true} when this preset is drawn by JavaScript rather than by JSON. */
+    public boolean isScripted() {
+        return scriptFiles != null && !scriptFiles.isEmpty();
+    }
+
+    /** @return {@code true} when the preset may be used on the given PIDS type. */
+    public boolean allowsType(String pidsType) {
+        return blacklist == null || pidsType == null || !blacklist.contains(pidsType);
+    }
+
+    /** @return the display name, falling back to {@link #id} exactly as JCM 2.x does. */
+    public String displayName() {
+        return name == null || name.isEmpty() ? id : name;
     }
 
     public static PIDSPreset fromJson(JsonElement element) {
@@ -93,7 +142,42 @@ public class PIDSPreset {
         if (element.isJsonObject()) {
             preset.layout = PIDSLayout.fromJson(element.getAsJsonObject());
         }
+
+        /* JCM 2.x preset metadata. All of it is optional so JCM 1.x presets keep parsing. */
+        preset.id = presetObject.has("id") ? presetObject.get("id").getAsString() : null;
+        if (presetObject.has("name")) {
+            preset.name = presetObject.get("name").getAsString();
+        }
+        preset.builtin = presetObject.has("builtin") && presetObject.get("builtin").getAsBoolean();
+        preset.scriptFiles = readStringList(presetObject, "scriptFiles");
+        preset.blacklist = readStringList(presetObject, "blacklist");
+
         return preset;
+    }
+
+    /**
+     * Reads a JSON array of strings, tolerating a single string and skipping nulls.
+     *
+     * @return an immutable list, never {@code null}
+     */
+    private static List<String> readStringList(JsonObject json, String key) {
+        if (json == null || !json.has(key) || json.get(key).isJsonNull()) {
+            return Collections.emptyList();
+        }
+        final JsonElement element = json.get(key);
+        if (element.isJsonPrimitive()) {
+            return Collections.singletonList(element.getAsString());
+        }
+        if (!element.isJsonArray()) {
+            return Collections.emptyList();
+        }
+        final List<String> values = new ArrayList<>();
+        for (JsonElement entry : element.getAsJsonArray()) {
+            if (entry != null && !entry.isJsonNull()) {
+                values.add(entry.getAsString());
+            }
+        }
+        return Collections.unmodifiableList(values);
     }
 
     public Integer getCarColor(int car) {

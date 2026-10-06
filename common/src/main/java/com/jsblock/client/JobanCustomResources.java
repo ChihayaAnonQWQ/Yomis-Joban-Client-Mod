@@ -34,6 +34,9 @@ public class JobanCustomResources {
      */
     public static void reload(ResourceManager manager) {
         PIDSPresets.clear();
+        /* Compiled PIDS programs hold a snapshot of the previous resource pack's scripts, so
+           they must be dropped alongside the presets that reference them. */
+        com.jsblock.script.ScriptEngine.reset();
 
         /* Add default preset */
         PIDSPresets.put("door_cls_apg", defaultPreset1);

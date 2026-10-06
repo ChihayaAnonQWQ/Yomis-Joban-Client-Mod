@@ -1,0 +1,345 @@
+package com.jsblock.script;
+
+import com.jsblock.Joban;
+import com.jsblock.data.PIDSPreset;
+import mtr.MTRClient;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceLocation;
+import org.mozilla.javascript.BaseFunction;
+import org.mozilla.javascript.Context;
+import org.mozilla.javascript.NativeJavaClass;
+import org.mozilla.javascript.Scriptable;
+import org.mozilla.javascript.ScriptableObject;
+import org.mozilla.javascript.Undefined;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Runs the JavaScript PIDS presets used by JCM 2.x on top of MTR 3.
+ *
+ * <p>A JCM 2.x preset is a {@code scriptFiles} list rather than a list of JSON components.
+ * Each script defines {@code create(ctx, state, pids)}, {@code render(ctx, state, pids)} and
+ * {@code dispose(ctx, state, pids)}, and draws by chaining builders such as
+ * {@code Text.create("Clock").text(...).pos(124, 6).rightAlign().draw(ctx)}.</p>
+ *
+ * <p>Port of JCM 2.x's {@code com.lx862.mtrscripting} core, reduced to the PIDS surface:
+ * JCM 2.x also drives vehicles, lifts, eye-candy and networking from scripts, none of which
+ * this branch needs. The globals registered here are the ones JCM 2.x's own
+ * {@code pids_1a.js} and the shipped {@code pids_util.js} touch.</p>
+ */
+public final class ScriptEngine {
+
+	/** Compiled programs, keyed by preset id. Cleared whenever resources reload. */
+	private static final Map<String, Program> PROGRAMS = new HashMap<>();
+
+	/** Scripts currently being included, so a cycle cannot recurse forever. */
+	private static final Set<String> INCLUDE_STACK = new HashSet<>();
+
+	private ScriptEngine() {
+	}
+
+	// ==================================================================
+	// Compilation
+	// ==================================================================
+
+	/**
+	 * @return the compiled program for a preset, compiling and caching it on first use.
+	 * Returns {@code null} when the preset has no scripts or none of them compiled.
+	 */
+	public static Program programFor(PIDSPreset preset) {
+		if (preset == null || !preset.isScripted()) {
+			return null;
+		}
+		final String key = preset.displayName() + "@" + preset.id;
+		final Program cached = PROGRAMS.get(key);
+		if (cached != null) {
+			return cached;
+		}
+		final Program program = compile(key, preset);
+		if (program != null) {
+			PROGRAMS.put(key, program);
+		}
+		return program;
+	}
+
+	private static Program compile(String key, PIDSPreset preset) {
+		final Context cx = Context.enter();
+		try {
+			cx.setLanguageVersion(Context.VERSION_ES6);
+			cx.setOptimizationLevel(-1); // Rhino's interpreter: avoids class generation issues on a mod classloader.
+
+			final Scriptable scope = cx.initStandardObjects();
+			registerGlobals(cx, scope);
+
+			boolean anyLoaded = false;
+			for (String scriptFile : preset.scriptFiles) {
+				if (evaluateResource(cx, scope, scriptFile)) {
+					anyLoaded = true;
+				}
+			}
+			if (!anyLoaded) {
+				Joban.LOGGER.warn("[Joban Client] PIDS preset \"{}\" lists scripts but none could be read.", preset.id);
+				return null;
+			}
+
+			return new Program(key, scope);
+		} catch (Exception e) {
+			Joban.LOGGER.error("[Joban Client] Failed to compile PIDS scripts for \"" + preset.id + "\": " + e);
+			return null;
+		} finally {
+			Context.exit();
+		}
+	}
+
+	/** Drops every compiled program; call when the resource manager reloads. */
+	public static void reset() {
+		PROGRAMS.clear();
+	}
+
+	/**
+	 * Reads and evaluates a script from the client resource manager.
+	 *
+	 * @param location a resource location without the {@code .js} extension, e.g.
+	 *                 {@code jsblock:scripts/pids_util.js}
+	 * @return {@code true} when the script existed and evaluated
+	 */
+	static boolean evaluateResource(Context cx, Scriptable scope, String location) {
+		if (location == null || location.isEmpty() || !INCLUDE_STACK.add(location)) {
+			return false;
+		}
+		try {
+			final ResourceLocation id = new ResourceLocation(location);
+			final String source = readResource(id);
+			if (source == null || source.trim().isEmpty()) {
+				Joban.LOGGER.warn("[Joban Client] PIDS script {}:{} is missing or empty.",
+						id.getNamespace(), id.getPath());
+				return false;
+			}
+			cx.evaluateString(scope, source, id.toString(), 1, null);
+			return true;
+		} catch (Exception e) {
+			Joban.LOGGER.error("[Joban Client] Error evaluating PIDS script " + location + ": " + e);
+			return false;
+		} finally {
+			INCLUDE_STACK.remove(location);
+		}
+	}
+
+	/**
+	 * Reads a script's text from the client resource manager.
+	 *
+	 * <p>Scripts live under {@code assets/<namespace>/<path>}, the same place JCM 2.x reads
+	 * them from, so a JCM 2.x resource pack needs no changes.</p>
+	 */
+	private static String readResource(ResourceLocation id) {
+		final Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft == null) {
+			return null;
+		}
+		final ResourceLocation full = new ResourceLocation(id.getNamespace(), id.getPath());
+		try (InputStream stream = minecraft.getResourceManager().getResource(full).orElseThrow().open()) {
+			final StringBuilder builder = new StringBuilder();
+			try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+				String line;
+				while ((line = reader.readLine()) != null) {
+					builder.append(line).append('\n');
+				}
+			}
+			return builder.toString();
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	// ==================================================================
+	// Globals
+	// ==================================================================
+
+	private static void registerGlobals(Context cx, Scriptable scope) {
+		ScriptableObject.putProperty(scope, "Resources", new NativeJavaClass(scope, Resources.class));
+		ScriptableObject.putProperty(scope, "TextUtil", new NativeJavaClass(scope, TextUtil.class));
+		ScriptableObject.putProperty(scope, "MinecraftClient", new NativeJavaClass(scope, MinecraftClient.class));
+		ScriptableObject.putProperty(scope, "Text", new NativeJavaClass(scope, ScriptDrawCalls.Text.class));
+		ScriptableObject.putProperty(scope, "Texture", new NativeJavaClass(scope, ScriptDrawCalls.Texture.class));
+		ScriptableObject.putProperty(scope, "Rectangle", new NativeJavaClass(scope, ScriptDrawCalls.Rectangle.class));
+
+		ScriptableObject.putProperty(scope, "print", new BaseFunction() {
+			@Override
+			public Object call(Context context, Scriptable s, Scriptable thisObj, Object[] args) {
+				final StringBuilder builder = new StringBuilder();
+				for (Object arg : args) {
+					if (builder.length() > 0) {
+						builder.append(' ');
+					}
+					builder.append(Context.toString(arg));
+				}
+				Joban.LOGGER.info("[Joban Client] [PIDS script] {}", builder);
+				return Undefined.instance;
+			}
+		});
+
+		/* include(Resources.id("jsblock:scripts/pids_util.js")) pulls another script into the
+		   same scope. JCM 2.x evaluates includes while parsing; doing it through a real
+		   function keeps the same semantics for scripts that include conditionally. */
+		ScriptableObject.putProperty(scope, "include", new BaseFunction() {
+			@Override
+			public Object call(Context context, Scriptable s, Scriptable thisObj, Object[] args) {
+				if (args.length > 0 && args[0] != null) {
+					evaluateResource(context, s, Context.toString(args[0]));
+				}
+				return Undefined.instance;
+			}
+		});
+	}
+
+	// ==================================================================
+	// JS-facing global helpers
+	// ==================================================================
+
+	/** {@code Resources.id("namespace:path")} — the JCM 2.x way to reference a resource. */
+	public static final class Resources {
+		private Resources() {
+		}
+
+		public static ResourceLocation id(String namespacePath) {
+			final int colon = namespacePath == null ? -1 : namespacePath.indexOf(':');
+			if (colon < 0) {
+				return new ResourceLocation("minecraft", String.valueOf(namespacePath));
+			}
+			return new ResourceLocation(namespacePath.substring(0, colon), namespacePath.substring(colon + 1));
+		}
+	}
+
+	/** {@code TextUtil.cycleString("a|b")} — alternates the parts as the game ticks. */
+	public static final class TextUtil {
+		/** Ticks each variant is shown for when a script does not say. */
+		public static final int DEFAULT_SWITCH_TICKS = 60;
+
+		private TextUtil() {
+		}
+
+		public static String cycleString(String text) {
+			return cycleString(text, DEFAULT_SWITCH_TICKS);
+		}
+
+		/**
+		 * @param text          pipe-separated variants, e.g. {@code "即將到達|Arriving"}
+		 * @param switchTicks   ticks to show each variant for
+		 * @return the variant for the current tick
+		 */
+		public static String cycleString(String text, int switchTicks) {
+			if (text == null) {
+				return "";
+			}
+			if (text.indexOf('|') < 0) {
+				return text;
+			}
+			/* "||" is an escaped single pipe in MTR's own strings, so a variant may itself
+			   be empty; splitting on a single pipe keeps that behaviour. */
+			final String[] variants = text.split("\\|", -1);
+			final int ticks = Math.max(1, switchTicks);
+			final int index = (int) ((MTRClient.getGameTick() / ticks) % variants.length);
+			return variants[index];
+		}
+	}
+
+	/** {@code MinecraftClient.worldDayTime()} — the value JCM 2.x hands to PIDSUtil.formatTime. */
+	public static final class MinecraftClient {
+		private MinecraftClient() {
+		}
+
+		public static long worldDayTime() {
+			final Minecraft minecraft = Minecraft.getInstance();
+			if (minecraft == null || minecraft.level == null) {
+				return 0L;
+			}
+			return minecraft.level.getDayTime();
+		}
+	}
+
+	// ==================================================================
+	// Program
+	// ==================================================================
+
+	/** A compiled preset script, ready to be asked to render frames. */
+	public static final class Program {
+
+		private final String key;
+		private final Scriptable scope;
+		/** Per-program script state, the {@code state} argument JCM 2.x hands to the script. */
+		private final ScriptableObject state;
+
+		Program(String key, Scriptable scope) {
+			this.key = key;
+			this.scope = scope;
+			this.state = new ScriptableObject() {
+				@Override
+				public String getClassName() {
+					return "PIDSState";
+				}
+			};
+			state.setPrototype(ScriptableObject.getObjectPrototype(scope));
+			state.setParentScope(scope);
+			invoke("create", null, null);
+		}
+
+		public String getKey() {
+			return key;
+		}
+
+		private boolean isDefined(String function) {
+			return scope.get(function, scope) instanceof org.mozilla.javascript.Function;
+		}
+
+		private Object invoke(String function, ScriptRenderContext ctx, PIDSWrapper pids) {
+			if (!isDefined(function)) {
+				return Undefined.instance;
+			}
+			final Context cx = Context.enter();
+			try {
+				cx.setLanguageVersion(Context.VERSION_ES6);
+				cx.setOptimizationLevel(-1);
+				final Object fn = scope.get(function, scope);
+				/* Always three arguments, so a script that ignores ctx (as create/dispose
+				   usually do) still receives its state and pids in the right positions. */
+				final Object[] args = new Object[]{ctx, state, pids};
+				return ((org.mozilla.javascript.Function) fn).call(cx, scope, scope, args);
+			} catch (Exception e) {
+				Joban.LOGGER.error("[Joban Client] PIDS script \"" + key + "\" threw in " + function + "(): " + e);
+				return Undefined.instance;
+			} finally {
+				Context.exit();
+			}
+		}
+
+		/** Runs the script's {@code render(ctx, state, pids)} for one frame. */
+		public void render(ScriptRenderContext ctx, PIDSWrapper pids) {
+			invoke("render", ctx, pids);
+		}
+
+		/** Runs the script's {@code dispose(ctx, state, pids)}; used when a preset is dropped. */
+		public void dispose() {
+			invoke("dispose", null, null);
+		}
+
+		/** @return the list of function names the script defined, for diagnostics. */
+		public List<String> definedFunctions() {
+			final List<String> names = new ArrayList<>();
+			for (String candidate : new String[]{"create", "render", "dispose"}) {
+				if (isDefined(candidate)) {
+					names.add(candidate);
+				}
+			}
+			return names;
+		}
+	}
+}
