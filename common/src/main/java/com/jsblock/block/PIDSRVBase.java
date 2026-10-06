@@ -3,6 +3,7 @@ package com.jsblock.block;
 import com.jsblock.packet.PacketServer;
 import mtr.block.IBlock;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
@@ -27,9 +28,22 @@ public abstract class PIDSRVBase extends JobanPIDSBase {
     @Override
     public InteractionResult use(BlockState state, Level world, BlockPos pos, Player player, InteractionHand hand, BlockHitResult hit) {
         return IBlock.checkHoldingBrush(world, player, () -> {
-            BlockPos otherPos = pos.relative(IBlock.getStatePropertySafe(state, FACING));
+            final Direction facing = IBlock.getStatePropertySafe(state, FACING);
+            BlockPos otherPos = pos.relative(facing);
             BlockEntity entity1 = world.getBlockEntity(pos);
             BlockEntity entity2 = world.getBlockEntity(otherPos);
+            /* A PIDS is two blocks long along its facing axis, and the panel is addressed from
+               whichever half is clicked. Only the leading half has its partner at pos + facing;
+               from the trailing half that points one block past the structure, the check below
+               failed, and the brush did nothing at all. Look the other way before giving up, so
+               either half opens the screen. */
+            if (!(entity2 instanceof TileEntityBlockRVPIDS)) {
+                final BlockPos behind = pos.relative(facing.getOpposite());
+                if (world.getBlockEntity(behind) instanceof TileEntityBlockRVPIDS) {
+                    otherPos = behind;
+                    entity2 = world.getBlockEntity(behind);
+                }
+            }
             if (entity1 instanceof TileEntityBlockRVPIDS && entity2 instanceof TileEntityBlockRVPIDS) {
                 ((TileEntityBlockRVPIDS) entity1).syncData();
                 ((TileEntityBlockRVPIDS) entity2).syncData();
