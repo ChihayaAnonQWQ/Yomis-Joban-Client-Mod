@@ -153,9 +153,15 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         }
 
         /* A preset that declares a "components" array drives the whole panel; the built-in
-           hard-coded element positions are skipped entirely (see com.jsblock.pids). */
+           hard-coded element positions are skipped entirely (see com.jsblock.pids).
+           Guarded exactly like the built-in path below: a bad preset must not be able to
+           throw out of the block-entity renderer once per frame. */
         if (preset != null && preset.layout != null) {
-            renderLayout(entity, world, preset, customMessages, hideArrivals, platformIds, delta, matrices, vertexConsumers);
+            try {
+                renderLayout(entity, world, preset, customMessages, hideArrivals, platformIds, delta, matrices, vertexConsumers);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
             return;
         }
 
