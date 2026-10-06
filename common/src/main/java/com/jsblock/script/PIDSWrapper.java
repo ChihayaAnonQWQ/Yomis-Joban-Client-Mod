@@ -89,6 +89,54 @@ public class PIDSWrapper {
 		return platformIds.isEmpty();
 	}
 
+	/**
+	 * @return {@code true}. MTR 4 distinguishes the "key" half of a two-block PIDS; MTR 3
+	 * drives both halves from one block entity, so from a script's point of view it always is.
+	 */
+	public boolean isKeyBlock() {
+		return true;
+	}
+
+	/**
+	 * @return {@code false}. MTR 3 has no per-preset platform-number toggle on the block; the
+	 * RV PIDS exposes one, but it is not reachable from here.
+	 */
+	public boolean isPlatformNumberHidden() {
+		return false;
+	}
+
+	/** @return the station the panel serves, or {@code null} when it cannot be resolved. */
+	public StationInfo station() {
+		final Station station = PIDSData.stationOf(primaryPlatformId());
+		return station == null ? null : new StationInfo(station);
+	}
+
+	/** Minimal station view, so JCM 2.x scripts can read a name without MTR 4's Station type. */
+	public static class StationInfo {
+		private final Station station;
+
+		StationInfo(Station station) {
+			this.station = station;
+		}
+
+		public String name() {
+			return station.name == null ? "" : station.name;
+		}
+
+		/** MTR 4 spells this {@code getName()}; both work here. */
+		public String getName() {
+			return name();
+		}
+
+		public long id() {
+			return station.id;
+		}
+
+		public int zone() {
+			return station.zone;
+		}
+	}
+
 	/** @return the name of the station the panel serves, or an empty string. */
 	public String stationName() {
 		final Station station = PIDSData.stationOf(primaryPlatformId());
@@ -138,6 +186,23 @@ public class PIDSWrapper {
 		/** Convenience for scripts that want to iterate without index bookkeeping. */
 		public Arrival[] toArray() {
 			return arrivals.toArray(new Arrival[0]);
+		}
+
+		/** @return the distinct platforms the listed arrivals call at, in arrival order. */
+		public java.util.List<PlatformInfo> platforms() {
+			final java.util.List<PlatformInfo> result = new ArrayList<>();
+			final java.util.Set<Long> seen = new java.util.HashSet<>();
+			for (Arrival arrival : arrivals) {
+				final long platformId = arrival.platformId();
+				if (platformId == 0 || !seen.add(platformId)) {
+					continue;
+				}
+				final PlatformInfo info = arrival.platform();
+				if (info != null) {
+					result.add(info);
+				}
+			}
+			return result;
 		}
 	}
 
@@ -217,12 +282,12 @@ public class PIDSWrapper {
 		}
 
 		public long platformId() {
-			final Platform platform = platform();
+			final Platform platform = platformRef();
 			return platform == null ? 0L : platform.id;
 		}
 
 		public String platformName() {
-			final Platform platform = platform();
+			final Platform platform = platformRef();
 			return platform == null || platform.name == null ? "" : platform.name;
 		}
 
@@ -231,8 +296,77 @@ public class PIDSWrapper {
 			return entry.currentStationIndex;
 		}
 
-		private Platform platform() {
+		/**
+		 * @return the arrival time. MTR 3's {@code ScheduleEntry} carries a single timestamp for
+		 * the stop, so there is no separate departure time to report; JCM 2.x scripts that read
+		 * this get the stop time rather than an exception.
+		 */
+		public long departureTime() {
+			return entry.arrivalMillis;
+		}
+
+		public boolean departed() {
+			return departureTime() <= System.currentTimeMillis();
+		}
+
+		/** @return {@code 0}; MTR 3 does not expose schedule deviation to the client. */
+		public long deviation() {
+			return 0L;
+		}
+
+		/** @return {@code false}; MTR 3 does not flag whether a schedule is realtime. */
+		public boolean realtime() {
+			return false;
+		}
+
+		/** @return {@code 0}; MTR 3 carries no departure index on a schedule entry. */
+		public long departureIndex() {
+			return 0L;
+		}
+
+		/**
+		 * @return {@code false}. MTR 4 marks the final stop of a run; MTR 3 does not expose it,
+		 * so reporting "not terminating" keeps scripts on their normal display path.
+		 */
+		public boolean terminating() {
+			return false;
+		}
+
+		/** @return the platform as a small view, or {@code null} when it cannot be resolved. */
+		public PlatformInfo platform() {
+			final Platform platform = PIDSData.platform(PIDSData.platformIdOf(entry));
+			return platform == null ? null : new PlatformInfo(platform);
+		}
+
+		/** @return an empty list; MTR 3 does not stream per-car details to the client. */
+		public java.util.List<Object> cars() {
+			return java.util.Collections.emptyList();
+		}
+
+		private Platform platformRef() {
 			return PIDSData.platform(PIDSData.platformIdOf(entry));
+		}
+	}
+
+	/** Minimal platform view, so JCM 2.x scripts can read a name without MTR 4's Platform type. */
+	public static class PlatformInfo {
+		private final Platform platform;
+
+		PlatformInfo(Platform platform) {
+			this.platform = platform;
+		}
+
+		public String name() {
+			return platform.name == null ? "" : platform.name;
+		}
+
+		/** MTR 4 spells this {@code getName()}; both work here. */
+		public String getName() {
+			return name();
+		}
+
+		public long id() {
+			return platform.id;
 		}
 	}
 }

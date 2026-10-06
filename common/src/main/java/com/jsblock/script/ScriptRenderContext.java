@@ -4,6 +4,10 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.core.Direction;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Per-frame render state handed to a PIDS script as its {@code ctx} argument.
  *
@@ -50,9 +54,24 @@ public class ScriptRenderContext {
 	private boolean autoZOrdering = true;
 	private double zOrderStep = Z_ORDER_STEP;
 
+	/**
+	 * When set, {@link #draw(Object)} records what would have been drawn instead of touching
+	 * Minecraft's renderer. Used by the headless API check, which runs real preset scripts
+	 * through the real wrappers without a game.
+	 */
+	private final boolean dryRun;
+	/** Descriptions of the calls recorded in dry-run mode. */
+	private final List<String> recordedCalls;
+
 	public ScriptRenderContext(PoseStack matrices, MultiBufferSource vertexConsumers,
 							   MultiBufferSource.BufferSource immediate, Direction facing, int light,
 							   int panelWidth, int panelHeight, float scriptScale) {
+		this(matrices, vertexConsumers, immediate, facing, light, panelWidth, panelHeight, scriptScale, false);
+	}
+
+	private ScriptRenderContext(PoseStack matrices, MultiBufferSource vertexConsumers,
+								MultiBufferSource.BufferSource immediate, Direction facing, int light,
+								int panelWidth, int panelHeight, float scriptScale, boolean dryRun) {
 		this.matrices = matrices;
 		this.vertexConsumers = vertexConsumers;
 		this.immediate = immediate;
@@ -61,6 +80,24 @@ public class ScriptRenderContext {
 		this.panelWidth = panelWidth;
 		this.panelHeight = panelHeight;
 		this.scriptScale = scriptScale;
+		this.dryRun = dryRun;
+		this.recordedCalls = dryRun ? new ArrayList<>() : null;
+	}
+
+	/**
+	 * Builds a context that records draw calls instead of rendering them.
+	 *
+	 * <p>Everything except the final draw goes through the real code path, so a script that
+	 * calls a wrapper method this port does not implement fails here exactly as it would in
+	 * game — which is what makes this usable as a headless check.</p>
+	 */
+	public static ScriptRenderContext dryRun(int panelWidth, int panelHeight, float scriptScale) {
+		return new ScriptRenderContext(null, null, null, null, 0, panelWidth, panelHeight, scriptScale, true);
+	}
+
+	/** @return the descriptions recorded in dry-run mode, in call order. */
+	public List<String> recordedCalls() {
+		return recordedCalls == null ? Collections.emptyList() : Collections.unmodifiableList(recordedCalls);
 	}
 
 	// ------------------------------------------------------------------
@@ -87,6 +124,10 @@ public class ScriptRenderContext {
 		final ScriptDrawCall drawCall = (ScriptDrawCall) call;
 		drawCall.validate();
 		final float z = autoZOrdering ? (float) (drawCallIndex++ * zOrderStep) : 0F;
+		if (dryRun) {
+			recordedCalls.add(drawCall.describe());
+			return;
+		}
 		drawCall.draw(this, z);
 	}
 }

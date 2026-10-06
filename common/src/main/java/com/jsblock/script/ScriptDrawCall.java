@@ -62,6 +62,14 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 	}
 
 	/**
+	 * @return a one-line description of this call, used by the headless dry-run check to show
+	 * what a script asked for without rendering anything.
+	 */
+	public String describe() {
+		return getClass().getSimpleName() + "(pos=" + x + "," + y + " size=" + w + "x" + h + ")";
+	}
+
+	/**
 	 * Draws the call with its transform already applied.
 	 *
 	 * @param z depth offset for this call, already in local units

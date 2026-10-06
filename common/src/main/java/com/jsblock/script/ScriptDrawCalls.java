@@ -65,6 +65,23 @@ public final class ScriptDrawCalls {
 			return this;
 		}
 
+		/**
+		 * Accepted for JCM 2.x compatibility and ignored.
+		 *
+		 * <p>JCM 2.x selects one of MTR 4's {@code QueuedRenderLayer} values here. MTR 3 has no
+		 * equivalent enum, and PIDS panels are drawn on MTR's emissive "light" layer anyway, so
+		 * honouring the request would only change how the panel reacts to world lighting.</p>
+		 */
+		public Rectangle renderType(String renderType) {
+			return this;
+		}
+
+		@Override
+		public String describe() {
+			return String.format("Rectangle(pos=%s,%s size=%sx%s color=%08X)",
+					x, y, w, h, color);
+		}
+
 		@Override
 		void draw(ScriptRenderContext ctx, float z) {
 			pushTransform(ctx, z);
@@ -147,6 +164,17 @@ public final class ScriptDrawCalls {
 		public Texture naturalLight() {
 			this.naturalLight = true;
 			return this;
+		}
+
+		/** Accepted for JCM 2.x compatibility and ignored; see {@link Rectangle#renderType}. */
+		public Texture renderType(String renderType) {
+			return this;
+		}
+
+		@Override
+		public String describe() {
+			return String.format("Texture(pos=%s,%s size=%sx%s texture=%s uv=%s,%s,%s,%s)",
+					x, y, w, h, textureId, u1, v1, u2, v2);
 		}
 
 		@Override
@@ -294,6 +322,36 @@ public final class ScriptDrawCalls {
 			return this;
 		}
 
+		/**
+		 * Accepts whatever {@code Resources.id(...)} or a raw string produced. JCM 2.x takes an
+		 * {@code Identifier} here; MTR 3's font renderer wants the {@code "namespace:path"}
+		 * form, which both spellings reduce to.
+		 */
+		public Text font(Object font) {
+			if (font instanceof ResourceLocation) {
+				this.fontId = font.toString();
+			} else if (font != null) {
+				this.fontId = font.toString();
+			}
+			return this;
+		}
+
+		/** Accepted for JCM 2.x compatibility and ignored; see {@link Rectangle#renderType}. */
+		public Text renderType(String renderType) {
+			return this;
+		}
+
+		/**
+		 * @return the width of the current text in font pixels, matching JCM 2.x's
+		 * {@code measureWidth}.
+		 */
+		public int measureWidth() {
+			if (textContent == null) {
+				throw new IllegalStateException("Text is not set!");
+			}
+			return Minecraft.getInstance().font.width(textContent);
+		}
+
 		public Text italic() {
 			this.italic = true;
 			return this;
@@ -319,6 +377,20 @@ public final class ScriptDrawCalls {
 			if (textContent == null) {
 				throw new IllegalArgumentException("Text must be filled");
 			}
+		}
+
+		@Override
+		public String describe() {
+			return String.format("Text(pos=%s,%s box=%sx%s scale=%s align=%s overflow=%s color=%08X text=%s)",
+					x, y, w, h, scale, alignment, overflowMode, color, quote(textContent));
+		}
+
+		private static String quote(String value) {
+			if (value == null) {
+				return "null";
+			}
+			final String flat = value.replace("\n", "\\n");
+			return '"' + (flat.length() > 60 ? flat.substring(0, 57) + "..." : flat) + '"';
 		}
 
 		@Override

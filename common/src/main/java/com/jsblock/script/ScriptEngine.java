@@ -74,11 +74,7 @@ public final class ScriptEngine {
 	private static Program compile(String key, PIDSPreset preset) {
 		final Context cx = Context.enter();
 		try {
-			cx.setLanguageVersion(Context.VERSION_ES6);
-			cx.setOptimizationLevel(-1); // Rhino's interpreter: avoids class generation issues on a mod classloader.
-
-			final Scriptable scope = cx.initStandardObjects();
-			registerGlobals(cx, scope);
+			final Scriptable scope = newScope(cx);
 
 			boolean anyLoaded = false;
 			for (String scriptFile : preset.scriptFiles) {
@@ -103,6 +99,21 @@ public final class ScriptEngine {
 	/** Drops every compiled program; call when the resource manager reloads. */
 	public static void reset() {
 		PROGRAMS.clear();
+	}
+
+	/**
+	 * Builds a Rhino scope with the PIDS globals registered.
+	 *
+	 * <p>Exposed so the headless script check can compile a real preset script through exactly
+	 * the same globals the game registers, and therefore fail on the same missing-API mistakes
+	 * a player would hit.</p>
+	 */
+	public static Scriptable newScope(Context cx) {
+		cx.setLanguageVersion(Context.VERSION_ES6);
+		cx.setOptimizationLevel(-1); // Rhino's interpreter: avoids class generation issues on a mod classloader.
+		final Scriptable scope = cx.initStandardObjects();
+		registerGlobals(cx, scope);
+		return scope;
 	}
 
 	/**
@@ -247,8 +258,21 @@ public final class ScriptEngine {
 			   be empty; splitting on a single pipe keeps that behaviour. */
 			final String[] variants = text.split("\\|", -1);
 			final int ticks = Math.max(1, switchTicks);
-			final int index = (int) ((MTRClient.getGameTick() / ticks) % variants.length);
+			final int index = (int) ((currentTick() / ticks) % variants.length);
 			return variants[index];
+		}
+
+		/**
+		 * @return the client game tick, falling back to wall-clock ticks when MTR's counter is
+		 * not reachable. The headless script check runs outside a game, and a PIDS that fails to
+		 * cycle is better than one that throws inside the renderer.
+		 */
+		private static long currentTick() {
+			try {
+				return (long) MTRClient.getGameTick();
+			} catch (Throwable t) {
+				return System.currentTimeMillis() / 50L;
+			}
 		}
 	}
 
