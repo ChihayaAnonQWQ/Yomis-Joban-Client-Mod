@@ -165,6 +165,12 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
             return;
         }
 
+        /* A blank panel is ambiguous: no preset may be selected on the block, or a preset may
+           be selected that draws nothing. Say which, once per block position, so a grey panel
+           can be told apart from a script that ran and produced no visible geometry. */
+        reportPanelOnce(entity.getBlockPos(), "using the built-in renderer, preset="
+                + (preset == null ? "<none selected>" : preset.id + " (no script, no components)"));
+
         /* A preset that declares a "components" array drives the whole panel; the built-in
            hard-coded element positions are skipped entirely (see com.jsblock.pids).
            Guarded exactly like the built-in path below: a bad preset must not be able to
@@ -254,6 +260,24 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         return null;
     }
 
+    /** Block positions already reported, so the panel diagnostics do not repeat every frame. */
+    private static final java.util.Set<String> REPORTED_PANELS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Reports once per block which path is drawing its panel, and what it was handed.
+     *
+     * <p>A grey PIDS is ambiguous from the outside: the block may have no preset selected at
+     * all, or a script may have run and drawn nothing visible. This separates the two, and
+     * also records the canvas the script was given so a size mismatch can be spotted without
+     * guessing.</p>
+     */
+    private static void reportPanelOnce(BlockPos pos, String message) {
+        final String key = pos.asLong() + "|" + message;
+        if (REPORTED_PANELS.add(key)) {
+            com.jsblock.Joban.LOGGER.info("[Joban Client] [PIDS] {} at {}, {}, {}", message, pos.getX(), pos.getY(), pos.getZ());
+        }
+    }
+
     /**
      * Runs a JCM 2.x JavaScript preset.
      *
@@ -302,6 +326,10 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         }
         final int canvasHeight = Math.round(geometry.panelHeight / scriptScale);
         final int canvasWidth = Math.round(geometry.panelWidth / scriptScale);
+
+        reportPanelOnce(pos, "running script preset=" + preset.id + " canvas=" + canvasWidth + "x" + canvasHeight
+                + " scriptScale=" + scriptScale + " arrivals=" + scheduleList.size()
+                + " rows=" + (hideArrivals == null ? 0 : hideArrivals.length));
 
         final com.jsblock.script.PIDSWrapper wrapper = new com.jsblock.script.PIDSWrapper(
                 preset.id, hideArrivals == null ? 0 : hideArrivals.length,
