@@ -284,6 +284,44 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         return current;
     }
 
+    /**
+     * JCM 2.x's hard-coded panel translate for this PIDS type, in block space.
+     *
+     * <p>Each of JCM 2.x's renderers carries its own literal — RVPIDSRenderer uses
+     * {@code (-0.21, -0.14, -0.128)}, LCDPIDSRenderer {@code (-0.19, -0.125, -0.130)},
+     * PIDS1ARenderer {@code (-0.47, -0.155, -0.130)}. Subclasses override these with their
+     * own values; the default is the RV set.</p>
+     */
+    protected float scriptPanelTranslateX() {
+        return -0.21F;
+    }
+
+    /** @see #scriptPanelTranslateX() */
+    protected float scriptPanelTranslateY() {
+        return -0.14F;
+    }
+
+    /** @see #scriptPanelTranslateX() */
+    protected float scriptPanelTranslateZ() {
+        return -0.128F;
+    }
+
+    /**
+     * The canvas size JCM 2.x hands this PIDS type's scripts, in script units.
+     *
+     * <p>Also a literal there — 136x76 for RV, 133x72 for LCD, 186x60 for 1A — rather than
+     * something derived, so scripts that lay out against {@code pids.width} see exactly the
+     * numbers their author wrote against.</p>
+     */
+    protected int scriptCanvasWidth() {
+        return 136;
+    }
+
+    /** @see #scriptCanvasWidth() */
+    protected int scriptCanvasHeight() {
+        return 76;
+    }
+
     /** Block positions already reported, so the panel diagnostics do not repeat every frame. */
     private static final java.util.Set<String> REPORTED_PANELS = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -356,14 +394,16 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         }
         Collections.sort(scheduleList);
 
-        /* One script unit is 1/96 block, so the caller's local space (which is scaled by
-           1/geometry.scale) needs geometry.scale / 96 local units per script unit. */
-        final float scriptScale = geometry.scale / 96F;
-        if (scriptScale <= 0F) {
-            return;
-        }
-        final int canvasHeight = Math.round(geometry.panelHeight / scriptScale);
-        final int canvasWidth = Math.round(geometry.panelWidth / scriptScale);
+        /* JCM 2.x hands each PIDS type a fixed canvas size rather than deriving one, so use its
+           literals: 136x76 for RV, 133x72 for LCD, 186x60 for 1A. Scripts position themselves
+           against pids.width/pids.height, and those numbers are what their authors wrote to. */
+        final int canvasWidth = scriptCanvasWidth();
+        final int canvasHeight = scriptCanvasHeight();
+        /* The matrix is already JCM 2.x's block space with its 1/96 base scale applied, so a
+           script unit is one unit of that space: draw calls must not scale again. Previously
+           this was geometry.scale / 96 to compensate for the caller's own 1/geometry.scale,
+           which no longer exists in the chain. */
+        final float scriptScale = 1F;
 
         reportPanelOnce(pos, "running script preset=" + preset.id + " canvas=" + canvasWidth + "x" + canvasHeight
                 + " scriptScale=" + scriptScale + " arrivals=" + scheduleList.size()
@@ -374,23 +414,19 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList);
 
         matrices.pushPose();
-        matrices.translate(0.5, 0, 0.5);
+        /* Verbatim from JCM 2.x's RVPIDSRenderer: origin at the block centre
+           (StoredMatrixTransformations starts at 0.5 + the block position), the same two
+           rotations, then the panel's own hard-coded translate, JCM 2.x's 0.005-block lift,
+           and a flat 1/96 base scale.
+           Every number here is JCM 2.x's. The previous version derived equivalents from
+           panelLeft()/panelOffsetY()/geometry.scale, and that derivation is what kept moving
+           the panel. RenderLCDPIDS and RenderPIDS1A supply their own literals. */
+        matrices.translate(0.5, 0.5, 0.5);
         UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
         UtilitiesClient.rotateZDegrees(matrices, 180);
-        UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);
-        matrices.translate((geometry.startX - 8) / 16, -geometry.startY / 16, (geometry.startZ - 8) / 16 - SMALL_OFFSET * 2);
-        /* JCM 2.x lifts the finished panel out of its block by exactly this much:
-           ScriptPIDSPreset.render runs graphicsHolder.translate(0, 0, -0.005) after the script
-           has queued its draw calls and before they are replayed, so every layer moves
-           together. Without it the panel sits on the block's surface and fights it in the
-           depth buffer -- the overlap the reporter saw. Applied in the same block space, so
-           0.005 blocks: a tenth of the value tried earlier, which floated the picture off. */
+        matrices.translate(scriptPanelTranslateX(), scriptPanelTranslateY(), scriptPanelTranslateZ());
         matrices.translate(0F, 0F, -0.005F);
-        matrices.scale(1F / geometry.scale, 1F / geometry.scale, 1F / geometry.scale);
-        /* Move to the panel's top-left corner: scripts position everything from there.
-           panelLeft()/panelOffsetY are already expressed in this post-scale space, which is
-           the same space renderLayout() draws its background quad in. */
-        matrices.translate(geometry.panelLeft(), geometry.panelOffsetY, 0F);
+        matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
 
         final MultiBufferSource.BufferSource immediate = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
         final com.jsblock.script.ScriptRenderContext ctx = new com.jsblock.script.ScriptRenderContext(
