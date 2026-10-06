@@ -338,14 +338,6 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final int canvasHeight = Math.round(geometry.panelHeight / scriptScale);
         final int canvasWidth = Math.round(geometry.panelWidth / scriptScale);
 
-        /* A PIDS is two blocks wide along its facing axis and each half gets its own renderer
-           call, so running the script for both drew the panel twice at two slightly different
-           depths. The two copies traded places in the depth buffer every frame, which is the
-           black/white flashing. Only the head half draws; the trailing half does nothing. */
-        if (world.getBlockState(pos.relative(facing.getOpposite())).getBlock() == world.getBlockState(pos).getBlock()) {
-            return;
-        }
-
         reportPanelOnce(pos, "running script preset=" + preset.id + " canvas=" + canvasWidth + "x" + canvasHeight
                 + " scriptScale=" + scriptScale + " arrivals=" + scheduleList.size()
                 + " rows=" + (hideArrivals == null ? 0 : hideArrivals.length));
