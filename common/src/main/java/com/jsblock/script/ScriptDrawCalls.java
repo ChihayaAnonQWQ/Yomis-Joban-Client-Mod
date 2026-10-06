@@ -448,6 +448,11 @@ public final class ScriptDrawCalls {
 			}
 
 			final int textLight = naturalLight ? ctx.light : IGui.MAX_LIGHT_GLOWING;
+			/* sameSize = true is what makes JCM 2.x text fit: IDrawingJoban doubles CJK glyphs
+			   by default to compensate for MTR's half-height CJK glyphs, but that widening is
+			   YJCM's own convention and JCM 2.x presets are laid out without it. A five-glyph
+			   label at x=101 with scale 0.5 spans 101..146 doubled -- past the right edge of a
+			   133-wide canvas -- and 101..123 without, which is what the preset expects. */
 			IDrawingJoban.drawStringWithFont(
 					ctx.matrices,
 					Minecraft.getInstance().font,
@@ -455,6 +460,7 @@ public final class ScriptDrawCalls {
 					renderText(ctx),
 					horizontalAlignment,
 					IGui.VerticalAlignment.TOP,
+					horizontalAlignment,
 					0, 0,
 					maxWidth, maxHeight,
 					drawScale,
@@ -462,7 +468,9 @@ public final class ScriptDrawCalls {
 					color,
 					shadow,
 					textLight,
-					fontId == null ? DEFAULT_FONT : fontId
+					fontId == null ? DEFAULT_FONT : fontId,
+					true,
+					null
 			);
 
 			popTransform(ctx);

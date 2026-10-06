@@ -32,8 +32,15 @@ import java.util.List;
  */
 public class ScriptRenderContext {
 
-	/** Depth step between successive draw calls, matching JCM 2.x. */
-	public static final float Z_ORDER_STEP = 0.0002F;
+	/**
+	 * Depth step between successive draw calls, in <b>script units</b>.
+	 *
+	 * <p>One script unit is 1/96 block, so this is ~0.002 blocks per layer. JCM 2.x uses
+	 * 0.0002 <em>blocks</em> per call; taking that number as script units instead gave
+	 * 2e-6 blocks, far too small to separate the background from the advert and the text,
+	 * and the panel flickered as the depth test resolved differently per frame.</p>
+	 */
+	public static final float Z_ORDER_STEP = 0.2F;
 
 	public final PoseStack matrices;
 	public final MultiBufferSource vertexConsumers;
