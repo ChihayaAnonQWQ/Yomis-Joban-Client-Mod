@@ -320,12 +320,13 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * -0.130)} with 133x72. Using the wrong set puts the panel roughly a quarter block off its
      * screen, which is what happened when the 1A PIDS borrowed the RV ones.</p>
      */
-    public void setScriptPanelProfile(float x, float y, float z, int canvasW, int canvasH) {
+    public RenderPIDSBase<T> setScriptPanelProfile(float x, float y, float z, int canvasW, int canvasH) {
         this.panelTranslateX = x;
         this.panelTranslateY = y;
         this.panelTranslateZ = z;
         this.canvasWidth = canvasW;
         this.canvasHeight = canvasH;
+        return this;
     }
     protected float scriptPanelTranslateX() {
         return panelTranslateX;

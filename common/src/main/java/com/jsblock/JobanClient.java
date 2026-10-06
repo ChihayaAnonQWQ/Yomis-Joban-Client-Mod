@@ -82,7 +82,13 @@ public class JobanClient {
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.FARESAVER_1_TILE_ENTITY.get(), RenderFaresaver1::new);
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.KCR_NAME_SIGN_TILE_ENTITY.get(), RenderKCRStationName::new);
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.KCR_NAME_SIGN_STATION_COLOR_TILE_ENTITY.get(), RenderKCRStationName::new);
-        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_1A_TILE_ENTITY.get(), dispatcher -> new RenderPIDS<>(dispatcher, PIDS1A.TileEntityBlockPIDS1A.MAX_ARRIVALS, PIDS1A.TileEntityBlockPIDS1A.LINES_PER_ARRIVAL, 1, 9.5F, 6, 8.8F, 30, true, false, PIDSType.PIDS, 0xFF9900, 0xFF9900));
+        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_1A_TILE_ENTITY.get(), dispatcher -> {
+            final RenderRVPIDS<PIDS1A.TileEntityBlockPIDS1A> renderer = new RenderRVPIDS<>(dispatcher, PIDS1A.TileEntityBlockPIDS1A.MAX_ARRIVALS, 1, 9.5F, 6, 8.8F, 30, true, false, 0xFF9900, 0);
+            /* PIDS1ARenderer's own literals; the base defaults are the RV ones and put
+               this panel about a quarter block off its screen. */
+            renderer.setScriptPanelProfile(-0.47F, -0.155F, -0.130F, 186, 60);
+            return renderer;
+        });
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_LCD_TILE_ENTITY.get(), dispatcher -> new RenderLCDPIDS<>(dispatcher, PIDSLCD.TileEntityBlockPIDS4.MAX_ARRIVALS, 5.7F, 9.5F, 6, 11.5F, 21, true, false, false, 0xEFE29E, 0));
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_TILE_ENTITY.get(), dispatcher -> new RenderRVPIDS<>(dispatcher, PIDSRV.TileEntityBlockPIDSRV.MAX_ARRIVALS, 6, 8.25F, 6, 11F, 20, true, false, 0x000000, 0));
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_1.get(), dispatcher -> new RenderRVPIDS<>(dispatcher, PIDSRVSIL1.TileEntityBlockPIDSSIL.MAX_ARRIVALS, 6F, 11.7F, 2.45F, 11F, 20.7F, true, false, 0x000000, 22.5F));
