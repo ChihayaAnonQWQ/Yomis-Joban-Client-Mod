@@ -151,7 +151,21 @@ public class PIDSWrapper {
 	// Arrival list
 	// ==================================================================
 
-	/** {@code pids.arrivals()} — {@code get(i)} is null past the end, exactly as in JCM 2.x. */
+	/**
+	 * {@code pids.arrivals()} — {@code get(i)} never returns {@code null}.
+	 *
+	 * <p>JCM 2.x documents {@code get(i)} as nullable past the end of the list, and its own
+	 * {@code pids_1a.js} guards against it. Community presets generally do not: the
+	 * <em>HZYMTR CRT Pids</em> pack computes
+	 * {@code Math.ceil((pids.arrivals().get(1).arrivalTime() - Date.now()) / 60000)} on its
+	 * second line, so a platform with fewer than two upcoming trains threw
+	 * "Cannot call method arrivalTime of null", aborted {@code render()} before it had drawn
+	 * anything, and left the whole panel blank.</p>
+	 *
+	 * <p>Returning a placeholder instead keeps such a preset working while changing nothing
+	 * for a platform that does have the trains. The placeholder reports itself through
+	 * {@link Arrival#isValid()} for scripts that want to tell the difference.</p>
+	 */
 	public static class Arrivals {
 		private final List<Arrival> arrivals;
 
@@ -163,7 +177,7 @@ public class PIDSWrapper {
 		}
 
 		public Arrival get(int i) {
-			return i >= 0 && i < arrivals.size() ? arrivals.get(i) : null;
+			return i >= 0 && i < arrivals.size() ? arrivals.get(i) : Arrival.absent();
 		}
 
 		public int size() {
@@ -219,38 +233,56 @@ public class PIDSWrapper {
 	 */
 	public static class Arrival {
 
+		/** Shared placeholder returned for an index past the end of the list. */
+		private static final Arrival ABSENT = new Arrival(null);
+
 		private final ScheduleEntry entry;
 
 		Arrival(ScheduleEntry entry) {
 			this.entry = entry;
 		}
 
+		/** @return the placeholder used when there is no such train. */
+		static Arrival absent() {
+			return ABSENT;
+		}
+
+		/**
+		 * @return {@code false} for the placeholder, {@code true} for a real arrival. Scripts
+		 * that want to skip empty rows can test this instead of comparing against null.
+		 */
+		public boolean isValid() {
+			return entry != null;
+		}
+
 		public long arrivalTime() {
-			return entry.arrivalMillis;
+			/* An absent train reports "now", so a preset that renders the row anyway says
+			   "arriving" rather than showing a train scheduled in 1970. */
+			return entry == null ? System.currentTimeMillis() : entry.arrivalMillis;
 		}
 
 		public boolean arrived() {
-			return arrivalTime() <= System.currentTimeMillis();
+			return entry == null || arrivalTime() <= System.currentTimeMillis();
 		}
 
 		public String destination() {
-			return PIDSData.destination(entry);
+			return entry == null ? "" : PIDSData.destination(entry);
 		}
 
 		public int carCount() {
-			return entry.trainCars;
+			return entry == null ? 0 : entry.trainCars;
 		}
 
 		public long routeId() {
-			return entry.routeId;
+			return entry == null ? 0L : entry.routeId;
 		}
 
 		public String routeName() {
-			return PIDSData.routeName(entry);
+			return entry == null ? "" : PIDSData.routeName(entry);
 		}
 
 		public int routeColor() {
-			return PIDSData.routeColor(entry, 0);
+			return entry == null ? 0 : PIDSData.routeColor(entry, 0);
 		}
 
 		/**
@@ -258,7 +290,7 @@ public class PIDSWrapper {
 		 * MTR 4 exposes this on the arrival itself; on MTR 3 it lives on the route.
 		 */
 		public String routeNumber() {
-			final Route route = PIDSData.route(entry.routeId);
+			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
 			if (route == null || route.lightRailRouteNumber == null) {
 				return "";
 			}
@@ -273,7 +305,7 @@ public class PIDSWrapper {
 		 * against JCM 2.x keep working.</p>
 		 */
 		public String circularState() {
-			final Route route = PIDSData.route(entry.routeId);
+			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
 			if (route == null || route.circularState == null) {
 				return "NONE";
 			}
@@ -293,7 +325,7 @@ public class PIDSWrapper {
 
 		/** @return the destination of the stop this train is heading to, when resolvable. */
 		public int currentStationIndex() {
-			return entry.currentStationIndex;
+			return entry == null ? 0 : entry.currentStationIndex;
 		}
 
 		/**
@@ -344,7 +376,7 @@ public class PIDSWrapper {
 		}
 
 		private Platform platformRef() {
-			return PIDSData.platform(PIDSData.platformIdOf(entry));
+			return entry == null ? null : PIDSData.platform(PIDSData.platformIdOf(entry));
 		}
 	}
 
