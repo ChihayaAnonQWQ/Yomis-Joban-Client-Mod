@@ -294,6 +294,18 @@ public final class ScriptEngine {
 			}
 			return minecraft.level.getDayTime();
 		}
+
+		/** {@code MinecraftClient.worldIsRaining()} — the HKR presets branch on this. */
+		public static boolean worldIsRaining() {
+			final Minecraft minecraft = Minecraft.getInstance();
+			return minecraft != null && minecraft.level != null && minecraft.level.isRaining();
+		}
+
+		/** {@code MinecraftClient.worldIsThundering()}. */
+		public static boolean worldIsThundering() {
+			final Minecraft minecraft = Minecraft.getInstance();
+			return minecraft != null && minecraft.level != null && minecraft.level.isThundering();
+		}
 	}
 
 	// ==================================================================

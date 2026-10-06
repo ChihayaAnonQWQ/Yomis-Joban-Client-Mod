@@ -334,7 +334,7 @@ public class PIDSWrapper {
 		 * this get the stop time rather than an exception.
 		 */
 		public long departureTime() {
-			return entry.arrivalMillis;
+			return arrivalTime();
 		}
 
 		public boolean departed() {
