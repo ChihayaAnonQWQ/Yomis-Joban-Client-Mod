@@ -99,6 +99,8 @@ public final class ScriptEngine {
 	/** Drops every compiled program; call when the resource manager reloads. */
 	public static void reset() {
 		PROGRAMS.clear();
+		/* Script textures are keyed by the identifiers the old pack used, so they must go too. */
+		ScriptTextures.reset();
 	}
 
 	/**
@@ -301,6 +303,8 @@ public final class ScriptEngine {
 		private final Scriptable scope;
 		/** Per-program script state, the {@code state} argument JCM 2.x hands to the script. */
 		private final ScriptableObject state;
+		/** Distinct failures already reported, so a per-frame throw cannot flood the log. */
+		private final Set<String> reportedErrors = new HashSet<>();
 
 		Program(String key, Scriptable scope) {
 			this.key = key;
@@ -325,8 +329,17 @@ public final class ScriptEngine {
 		}
 
 		private Object invoke(String function, ScriptRenderContext ctx, PIDSWrapper pids) {
+			return invokeInternal(function, ctx, pids, false);
+		}
+
+		/** @return {@code true} when the function ran without throwing. */
+		private boolean invokeChecked(String function, ScriptRenderContext ctx, PIDSWrapper pids) {
+			return (Boolean) invokeInternal(function, ctx, pids, true);
+		}
+
+		private Object invokeInternal(String function, ScriptRenderContext ctx, PIDSWrapper pids, boolean returnSuccess) {
 			if (!isDefined(function)) {
-				return Undefined.instance;
+				return returnSuccess ? Boolean.TRUE : Undefined.instance;
 			}
 			final Context cx = Context.enter();
 			try {
@@ -336,10 +349,25 @@ public final class ScriptEngine {
 				/* Always three arguments, so a script that ignores ctx (as create/dispose
 				   usually do) still receives its state and pids in the right positions. */
 				final Object[] args = new Object[]{ctx, state, pids};
-				return ((org.mozilla.javascript.Function) fn).call(cx, scope, scope, args);
+				final Object result = ((org.mozilla.javascript.Function) fn).call(cx, scope, scope, args);
+				return returnSuccess ? Boolean.TRUE : result;
 			} catch (Exception e) {
-				Joban.LOGGER.error("[Joban Client] PIDS script \"" + key + "\" threw in " + function + "(): " + e);
-				return Undefined.instance;
+				/* A script that throws keeps throwing every frame -- the earlier build wrote
+				   ~8 MB of log in a few seconds this way. Report the first occurrence of each
+				   distinct failure with enough context to act on it, then stay quiet until the
+				   next resource reload recompiles the program. */
+				final String signature = function + "|" + e.getClass().getSimpleName() + "|" + e.getMessage();
+				if (reportedErrors.add(signature)) {
+					Joban.LOGGER.error("[Joban Client] PIDS script \"{}\" threw in {}(): {}", key, function, e.toString());
+					if (pids != null) {
+						Joban.LOGGER.error("[Joban Client]   arrivals available: {}, rows: {}, preset: {}"
+										+ " -- a script that indexes past the end gets null, and anything after the"
+										+ " throw (including its background) is never drawn",
+								pids.arrivals().size(), pids.rows, pids.type);
+					}
+					Joban.LOGGER.error("[Joban Client]   (repeated failures of this kind are suppressed until reload)");
+				}
+				return returnSuccess ? Boolean.FALSE : Undefined.instance;
 			} finally {
 				Context.exit();
 			}
@@ -347,7 +375,15 @@ public final class ScriptEngine {
 
 		/** Runs the script's {@code render(ctx, state, pids)} for one frame. */
 		public void render(ScriptRenderContext ctx, PIDSWrapper pids) {
-			invoke("render", ctx, pids);
+			renderOrFail(ctx, pids);
+		}
+
+		/**
+		 * @return {@code false} when the script threw, meaning part of the frame — very likely
+		 * its background, which scripts normally draw first — was never issued
+		 */
+		public boolean renderOrFail(ScriptRenderContext ctx, PIDSWrapper pids) {
+			return invokeChecked("render", ctx, pids);
 		}
 
 		/** Runs the script's {@code dispose(ctx, state, pids)}; used when a preset is dropped. */

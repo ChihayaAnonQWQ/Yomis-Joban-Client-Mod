@@ -234,14 +234,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         /* The built-in renderers draw the preset's background image themselves, but a layout
            preset takes over the whole panel, so the background has to be drawn here instead
            or every layout preset would be missing its artwork. */
-        if (preset.image != null) {
-            final VertexConsumer backgroundConsumer = vertexConsumers.getBuffer(MoreRenderLayers.getLight(preset.image, false));
-            final float left = geometry.panelLeft();
-            IDrawing.drawTexture(matrices, backgroundConsumer,
-                    left, geometry.panelOffsetY, 0F,
-                    left + geometry.panelWidth, geometry.panelOffsetY + geometry.panelHeight, 0F,
-                    0, 0, 1, 1, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
-        }
+        drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
 
         final PIDSGraphics graphics = new PIDSGraphics(matrices, vertexConsumers, immediate, facing,
                 MAX_LIGHT_GLOWING, textColor, font, 1F);
@@ -331,10 +324,36 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 matrices, vertexConsumers, immediate, facing, MAX_LIGHT_GLOWING,
                 canvasWidth, canvasHeight, scriptScale);
 
-        program.render(ctx, wrapper);
+        if (!program.renderOrFail(ctx, wrapper)) {
+            /* The script threw, very likely before it reached its own background call, which is
+               why a script error used to leave the panel completely black. Show the preset
+               artwork instead so the failure is visible without being opaque. */
+            drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
+        }
 
         immediate.endBatch();
         matrices.popPose();
+    }
+
+    /**
+     * Draws the preset's background image across the panel.
+     *
+     * <p>The built-in renderers do this themselves, but both the JSON-layout and scripted paths
+     * take over the whole panel. A scripted preset normally paints its own background first, so
+     * this is also the fallback used when a script throws before reaching that call — otherwise
+     * a single bad script line leaves the player staring at a black screen.</p>
+     */
+    protected void drawPresetBackground(PIDSPreset preset, PIDSGeometry geometry, Direction facing,
+                                        PoseStack matrices, MultiBufferSource vertexConsumers) {
+        if (preset == null || preset.image == null) {
+            return;
+        }
+        final VertexConsumer backgroundConsumer = vertexConsumers.getBuffer(MoreRenderLayers.getLight(preset.image, false));
+        final float left = geometry.panelLeft();
+        IDrawing.drawTexture(matrices, backgroundConsumer,
+                left, geometry.panelOffsetY, 0F,
+                left + geometry.panelWidth, geometry.panelOffsetY + geometry.panelHeight, 0F,
+                0, 0, 1, 1, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
     }
 
     public abstract void render(T entity, Level world, String[] customMessages, boolean[] hideArrivals, boolean hidePlatforms, PIDSPreset preset, List<Long> platformId, float delta, PoseStack matrices, MultiBufferSource vertexConsumers, int light, int overlay);

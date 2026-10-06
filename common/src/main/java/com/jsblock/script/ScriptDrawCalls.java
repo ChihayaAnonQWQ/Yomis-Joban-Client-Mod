@@ -187,8 +187,10 @@ public final class ScriptDrawCalls {
 		@Override
 		void draw(ScriptRenderContext ctx, float z) {
 			pushTransform(ctx, z);
+			/* Script paths are relative to assets/<namespace>/, not assets/<namespace>/textures/;
+			   see ScriptTextures for why the render layer alone would miss. */
 			final VertexConsumer vertexConsumer = ctx.vertexConsumers.getBuffer(
-					MoreRenderLayers.getLight(textureId, false));
+					MoreRenderLayers.getLight(ScriptTextures.resolve(textureId), false));
 			IDrawing.drawTexture(ctx.matrices, vertexConsumer,
 					0, 0, 0, (float) w, (float) h, 0,
 					u1, v1, u2, v2, ctx.facing,
