@@ -102,6 +102,35 @@ public class RenderLCDPIDS<T extends BlockEntityMapper> extends RenderPIDSBase<T
                 rotate90, rotation, defaultFont, defaultTextColor);
     }
 
+    /* JCM 2.x's LCDPIDSRenderer carries its own literals, so a scripted preset lands where its
+       author put it: same numbers, straight from that file. The base class defaults are the RV
+       set, which is why these exist. */
+
+    @Override
+    protected float scriptPanelTranslateX() {
+        return -0.19F;
+    }
+
+    @Override
+    protected float scriptPanelTranslateY() {
+        return -0.125F;
+    }
+
+    @Override
+    protected float scriptPanelTranslateZ() {
+        return -0.130F;
+    }
+
+    @Override
+    protected int scriptCanvasWidth() {
+        return 133;
+    }
+
+    @Override
+    protected int scriptCanvasHeight() {
+        return 72;
+    }
+
     @Override
     public void render(T entity, Level world, String[] customMessages, boolean[] hideArrivals, boolean hidePlatforms, PIDSPreset preset, List<Long> filteredPlatformIds, float delta, PoseStack matrices, MultiBufferSource vertexConsumers, int light, int overlay) {
         final BlockPos pos = entity.getBlockPos();
