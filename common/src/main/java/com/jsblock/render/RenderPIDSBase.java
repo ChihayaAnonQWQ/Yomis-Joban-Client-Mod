@@ -293,7 +293,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * still well under the 0.05 that was tried earlier, which visibly floated the panel off
      * the block.</p>
      */
-    private static final float SCRIPT_PANEL_OUTWARD = 0.02F;
+    private static final float SCRIPT_PANEL_OUTWARD = 0.04F;
 
     /**
      * JCM 2.x's hard-coded panel translate for this PIDS type, in block space.
@@ -417,7 +417,8 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final float scriptScale = 1F;
 
         reportPanelOnce(pos, "running script preset=" + preset.id + " canvas=" + canvasWidth + "x" + canvasHeight
-                + " scriptScale=" + scriptScale + " arrivals=" + scheduleList.size()
+                + " scriptScale=" + scriptScale + " outward=" + SCRIPT_PANEL_OUTWARD
+                + " canvasArrivals=" + scheduleList.size()
                 + " rows=" + (hideArrivals == null ? 0 : hideArrivals.length));
 
         final com.jsblock.script.PIDSWrapper wrapper = new com.jsblock.script.PIDSWrapper(
