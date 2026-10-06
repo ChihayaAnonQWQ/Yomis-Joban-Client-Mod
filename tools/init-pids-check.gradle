@@ -1,0 +1,25 @@
+// DSH: exports :common's runtime classpath so tools/checks can be compiled with plain javac.
+//
+// `:common:compileTestJava` cannot host the check directly: build.gradle's allprojects block
+// adds `-Xplugin:Manifold` to every JavaCompile task and the Manifold plugin fails on the
+// test source set. So the check lives in tools/checks/ (outside every Gradle source set).
+//
+// Usage:
+//   gradle -I tools/init-pids-check.gradle :common:dumpRuntimeClasspath
+// or simply run tools/run-pids-check.ps1, which does the whole cycle.
+allprojects { p ->
+	if (p.name == 'common') {
+		p.afterEvaluate {
+			p.tasks.register('dumpRuntimeClasspath') {
+				group = 'verification'
+				description = 'Writes the :common runtime classpath to build/runtime-classpath.txt'
+				doLast {
+					def out = new File(p.buildDir, 'runtime-classpath.txt')
+					out.parentFile.mkdirs()
+					out.text = p.sourceSets.main.runtimeClasspath.asPath
+					println "runtime classpath written to ${out}"
+				}
+			}
+		}
+	}
+}

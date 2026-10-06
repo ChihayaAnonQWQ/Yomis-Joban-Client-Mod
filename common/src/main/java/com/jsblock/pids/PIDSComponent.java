@@ -1,6 +1,7 @@
 package com.jsblock.pids;
 
 import com.google.gson.JsonObject;
+import com.jsblock.Joban;
 import com.jsblock.pids.component.ArrivalCarComponent;
 import com.jsblock.pids.component.ArrivalDestinationComponent;
 import com.jsblock.pids.component.ArrivalETAComponent;
@@ -45,6 +46,10 @@ public abstract class PIDSComponent implements IGui {
 	 * during mod init, exactly as JCM allows.
 	 */
 	public static final Map<String, ComponentParser> COMPONENTS = new LinkedHashMap<>();
+
+	/** Component names already reported as unknown, so the log is not spammed per frame. */
+	private static final java.util.Set<String> UNKNOWN_COMPONENTS_REPORTED =
+			java.util.concurrent.ConcurrentHashMap.newKeySet();
 
 	static {
 		COMPONENTS.put("arrival_destination", ArrivalDestinationComponent::parse);
@@ -125,6 +130,7 @@ public abstract class PIDSComponent implements IGui {
 		final String name = json.get("component").getAsString();
 		final ComponentParser parser = COMPONENTS.get(name);
 		if (parser == null) {
+			warnUnknownOnce(name);
 			return null;
 		}
 		final double x = optDouble(json, "x", 0);
@@ -134,7 +140,20 @@ public abstract class PIDSComponent implements IGui {
 		try {
 			return parser.parse(x, y, width, height, json);
 		} catch (Exception e) {
+			Joban.LOGGER.warn("[Joban Client] PIDS component \"{}\" could not be parsed: {}", name, e.toString());
 			return null;
+		}
+	}
+
+	/**
+	 * Reports an unrecognised component type once per name. A resource pack written for a
+	 * newer JCM may legitimately use components this branch does not implement yet, so the
+	 * preset keeps loading and only the unknown element is dropped.
+	 */
+	private static void warnUnknownOnce(String name) {
+		if (UNKNOWN_COMPONENTS_REPORTED.add(name)) {
+			Joban.LOGGER.warn("[Joban Client] Unknown PIDS component \"{}\"; skipping it. Known types: {}",
+					name, String.join(", ", COMPONENTS.keySet()));
 		}
 	}
 

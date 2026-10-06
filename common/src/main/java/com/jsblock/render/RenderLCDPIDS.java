@@ -88,11 +88,15 @@ public class RenderLCDPIDS<T extends BlockEntityMapper> extends RenderPIDSBase<T
      * Exposes this renderer's panel geometry so {@link RenderPIDSBase} can draw
      * component-based layout presets onto exactly the same panel rectangle as the
      * built-in elements.
+     *
+     * <p>{@code panelOffsetY} is the background quad's top edge in the local space:
+     * this renderer translates by {@code -1F} and then draws the quad at {@code -1.5F},
+     * hence {@code -2.5F}.</p>
      */
     @Override
     protected com.jsblock.pids.PIDSGeometry getLayoutGeometry() {
         return new com.jsblock.pids.PIDSGeometry(startX, startY, startZ, scale,
-                BACKGROUND_WIDTH, BACKGROUND_HEIGHT, rotate90, rotation, defaultFont, defaultTextColor);
+                BACKGROUND_WIDTH, BACKGROUND_HEIGHT, -1F - 1.5F, rotate90, rotation, defaultFont, defaultTextColor);
     }
 
     @Override

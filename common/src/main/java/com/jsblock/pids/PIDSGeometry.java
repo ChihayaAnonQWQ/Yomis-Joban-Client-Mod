@@ -5,13 +5,15 @@ package com.jsblock.pids;
  *
  * <p>Each concrete PIDS renderer ({@code RenderLCDPIDS}, {@code RenderRVPIDS}) receives this
  * geometry through its constructor, because the panel size differs per block. Handing it to
- * {@link PIDSLayout} lets a component layout be drawn without each renderer duplicating the
- * matrix maths.</p>
+ * {@link PIDSLayout} lets a component layout be drawn onto exactly the rectangle the
+ * built-in renderer uses for its background artwork.</p>
  *
  * <p>The field meanings mirror the constructor parameters the renderers already take:
  * {@link #scale} is the divisor applied by {@code matrices.scale(1F / scale, ...)}, and
  * {@link #panelWidth} / {@link #panelHeight} are the size of the background artwork in that
- * same local space.</p>
+ * same local space. The panel's left edge is always centred on {@link #startX}
+ * ({@code startX - panelWidth / 2} in both renderers); {@link #panelOffsetY} supplies the
+ * per-renderer vertical origin.</p>
  */
 public class PIDSGeometry {
 
@@ -27,6 +29,12 @@ public class PIDSGeometry {
 	public final float panelWidth;
 	/** Background artwork height in local units. */
 	public final float panelHeight;
+	/**
+	 * Y of the background artwork's top edge in the renderer's local space, i.e. the sum of
+	 * the renderer's own {@code BACKGROUND_Y} translate and the shared {@code -1.5F} the
+	 * background quad is drawn at. LCD PIDS uses {@code -2.5F}, RV PIDS {@code -11.0F}.
+	 */
+	public final float panelOffsetY;
 	/** Whether the panel is rotated a further 90 degrees. */
 	public final boolean rotate90;
 	/** Extra X rotation applied to the panel. */
@@ -37,7 +45,8 @@ public class PIDSGeometry {
 	public final int defaultTextColor;
 
 	public PIDSGeometry(float startX, float startY, float startZ, float scale,
-						float panelWidth, float panelHeight, boolean rotate90, float rotation,
+						float panelWidth, float panelHeight, float panelOffsetY,
+						boolean rotate90, float rotation,
 						String defaultFont, int defaultTextColor) {
 		this.startX = startX;
 		this.startY = startY;
@@ -45,9 +54,15 @@ public class PIDSGeometry {
 		this.scale = scale;
 		this.panelWidth = panelWidth;
 		this.panelHeight = panelHeight;
+		this.panelOffsetY = panelOffsetY;
 		this.rotate90 = rotate90;
 		this.rotation = rotation;
 		this.defaultFont = defaultFont;
 		this.defaultTextColor = defaultTextColor;
+	}
+
+	/** @return the panel's left edge in the renderer's local space. */
+	public float panelLeft() {
+		return startX - panelWidth / 2F;
 	}
 }

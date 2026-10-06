@@ -1,0 +1,88 @@
+{
+  "_comment": [
+    "Built-in component-based PIDS layouts shipped with YJCM.",
+    "These are ordinary 'pids_images' presets: a resource pack can add more,",
+    "or override these by reusing the same id at a higher pack priority.",
+    "See MTR3-PIDS-PORT.md for the full component reference."
+  ],
+  "pids_images": [
+    {
+      "id": "layout_lcd",
+      "_comment": "Mirrors the built-in LCD PIDS: station name + clock header, then four arrival rows.",
+      "background": "jsblock:textures/pids_screen/door_cls_train.png",
+      "size": [100, 50],
+      "color": "FFFFFF",
+      "fonts": "jsblock:pids_lcd",
+      "showWeather": false,
+      "showClock": false,
+      "hideRow": [false, false, false, false],
+      "components": [
+        { "component": "station_name", "x": 3, "y": 2, "width": 56, "height": 7, "halign": "left", "valign": "center" },
+        { "component": "clock", "x": 74, "y": 2, "width": 23, "height": 7, "format": "HH:mm", "halign": "right", "valign": "center" },
+
+        { "component": "arrival_destination", "x": 4, "y": 11, "width": 62, "height": 8, "row": 0, "halign": "left" },
+        { "component": "arrival_eta", "x": 74, "y": 11, "width": 23, "height": 8, "row": 0, "halign": "right" },
+        { "component": "arrival_destination", "x": 4, "y": 20, "width": 62, "height": 8, "row": 1, "halign": "left" },
+        { "component": "arrival_eta", "x": 74, "y": 20, "width": 23, "height": 8, "row": 1, "halign": "right" },
+        { "component": "arrival_destination", "x": 4, "y": 29, "width": 62, "height": 8, "row": 2, "halign": "left" },
+        { "component": "arrival_eta", "x": 74, "y": 29, "width": 23, "height": 8, "row": 2, "halign": "right" },
+        { "component": "arrival_destination", "x": 4, "y": 38, "width": 62, "height": 8, "row": 3, "halign": "left" },
+        { "component": "arrival_eta", "x": 74, "y": 38, "width": 23, "height": 8, "row": 3, "halign": "right" }
+      ]
+    },
+    {
+      "id": "layout_rv",
+      "_comment": "Mirrors the built-in RV PIDS and adds the car count, which the built-in renderer only flashes periodically.",
+      "background": "jsblock:textures/pids_screen/door_cls_psd.png",
+      "size": [100, 50],
+      "color": "FFFFFF",
+      "fonts": "mtr:mtr",
+      "showWeather": true,
+      "showClock": true,
+      "hideRow": [false, false, false, true],
+      "components": [
+        { "component": "station_name", "x": 3, "y": 2, "width": 52, "height": 7, "halign": "left" },
+        { "component": "platform_text", "x": 57, "y": 2, "width": 20, "height": 7, "halign": "center" },
+        { "component": "clock", "x": 79, "y": 2, "width": 18, "height": 7, "format": "HH:mm", "halign": "right" },
+
+        { "component": "arrival_destination", "x": 4, "y": 13, "width": 54, "height": 9, "row": 0, "halign": "left" },
+        { "component": "arrival_car", "x": 59, "y": 13, "width": 14, "height": 9, "row": 0, "only_when_varying": true, "halign": "center" },
+        { "component": "arrival_eta", "x": 75, "y": 13, "width": 22, "height": 9, "row": 0, "halign": "right" },
+
+        { "component": "arrival_destination", "x": 4, "y": 24, "width": 54, "height": 9, "row": 1, "halign": "left" },
+        { "component": "arrival_car", "x": 59, "y": 24, "width": 14, "height": 9, "row": 1, "only_when_varying": true, "halign": "center" },
+        { "component": "arrival_eta", "x": 75, "y": 24, "width": 22, "height": 9, "row": 1, "halign": "right" },
+
+        { "component": "arrival_destination", "x": 4, "y": 35, "width": 54, "height": 9, "row": 2, "halign": "left" },
+        { "component": "arrival_car", "x": 59, "y": 35, "width": 14, "height": 9, "row": 2, "only_when_varying": true, "halign": "center" },
+        { "component": "arrival_eta", "x": 75, "y": 35, "width": 22, "height": 9, "row": 2, "halign": "right" }
+      ]
+    },
+    {
+      "id": "layout_notice",
+      "_comment": "Demonstrates the cycle component: alternates between weather, the clock and a rolling notice.",
+      "background": "jsblock:textures/pids_screen/door_cls_apg.png",
+      "size": [100, 50],
+      "color": "FFFFFF",
+      "fonts": "mtr:mtr",
+      "showWeather": true,
+      "showClock": true,
+      "hideRow": [false, false, false, false],
+      "components": [
+        { "component": "station_name", "x": 3, "y": 3, "width": 94, "height": 10, "halign": "center", "scale": 1 },
+
+        { "component": "cycle", "x": 3, "y": 18, "width": 94, "height": 12, "interval": 120, "components": [
+          { "component": "custom_text", "x": 0, "y": 0, "width": 94, "height": 12,
+            "text": "{weather} · {time_period}", "halign": "center" },
+          { "component": "custom_text", "x": 0, "y": 0, "width": 94, "height": 12,
+            "text": "第 {day} 天 · {time}", "halign": "center" },
+          { "component": "custom_text", "x": 0, "y": 0, "width": 94, "height": 12,
+            "text": "在线 {worldPlayer} 人", "halign": "center" }
+        ]},
+
+        { "component": "arrival_destination", "x": 4, "y": 33, "width": 62, "height": 8, "row": 0, "halign": "left" },
+        { "component": "arrival_eta", "x": 74, "y": 33, "width": 23, "height": 8, "row": 0, "halign": "right" }
+      ]
+    }
+  ]
+}

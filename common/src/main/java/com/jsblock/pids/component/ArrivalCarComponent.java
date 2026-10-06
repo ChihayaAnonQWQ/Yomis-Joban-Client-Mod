@@ -78,7 +78,7 @@ public class ArrivalCarComponent extends PIDSComponent {
 
 	private static boolean carCountsVary(PIDSContext context) {
 		int first = -1;
-		for (ScheduleEntry entry : context.scheduleList) {
+		for (ScheduleEntry entry : context.visibleArrivals()) {
 			if (first < 0) {
 				first = entry.trainCars;
 			} else if (entry.trainCars != first) {

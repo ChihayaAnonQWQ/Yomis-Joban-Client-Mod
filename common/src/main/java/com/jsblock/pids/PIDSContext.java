@@ -20,6 +20,14 @@ import java.util.List;
  * Everything else a component needs (route name/colour/destination, station name, platform
  * name) is looked up lazily through {@link PIDSData}.</p>
  *
+ * <h2>Rows</h2>
+ * <p>A component's {@code row} option is a <b>display row</b>, not an index into the raw
+ * arrival list, and it follows exactly the rule the built-in renderers use
+ * ({@code RenderLCDPIDS} / {@code RenderRVPIDS}): a row flagged hidden in
+ * {@code hideArrivals} does <b>not</b> consume an arrival, so the retained arrival simply
+ * surfaces in the next visible row. Components therefore address the same row a user would
+ * point at on screen, regardless of how many rows the preset hides.</p>
+ *
  * @see PIDSData
  */
 public class PIDSContext {
@@ -32,16 +40,19 @@ public class PIDSContext {
 	public final Direction facing;
 	/** Per-row custom messages, already variable-substituted by the caller. */
 	public final String[] customMessages;
-	/** Sorted upcoming arrivals for the platform(s) this PIDS watches. */
+	/** Sorted upcoming arrivals for the platform(s) this PIDS watches, before row mapping. */
 	public final List<ScheduleEntry> scheduleList;
 	/** Platform ids this PIDS is filtered to; empty means "nearest platform". */
 	public final List<Long> platformIds;
-	/** Per-row hide flags coming from the block entity and the preset. */
+	/** Per-display-row hide flags coming from the block entity and the preset. */
 	public final boolean[] hideArrivals;
 	/** Partial tick time, for animated components. */
 	public final double deltaTime;
 	/** Client game tick counter, for time-based cycling. */
 	public final long gameTick;
+
+	/** Display row to arrival, honouring {@link #hideArrivals}. */
+	private final ScheduleEntry[] rowArrivals;
 
 	public PIDSContext(Level world, BlockPos pos, Direction facing, String[] customMessages,
 					   List<ScheduleEntry> scheduleList, List<Long> platformIds,
@@ -55,35 +66,61 @@ public class PIDSContext {
 		this.hideArrivals = hideArrivals == null ? new boolean[0] : hideArrivals;
 		this.deltaTime = deltaTime;
 		this.gameTick = gameTick;
+		this.rowArrivals = buildRowArrivals(this.scheduleList, this.hideArrivals);
 	}
 
-	/** @return the arrival at {@code index}, or {@code null} when there is none. */
-	public ScheduleEntry arrival(int index) {
-		return index >= 0 && index < scheduleList.size() ? scheduleList.get(index) : null;
+	private static ScheduleEntry[] buildRowArrivals(List<ScheduleEntry> schedule, boolean[] hide) {
+		final int rows = Math.max(hide.length, schedule.size());
+		final ScheduleEntry[] result = new ScheduleEntry[rows];
+		int next = 0;
+		for (int row = 0; row < rows; row++) {
+			if (row < hide.length && hide[row]) {
+				// Hidden rows do not consume an arrival, matching the entryIndex
+				// consumption rule of the built-in renderers.
+				continue;
+			}
+			result[row] = next < schedule.size() ? schedule.get(next) : null;
+			next++;
+		}
+		return result;
 	}
 
-	/** @return the first (soonest) upcoming arrival, or {@code null}. */
+	/** @return how many display rows this PIDS has. */
+	public int getRowCount() {
+		return rowArrivals.length;
+	}
+
+	/**
+	 * @param row a <b>display row</b> index
+	 * @return the arrival shown on that row, or {@code null} when the row is hidden or past
+	 * the end of the arrival list
+	 */
+	public ScheduleEntry arrival(int row) {
+		return row >= 0 && row < rowArrivals.length ? rowArrivals[row] : null;
+	}
+
+	/** @return the arrival on display row 0, or {@code null}. */
 	public ScheduleEntry firstArrival() {
 		return arrival(0);
 	}
 
-	/** @return how many arrivals are visible (not hidden) from {@code from} onward. */
-	public int visibleArrivalCount(int from) {
-		int count = 0;
-		for (int i = from; i < scheduleList.size(); i++) {
-			if (!isRowHidden(i)) {
-				count++;
+	/** @return every arrival that is actually shown on some display row, in row order. */
+	public List<ScheduleEntry> visibleArrivals() {
+		final List<ScheduleEntry> visible = new ArrayList<>();
+		for (ScheduleEntry entry : rowArrivals) {
+			if (entry != null) {
+				visible.add(entry);
 			}
 		}
-		return count;
+		return visible;
 	}
 
-	/** @return {@code true} when the given arrival row is flagged hidden. */
+	/** @return {@code true} when the given display row is flagged hidden. */
 	public boolean isRowHidden(int row) {
 		return row >= 0 && row < hideArrivals.length && hideArrivals[row];
 	}
 
-	/** @return the custom message for a row, or an empty string. */
+	/** @return the custom message for a display row, or an empty string. */
 	public String customMessage(int row) {
 		return row >= 0 && row < customMessages.length && customMessages[row] != null ? customMessages[row] : "";
 	}

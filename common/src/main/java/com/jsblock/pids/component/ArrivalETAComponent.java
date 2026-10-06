@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.jsblock.pids.PIDSAlign;
 import com.jsblock.pids.PIDSComponent;
 import com.jsblock.pids.PIDSContext;
+import com.jsblock.pids.PIDSData;
 import com.jsblock.pids.PIDSGraphics;
 import mtr.data.IGui;
 import mtr.data.ScheduleEntry;
@@ -61,17 +62,23 @@ public class ArrivalETAComponent extends PIDSComponent {
 		if (entry == null) {
 			return;
 		}
-		drawText(graphics, describe(entry), x, y, width, height,
+		drawText(graphics, describe(entry, PIDSData.destination(entry)), x, y, width, height,
 				horizontalAlignment, verticalAlignment, graphics.scale * scale, color);
 	}
 
 	/**
 	 * Builds the ETA wording for an arrival. CJK destinations use MTR's CJK-specific keys
 	 * so the unit reads naturally in Chinese, matching {@code RenderLCDPIDS}.
+	 *
+	 * @param entry                    the arrival to describe
+	 * @param destinationForLanguage   the destination text shown alongside this ETA; it
+	 *                                 decides whether CJK units are used. MTR 3's
+	 *                                 {@link ScheduleEntry} carries no destination, so the
+	 *                                 caller resolves it through {@link PIDSData}.
 	 */
-	public static String describe(ScheduleEntry entry) {
+	public static String describe(ScheduleEntry entry, String destinationForLanguage) {
 		final int seconds = (int) Math.round((entry.arrivalMillis - System.currentTimeMillis()) / 1000.0D);
-		final boolean isCjk = IGui.isCjk("");
+		final boolean isCjk = IGui.isCjk(destinationForLanguage == null ? "" : destinationForLanguage);
 		if (seconds >= 60) {
 			return Text.translatable(isCjk ? "gui.mtr.arrival_min_cjk" : "gui.mtr.arrival_min", seconds / 60).getString();
 		}

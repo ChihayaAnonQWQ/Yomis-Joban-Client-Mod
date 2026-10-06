@@ -92,7 +92,33 @@ common/src/main/java/com/jsblock/pids/
   设计单位；渲染时整块画布**等比**缩放到面板上，因此同一份预设在小尺寸站台 PIDS 和
   大尺寸投影仪上表现一致。
 - **`color` / `font`**：与旧预设含义相同，作为组件未单独指定颜色/字体时的默认值。
+- **`background`**：可选。带布局的预设会**自己绘制**背景图（内置渲染器的背景绘制被绕过，
+  所以这一层由布局路径补上）；不写则只有组件。
 - 旧预设（无 `components`）继续走原有硬编码渲染路径，**完全向后兼容**。
+
+### `row` 的语义：显示行，不是班次下标
+
+`arrival_*` 组件的 `row` 是**显示行号**，采用与内置渲染器（`RenderLCDPIDS` /
+`RenderRVPIDS`）完全一致的规则：
+
+> 被 `hideRow` 标记为隐藏的行**不消耗**班次，因此该班次会顶到下一个可见行。
+
+所以 `row: 2` 指的始终是用户在屏幕上看到的第 3 行，与预设隐藏了几行无关。
+（内置渲染器的 `entryIndex` 只在可见行推进；见 `RenderLCDPIDS.java` 结尾的
+`if(hideArrivals[i]) continue;` 与 `RenderRVPIDS.java` 的对应位置。）
+
+### 随 mod 附带的示例预设
+
+`common/src/main/resources/assets/jsblock/joban_custom_resources.json` 内置了三个可直接使用的布局预设，
+同时也是本引擎的活体测试用例：
+
+| id | 演示内容 |
+|---|---|
+| `layout_lcd` | 复刻内置 LCD PIDS：站名 + 时钟表头，4 行「终点站 + ETA」 |
+| `layout_rv` | 复刻内置 RV PIDS，并补上内置渲染器只在特定 tick 闪现的**车厢数** |
+| `layout_notice` | 演示 `cycle` 组件：天气 / 日期 / 在线人数三屏轮播 |
+
+它们是普通的 `pids_images` 预设，资源包可以用**相同的 id** 在更高优先级覆盖，也可以新增自己的。
 
 ### 通用选项（所有组件）
 
@@ -175,10 +201,29 @@ MTR 官方的开发 jar（`MTR-common-1.20-*-dev.jar`）下载地址**已经全�
 
 | 项目 | 状态 |
 |---|---|
-| `:common:compileJava` 含全部 PIDS 新代码 | ✅ **已通过** |
-| `:common` / `:fabric` / `:forge` 全量 `build` | 见仓库根 `logs/` |
-| JSON 预设解析逻辑 | ✅ 编译通过；单元级逻辑待补 |
+| `:common` / `:fabric` / `:forge` 全量 `gradle build` | ✅ **已通过**（含 `mergeJars`） |
+| 附带预设的 JSON 解析（真实调用 `PIDSPreset.fromJson`） | ✅ **已通过** —— 见下方 `tools/run-pids-check.ps1` |
+| 未知组件类型的降级行为 | ✅ **已通过** —— 告警并跳过该元素，其余组件保留 |
 | **游戏内视觉效果** | ⚠️ **未验证** —— 需要在装了 YMTR 3.6.3 的 Forge 1.20.1 客户端里实际打开 PIDS 才能确认版式落位 |
+
+### 怎么验证（不需要启动游戏）
+
+```powershell
+powershell -NoProfile -File tools\run-pids-check.ps1
+```
+
+该脚本会：构建 → 导出 `:common` 运行时 classpath → 用 `javac` 编译
+`tools/checks/com/jsblock/pids/PIDSPresetCheck.java` → 运行它，逐条打印每个附带预设解析出的
+组件树，并单独验证「一个未知组件不会拖垮整份预设」。任何一步失败都会以非零码退出。
+
+这个检查不是摆设——它当场抓到了一个真实缺陷：三个附带预设的字体全部为 `null`。
+原因是上游 `PIDSPreset.fromJson` 读的键是 **`fonts`（复数）**，而字段和所有渲染器都叫
+`font`。现在两边都接受（见 `PIDSPreset.java`），并且资源包无论写哪个键都不会静默丢字体。
+
+> 检查程序**刻意不放进 Gradle 的 test 源集**：`build.gradle` 的 `allprojects` 块把
+> `-Xplugin:Manifold` 加到了每一个 `JavaCompile` 任务上，而 Manifold 编译器插件在 test
+> 源集上会失败（`找不到符号: Manifold`），导致 `gradle build` 整体变红。放在
+> `tools/checks/` 下不进入任何源集，`gradle build` 保持干净。
 
 布局渲染的矩阵变换刻意复刻了 `RenderLCDPIDS` / `RenderRVPIDS` 绘制背景时所用的那一段
 （平移到方块中心 → 朝向/90° 旋转 → 移到面板原点 → 除以 `scale`），因此理论上会精确
@@ -186,13 +231,12 @@ MTR 官方的开发 jar（`MTR-common-1.20-*-dev.jar`）下载地址**已经全�
 
 ### 已知限制
 
-- `arrival_eta` 的 CJK 判断目前恒为 false（`IGui.isCjk("")`），因为 MTR 3 的
-  `ScheduleEntry` 不含目的地文本；要按目的地语言选 CJK 单位，需要把目的地字符串
-  传进 `PIDSContext`。这是一个明确的 TODO，不影响编译。
 - `weather_icon` 不附带任何贴图——MTR 3/YJCM 没有可复用的天气美术资源，
   必须由预设提供三张纹理，否则该组件自动跳过。
 - 未实现 JCM 的 `ScriptPIDSPreset`（Rhino 脚本预设）。它依赖 JCM 2.x 的
   `mtrscripting` 整个子系统，属于另一个量级的移植。
+- `PIDSComponent.COMPONENTS` 目前只含 JCM 那 11 种组件；JCM 的组件树里若还有本分支
+  未实现的类型，加载时会**一次性告警**并跳过该元素，其余组件照常渲染，不会整份预设失败。
 
 ---
 

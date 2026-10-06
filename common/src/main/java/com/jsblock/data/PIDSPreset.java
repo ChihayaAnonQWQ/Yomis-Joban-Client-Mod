@@ -2,6 +2,7 @@ package com.jsblock.data;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.jsblock.pids.PIDSLayout;
 import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
 import net.minecraft.resources.ResourceLocation;
@@ -44,11 +45,23 @@ public class PIDSPreset {
         boolean showWeather = element.getAsJsonObject().has("showWeather") ? element.getAsJsonObject().get("showWeather").getAsBoolean() : true;
         boolean showClock = element.getAsJsonObject().has("showClock") ? element.getAsJsonObject().get("showClock").getAsBoolean() : true;
         boolean customTextPushArrival = element.getAsJsonObject().has("customTextPushArrival") && element.getAsJsonObject().get("customTextPushArrival").getAsBoolean();
-        String fonts = element.getAsJsonObject().has("fonts") ? element.getAsJsonObject().get("fonts").getAsString() : null;
+        /* The preset key has always been "fonts" (plural) while the field and every renderer
+           call it `font`; accept both spellings so neither can silently lose the font. */
+        final JsonObject presetObject = element.getAsJsonObject();
+        String fonts = null;
+        if (presetObject.has("fonts")) {
+            fonts = presetObject.get("fonts").getAsString();
+        } else if (presetObject.has("font")) {
+            fonts = presetObject.get("font").getAsString();
+        }
         String hexColor = element.getAsJsonObject().has("color") ? element.getAsJsonObject().get("color").getAsString() : null;
         JsonArray carLengthColor = element.getAsJsonObject().has("carLengthColor") ? element.getAsJsonObject().get("carLengthColor").getAsJsonArray() : null;
         JsonArray hiddenRowList = element.getAsJsonObject().has("hideRow") ? element.getAsJsonObject().get("hideRow").getAsJsonArray() : null;
-        ResourceLocation background = new ResourceLocation(element.getAsJsonObject().get("background").getAsString());
+        /* "background" is optional: a layout preset may draw only components, and a missing
+           field used to abort the whole pids_images list because fromJson threw. */
+        final ResourceLocation background = element.getAsJsonObject().has("background")
+                ? new ResourceLocation(element.getAsJsonObject().get("background").getAsString())
+                : null;
 
         Int2IntArrayMap carLengthColorMap = null;
 

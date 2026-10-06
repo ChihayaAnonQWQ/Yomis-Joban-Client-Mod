@@ -23,6 +23,7 @@ import mtr.data.ScheduleEntry;
 import mtr.mappings.BlockEntityMapper;
 import mtr.mappings.BlockEntityRendererMapper;
 import mtr.mappings.UtilitiesClient;
+import mtr.render.MoreRenderLayers;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.core.BlockPos;
@@ -210,11 +211,24 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         matrices.scale(1F / geometry.scale, 1F / geometry.scale, 1F / geometry.scale);
 
         final MultiBufferSource.BufferSource immediate = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
+
+        /* The built-in renderers draw the preset's background image themselves, but a layout
+           preset takes over the whole panel, so the background has to be drawn here instead
+           or every layout preset would be missing its artwork. */
+        if (preset.image != null) {
+            final VertexConsumer backgroundConsumer = vertexConsumers.getBuffer(MoreRenderLayers.getLight(preset.image, false));
+            final float left = geometry.panelLeft();
+            IDrawing.drawTexture(matrices, backgroundConsumer,
+                    left, geometry.panelOffsetY, 0F,
+                    left + geometry.panelWidth, geometry.panelOffsetY + geometry.panelHeight, 0F,
+                    0, 0, 1, 1, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
+        }
+
         final PIDSGraphics graphics = new PIDSGraphics(matrices, vertexConsumers, immediate, facing,
                 MAX_LIGHT_GLOWING, textColor, font, 1F);
 
         preset.layout.render(context, graphics,
-                geometry.startX - geometry.panelWidth / 2F, 0F, geometry.panelWidth, geometry.panelHeight);
+                geometry.panelLeft(), geometry.panelOffsetY, geometry.panelWidth, geometry.panelHeight);
 
         immediate.endBatch();
         matrices.popPose();
