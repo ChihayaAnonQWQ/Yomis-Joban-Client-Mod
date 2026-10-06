@@ -285,6 +285,17 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     }
 
     /**
+     * How far the finished scripted panel is lifted out of its block, in blocks.
+     *
+     * <p>JCM 2.x uses {@code translate(0, 0, -0.005)} in ScriptPIDSPreset.render. That value is
+     * not enough on MTR 3: the panel still sat inside the block and overlapped it, so the
+     * reporter asked for it to be pulled further out. 0.02 is four times JCM 2.x's value and
+     * still well under the 0.05 that was tried earlier, which visibly floated the panel off
+     * the block.</p>
+     */
+    private static final float SCRIPT_PANEL_OUTWARD = 0.02F;
+
+    /**
      * JCM 2.x's hard-coded panel translate for this PIDS type, in block space.
      *
      * <p>Each of JCM 2.x's renderers carries its own literal — RVPIDSRenderer uses
@@ -425,7 +436,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
         UtilitiesClient.rotateZDegrees(matrices, 180);
         matrices.translate(scriptPanelTranslateX(), scriptPanelTranslateY(), scriptPanelTranslateZ());
-        matrices.translate(0F, 0F, -0.005F);
+        matrices.translate(0F, 0F, -SCRIPT_PANEL_OUTWARD);
         matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
 
         final MultiBufferSource.BufferSource immediate = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
