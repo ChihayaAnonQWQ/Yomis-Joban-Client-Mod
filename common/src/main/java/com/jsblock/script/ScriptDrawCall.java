@@ -19,6 +19,8 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 	protected double y;
 	protected double w;
 	protected double h;
+	/** Depth offset actually used for this call, recorded so describe() can report it. */
+	protected float z;
 	protected int zOrderOverride = -1;
 
 	protected ScriptDrawCall(double defaultWidth, double defaultHeight) {
@@ -66,7 +68,7 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 	 * what a script asked for without rendering anything.
 	 */
 	public String describe() {
-		return getClass().getSimpleName() + "(pos=" + x + "," + y + " size=" + w + "x" + h + ")";
+		return getClass().getSimpleName() + "(z=" + z + " pos=" + x + "," + y + " size=" + w + "x" + h + ")";
 	}
 
 	/**
@@ -82,6 +84,7 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 	 * JCM 2.x uses in {@code PIDSDrawCall.run}.
 	 */
 	final void pushTransform(ScriptRenderContext ctx, float z) {
+		this.z = z;
 		ctx.matrices.pushPose();
 		ctx.matrices.scale(ctx.scriptScale, ctx.scriptScale, ctx.scriptScale);
 		ctx.matrices.translate((float) x, (float) y, z);

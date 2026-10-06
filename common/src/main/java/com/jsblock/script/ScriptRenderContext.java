@@ -138,6 +138,10 @@ public class ScriptRenderContext {
 		drawCall.validate();
 		final float z = autoZOrdering ? (float) (drawCallIndex++ * zOrderStep) : 0F;
 		if (dryRun) {
+			/* Record the depth this call would have used. Without this the dry run short-circuits
+			   before pushTransform, so every call describes itself as z=0 and the layer
+			   separation cannot be checked without launching the game. */
+			drawCall.z = z;
 			recordedCalls.add(drawCall.describe());
 			return;
 		}

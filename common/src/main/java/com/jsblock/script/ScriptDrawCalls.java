@@ -78,7 +78,7 @@ public final class ScriptDrawCalls {
 
 		@Override
 		public String describe() {
-			return String.format("Rectangle(pos=%s,%s size=%sx%s color=%08X)",
+			return String.format("Rectangle(z=%s pos=%s,%s size=%sx%s color=%08X)", z,
 					x, y, w, h, color);
 		}
 
@@ -173,7 +173,7 @@ public final class ScriptDrawCalls {
 
 		@Override
 		public String describe() {
-			return String.format("Texture(pos=%s,%s size=%sx%s texture=%s uv=%s,%s,%s,%s)",
+			return String.format("Texture(z=%s pos=%s,%s size=%sx%s texture=%s uv=%s,%s,%s,%s)", z,
 					x, y, w, h, textureId, u1, v1, u2, v2);
 		}
 
@@ -383,7 +383,7 @@ public final class ScriptDrawCalls {
 
 		@Override
 		public String describe() {
-			return String.format("Text(pos=%s,%s box=%sx%s scale=%s align=%s overflow=%s color=%08X text=%s)",
+			return String.format("Text(z=%s pos=%s,%s box=%sx%s scale=%s align=%s overflow=%s color=%08X text=%s)", z,
 					x, y, w, h, scale, alignment, overflowMode, color, quote(textContent));
 		}
 
