@@ -264,6 +264,17 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     private static final java.util.Set<String> REPORTED_PANELS = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
+     * How far the scripted panel is lifted out of its block, in blocks.
+     *
+     * <p>The per-draw-call depth step only separates the panel's own layers; the first of them
+     * still sits exactly on the block's surface and traded places with the block model's screen
+     * face, which showed up as the panel flashing between drawn and black. Lifting the whole
+     * panel clear of the surface removes that fight, and 0.05 blocks (under one texture pixel)
+     * is too small to see as a gap.</p>
+     */
+    private static final float SCRIPT_PANEL_OUTWARD_OFFSET = 0.05F;
+
+    /**
      * Reports once per block which path is drawing its panel, and what it was handed.
      *
      * <p>A grey PIDS is ambiguous from the outside: the block may have no preset selected at
@@ -326,6 +337,14 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         }
         final int canvasHeight = Math.round(geometry.panelHeight / scriptScale);
         final int canvasWidth = Math.round(geometry.panelWidth / scriptScale);
+
+        /* A PIDS is two blocks wide along its facing axis and each half gets its own renderer
+           call, so running the script for both drew the panel twice at two slightly different
+           depths. The two copies traded places in the depth buffer every frame, which is the
+           black/white flashing. Only the head half draws; the trailing half does nothing. */
+        if (world.getBlockState(pos.relative(facing.getOpposite())).getBlock() == world.getBlockState(pos).getBlock()) {
+            return;
+        }
 
         reportPanelOnce(pos, "running script preset=" + preset.id + " canvas=" + canvasWidth + "x" + canvasHeight
                 + " scriptScale=" + scriptScale + " arrivals=" + scheduleList.size()
