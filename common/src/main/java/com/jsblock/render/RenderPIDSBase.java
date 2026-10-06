@@ -293,7 +293,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * still well under the 0.05 that was tried earlier, which visibly floated the panel off
      * the block.</p>
      */
-    private static final float SCRIPT_PANEL_OUTWARD = 0.04F;
+    private static final float SCRIPT_PANEL_OUTWARD = 0.02F;
 
     /**
      * JCM 2.x's hard-coded panel translate for this PIDS type, in block space.
