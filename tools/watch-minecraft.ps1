@@ -3,11 +3,12 @@
 #   powershell -NoProfile -File tools\watch-minecraft.ps1 -GameDir "D:\...\1.20.1-NanbinYMTR"
 #
 # Tails latest.log from its current end, prints only matching lines, and exits when the
-# game process is gone, a crash report appears, or the timeout elapses.
+# game has been gone for a sustained period, a crash report appears, or the timeout elapses.
 param(
 	[string]$GameDir = 'D:\Minecraft\HZYMTR\versions\1.20.1-NanbinYMTR',
-	[int]$TimeoutSeconds = 7200,
-	[int]$PollMilliseconds = 1000
+	[int]$TimeoutSeconds = 10800,
+	[int]$PollMilliseconds = 1000,
+	[int]$ExitAfterGameGoneSeconds = 20
 )
 
 $ErrorActionPreference = 'Continue'
@@ -23,10 +24,22 @@ function Write-Stamp([string]$text) {
 	Write-Output ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $text)
 }
 
+# Identify the game by its --gameDir argument. The previous version of this script matched any
+# java process over 300 MB, which reported "game gone" while a freshly started JVM was still
+# small -- so it quit during a restart. Startup footprint is not a reliable signal.
+function Test-GameRunning {
+	$procs = Get-CimInstance Win32_Process -Filter "Name='javaw.exe' OR Name='java.exe'" -ErrorAction SilentlyContinue
+	foreach ($p in $procs) {
+		if ($p.CommandLine -and $p.CommandLine.Contains($GameDir)) { return $true }
+	}
+	return $false
+}
+
 Write-Stamp "watch started"
 Write-Stamp "log       : $logPath"
 Write-Stamp "crashes   : $crashDir"
 Write-Stamp "timeout   : ${TimeoutSeconds}s"
+Write-Stamp "game now  : $(if (Test-GameRunning) { 'running' } else { 'not detected' })"
 
 if (-not (Test-Path $logPath)) { Write-Stamp "ERROR: log not found"; exit 2 }
 
@@ -39,22 +52,19 @@ if (Test-Path $crashDir) { $existingCrashes = Get-ChildItem $crashDir -Filter '*
 
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $sinceHeartbeat = 0
+$goneFor = 0
+$tick = 0
 
 while ((Get-Date) -lt $deadline) {
 	Start-Sleep -Milliseconds $PollMilliseconds
 	$sinceHeartbeat += $PollMilliseconds
+	$tick++
 
-	# Exit once the game is gone (with a short grace period so the tail drains).
-	$game = Get-Process -Name 'javaw', 'java' -ErrorAction SilentlyContinue |
-		Where-Object { $_.WorkingSet64 -gt 300MB }
-	if (-not $game) {
-		Start-Sleep -Seconds 3
-	}
-
+	# --- new log content -------------------------------------------------
 	if (Test-Path $logPath) {
 		$size = (Get-Item $logPath).Length
 		if ($size -lt $offset) {
-			Write-Stamp "log rotated (size $size < offset $offset), resetting"
+			Write-Stamp "log rotated (size $size < offset $offset), resetting -- game likely restarted"
 			$offset = 0
 		}
 		if ($size -gt $offset) {
@@ -71,15 +81,12 @@ while ((Get-Date) -lt $deadline) {
 			}
 
 			foreach ($line in ($text -split "`r?`n")) {
-				if ($line -and $line -match $pattern) {
-					# Strip the noisy full stack-trace lines' leading whitespace but keep them.
-					Write-Output $line.TrimEnd()
-				}
+				if ($line -and $line -match $pattern) { Write-Output $line.TrimEnd() }
 			}
 		}
 	}
 
-	# Surface any brand-new crash report immediately.
+	# --- crash reports ---------------------------------------------------
 	if (Test-Path $crashDir) {
 		foreach ($c in (Get-ChildItem $crashDir -Filter '*.txt' -ErrorAction SilentlyContinue)) {
 			if ($existingCrashes -notcontains $c.Name) {
@@ -92,15 +99,23 @@ while ((Get-Date) -lt $deadline) {
 		}
 	}
 
-	if (-not $game -and $sinceHeartbeat -gt 5000) {
-		Write-Output ('-' * 70)
-		Write-Stamp "game process no longer running; watch ending"
-		exit 0
+	# --- liveness (cheap check every ~5s) --------------------------------
+	if ($tick % 5 -eq 0) {
+		if (Test-GameRunning) {
+			$goneFor = 0
+		} else {
+			$goneFor += 5
+			if ($goneFor -ge $ExitAfterGameGoneSeconds) {
+				Write-Output ('-' * 70)
+				Write-Stamp "game has been gone for ${goneFor}s; watch ending"
+				exit 0
+			}
+		}
 	}
 
 	if ($sinceHeartbeat -ge 120000) {
 		$sinceHeartbeat = 0
-		$alive = if ($game) { "game running" } else { "no game process" }
+		$alive = if (Test-GameRunning) { 'game running' } else { 'no game process' }
 		Write-Stamp "watching... ($alive, log at $offset bytes)"
 	}
 }
