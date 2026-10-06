@@ -371,15 +371,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList);
 
         matrices.pushPose();
-        /* JCM 2.x renders every half of a two-block PIDS from the structure's origin --
-           PIDSRenderer builds its transform at "0.5 + blockEntity.getPos2()" and passes
-           getPos2() to the preset -- so both renderer calls emit identical geometry that
-           simply overlaps. Drawing from each half's own position instead put the same panel
-           at two different places, and the two copies traded places in the depth buffer every
-           frame, which is the flicker. Walk back along the facing axis to the head block and
-           offset by the difference. */
-        final BlockPos origin = headBlock(world, pos, facing);
-        matrices.translate(0.5 + origin.getX() - pos.getX(), 0, 0.5 + origin.getZ() - pos.getZ());
+        matrices.translate(0.5, 0, 0.5);
         UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
         UtilitiesClient.rotateZDegrees(matrices, 180);
         UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);

@@ -46,7 +46,7 @@ public class ScriptRenderContext {
 	 * 0.0002 gives 2e-6 blocks here, which is too little to stop the background, the advert and
 	 * the text from resolving differently frame to frame — that was the flicker.</p>
 	 */
-	public static final float Z_ORDER_STEP = 0.0192F;
+	public static final float Z_ORDER_STEP = 0.0002F;
 
 	public final PoseStack matrices;
 	public final MultiBufferSource vertexConsumers;
