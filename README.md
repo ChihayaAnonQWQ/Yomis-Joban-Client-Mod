@@ -26,10 +26,9 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 ## What this fork changes
 
 The branch **`feat/jcm-pids-components`** ports **JCM 2.x / MTR 4's PIDS system** onto
-**YJCM for MTR 3** (Minecraft 1.20.1, YMTR 3.6.3) — and then fixes everything that
-putting those panels into a world turned up, which is most of the list below. A PIDS
-preset either lays out correctly on a real block or it does not, and only the game can
-say which.
+**YJCM for MTR 3** (Minecraft 1.20.1, YMTR 3.6.3) — and then fixes some of the problems
+that putting those panels into a world turned up. A PIDS preset either lays out correctly
+on a real block or it does not, and only the game can say which.
 
 Full write-up, in Chinese, with the decompiled evidence and the in-game logs:
 **[MTR3-PIDS-PORT.md](MTR3-PIDS-PORT.md)**. This section is the summary.
