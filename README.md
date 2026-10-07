@@ -25,6 +25,13 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 
 ## What this fork changes
 
+> [!WARNING]
+> Most of this branch was written by **DeepSeek**, an AI agent, checking its own work
+> against the game rather than following a specification. It is **not guaranteed to be
+> compatible** with every resource pack or world, and it is **not guaranteed to be stable**.
+>
+> 本分支大部分工作由 DeepSeek 完成，**不保证兼容性和稳定性**。
+
 The branch **`feat/jcm-pids-components`** ports **JCM 2.x / MTR 4's PIDS system** onto
 **YJCM for MTR 3** (Minecraft 1.20.1, YMTR 3.6.3) — and then fixes some of the problems
 that putting those panels into a world turned up. A PIDS preset either lays out correctly
@@ -84,9 +91,12 @@ gets one line, and gets the red error only when the retry could not save the pan
 
 ### Config screen
 
-The preset suggestion list was drawn under its text field and covered the rows below
-while those rows drew their labels on top of it. It is drawn beside the field now, with
-a background. Both PIDS config screens share the widget, so both are fixed.
+The preset selection box was drawn under its text field and covered the rows below, while
+those rows drew their labels on top of it — so neither could be read. It is drawn **beside**
+the field now, with a background and a border, which is what the screenshot below shows.
+Both PIDS config screens share the widget, so both are fixed.
+
+![The PIDS preset list drawn beside its field, with the row labels left readable](docs/pids-config-preset-list.png)
 
 ### Building MTR 3 against this branch
 
