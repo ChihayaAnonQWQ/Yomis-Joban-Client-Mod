@@ -716,6 +716,102 @@ layer.end(builder, RenderSystem.getVertexSorting());   // setup → 上传 → c
 
 （这也说明无头检查为什么查不出来：`ScriptApiCheck` 能断言调用的**内容**，但「谁盖住谁」只在 GPU 上存在。）
 
+**8. 线路图只画线路开头几站：面板的「本站」解析错了**
+
+修好层序之后，另一台实例上报：HKR 的线路图条永远显示线路**起点**的三站，而不是「本站 → 下一站 →
+再下一站」。看脚本就明白——它拿 `pids.station().name` 去和线路里每个站的 `getStationName()`
+比对，**匹配不上就退化成索引 0**：
+
+```js
+let currentIdx = 0;
+if (currentStation) {
+    let curName = "" + currentStation.name;
+    for (let i = 0; i < routePlatforms.size(); i++) {
+        if ("" + routePlatforms.get(i).getStationName() === curName) { currentIdx = i; break; }
+    }
+}
+```
+
+所以问题在「本站」那一侧。而 `PIDSWrapper.primaryPlatformId()` 当时写的是：
+
+```java
+return platformIds.isEmpty() ? PIDSData.closestPlatformId(blockPos) : platformIds.get(0);
+```
+
+MTR 的 `TileEntityPIDS.getPlatformIds()` 返回的是 **`Set<Long>`**——`new ArrayList<>(set)`
+给的是哈希顺序，不是任何有意义的名次。平台上按建站顺序递增，哈希顺序下**最早建的站排在前面**，
+于是「第一个」正好是线路起点的站。正解就在 MTR 自己那儿（`IPIDS.TileEntityPIDS#getPlatformId`）：
+
+```java
+cachedPlatformId = RailwayData.getClosePlatformId(platforms, dataCache, getBlockPos());
+```
+
+**它压根不看 `platformIds`——面板的本站台就是离方块最近的那个。** 三处同错一起改了：
+`PIDSWrapper.primaryPlatformId()`、`PIDSContext.primaryPlatformId()`（JSON 组件预设那条路径）、
+以及 `RenderPIDSBase` 自动切换前那段（只喂停站时长，症状不显眼）。
+
+实机验证：诊断打出的 `station="沙地广场站|Sand Plaza"` **本来就在** `routeStops` 的第 4 项上，
+说明数据一直是对的——错的是脚本**拿到的东西**，见下一条。
+
+**9. Rhino 的陷阱：方法当属性读，拿到的是函数对象**
+
+`StationInfo` 当初把名字写成了方法：
+
+```java
+public String name() { return station.name == null ? "" : station.name; }
+```
+
+于是 `"" + currentStation.name` 在 Rhino 里得到的是 **`"function name() {…}"`**——属性查找命中一个
+方法时，Rhino 交回的是绑定后的函数对象，不是它的返回值。**JCM 2.x / MTR 4 的 `Station.name` 是字段**，
+所以预设那样写是对的，是我们的形状不对。
+
+修法是按 MTR 4 的形状补字段，方法全部保留：
+
+| 类 | 字段 | 谁在读 |
+|---|---|---|
+| `StationInfo` | `name` / `id` / `zone` | HKR 的线路图（`currentStation.name`）|
+| `RouteStopInfo` | `station` / `route` | c10e LCD 包（`xl[i].station.name`、`routePlats[i].station.name`）|
+| `RouteInfo` | `name` | c10e（`r.name`）|
+
+**这一类错误值得记一笔**：把 133 个脚本（所有资源包 + 内置 + recon）扫一遍「字段式访问」就能定位，
+命中恰好是 HKR 三个文件 + c10e 三个文件；而 MTR 自家的列车脚本（`train.siding().name`、
+`stationList[i].station.name`）走的是 MTR 的 API，与我们无关。
+
+**10. 车门即将关闭永远不出现：`departureTime()` 与停站时长的单位**
+
+HKR 的门即将关闭画面条件是 `etaDepart > 0 && etaDepart <= 10`。而 `departureTime()` 当初直接返回
+到站时间，这个窗口就是空集——发车前 `etaArrive` 已经是负的，`etaDepart` 跟着也是负的。
+
+MTR 3 的 `ScheduleEntry` 确实只有一个时间戳，但**停站时长在客户端拿得到**：
+
+```java
+return arrivalTime() + platform.getDwellTime() / 2 * 1000L;
+```
+
+那个 `/2` 是实机日志逼出来的。第一版写的是 `dwell * 1000`，日志里 `depart − arrive` 打出 40 秒，
+而使用者说他设的是 20 秒。查下去，MTR 的换算写得很清楚：
+
+```java
+// Train.getDwellTimeTicks()
+return path.get(nextStoppingIndex).dwellTime * 10;   // ×10 = ticks，10 ticks = 0.5 秒
+```
+
+**存储单位是半秒。** 而且这个约定仓库里早就写着了，只是不在我改的那个文件里：
+
+```java
+// ButterflyLight.java:168
+/* platform.getDwellTime() returns the dwell second x2, so we have to divide it by 2 ... */
+```
+
+`ButterflyLight` / `RenderDepartureTimer` / `RenderPIDSBase` 三处老代码全是 `/2`，只有新写的那处漏了。
+实机确认：改后半秒当秒的错误消失，20 秒停站 → 发车前 10 秒切「车门即将关闭」。
+
+**顺带澄清一件不属于本移植的事**：「请勿靠近车门」的**语音**不由 PIDS 发出。查过三条独立证据——
+HKR 包里没有任何音频、两个脚本无一处声音调用；180 个脚本里所有 `playSound` / `playCarSound` /
+`TickableSound` 都在列车与 EyeCandy 脚本里；JCM 2.x 的 PIDS 脚本 API 也没有声音接口。那是 **MTR 自己的
+发车播报**（`TrainClient.simulateTrain` 的两个 `AnnouncementCallback` 之一，正好在车门关闭时响），
+人声必须由资源包提供并在 MTR 里配置；YJCM 另有一个独立的 `SoundLooper` 方块可放站台循环语音。
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。

@@ -166,29 +166,34 @@ public class PIDSWrapper {
 		return station == null ? null : new StationInfo(station);
 	}
 
-	/** Minimal station view, so JCM 2.x scripts can read a name without MTR 4's Station type. */
+	/**
+	 * Minimal station view, so JCM 2.x scripts can read a name without MTR 4's Station type.
+	 *
+	 * <h2>Why these are fields and not only methods</h2>
+	 * <p>MTR 4 gives {@code Station} public fields, so that is how every preset reads it:
+	 * {@code "" + pids.station().name}. Rhino answers a property lookup on a <b>method</b> named
+	 * {@code name} with the bound function object rather than its return value, so
+	 * {@code currentStation.name} came out as {@code "function name() {…}"} and HKR's route map
+	 * never matched the panel's own station — it fell back to index 0 and drew the line's opening
+	 * stations. The accessor methods stay for Java callers.</p>
+	 */
 	public static class StationInfo {
-		private final Station station;
+		/** {@code station.name} — MTR 4's field spelling, and what presets actually read. */
+		public final String name;
+		/** {@code station.id}. */
+		public final long id;
+		/** {@code station.zone}. */
+		public final int zone;
 
 		StationInfo(Station station) {
-			this.station = station;
-		}
-
-		public String name() {
-			return station.name == null ? "" : station.name;
+			this.name = station.name == null ? "" : station.name;
+			this.id = station.id;
+			this.zone = station.zone;
 		}
 
 		/** MTR 4 spells this {@code getName()}; both work here. */
 		public String getName() {
-			return name();
-		}
-
-		public long id() {
-			return station.id;
-		}
-
-		public int zone() {
-			return station.zone;
+			return name;
 		}
 	}
 
@@ -443,12 +448,26 @@ public class PIDSWrapper {
 		}
 
 		/**
-		 * @return the arrival time. MTR 3's {@code ScheduleEntry} carries a single timestamp for
-		 * the stop, so there is no separate departure time to report; JCM 2.x scripts that read
-		 * this get the stop time rather than an exception.
+		 * @return when the train leaves this stop
+		 *
+		 * <p>MTR 3's {@code ScheduleEntry} carries one timestamp for the stop, so there is no
+		 * departure time to report directly — but the stop's dwell time is on the platform, and
+		 * arrival plus dwell is what a preset means by "still standing here". HKR's door-closing
+		 * window reads exactly this: {@code etaDepart > 0 && etaDepart <= 10}. Returning the
+		 * arrival time instead made that window empty (it is only positive while the train is
+		 * still approaching, where the arriving branch has already claimed the frame), so the
+		 * door-closing display could never appear.</p>
+		 *
+		 * <p><b>The dwell time is in half-seconds, not seconds.</b> MTR's own conversion is
+		 * {@code Train#getDwellTimeTicks}: {@code PathData.dwellTime * 10} ticks, and ten ticks is
+		 * half a second. A platform set to 20 seconds therefore reports 40 here; treating that as
+		 * seconds doubled every departure. MTR's door-close lead comes out of the same unit, as
+		 * {@code min(64, dwellTicks / 2 - 20)} ticks before departure.</p>
 		 */
 		public long departureTime() {
-			return arrivalTime();
+			final Platform platform = platformRef();
+			final int halfSeconds = platform == null ? 0 : platform.getDwellTime();
+			return arrivalTime() + halfSeconds / 2 * 1000L;
 		}
 
 		public boolean departed() {
@@ -504,8 +523,12 @@ public class PIDSWrapper {
 	public static class RouteInfo {
 		private final Route route;
 
+		/** {@code route.name} — a field in MTR 4, and how the LCD packs read it. */
+		public final String name;
+
 		RouteInfo(Route route) {
 			this.route = route;
+			this.name = route == null || route.name == null ? "" : route.name;
 		}
 
 		/** {@code route.getPlatforms()} — the stops this service calls at, in order. */
@@ -515,7 +538,7 @@ public class PIDSWrapper {
 
 		/** {@code route.getName()} — MTR 4 spells it this way, so both are offered. */
 		public String getName() {
-			return route == null || route.name == null ? "" : route.name;
+			return name;
 		}
 
 		/** @return the number of stops, or 0 when the route could not be resolved. */
@@ -542,9 +565,9 @@ public class PIDSWrapper {
 		 */
 		public RouteStopInfo get(int i) {
 			if (route == null || route.platformIds == null || i < 0 || i >= route.platformIds.size()) {
-				return new RouteStopInfo(0L);
+				return new RouteStopInfo(0L, route);
 			}
-			return new RouteStopInfo(route.platformIds.get(i).platformId);
+			return new RouteStopInfo(route.platformIds.get(i).platformId, route);
 		}
 	}
 
@@ -552,14 +575,26 @@ public class PIDSWrapper {
 	public static class RouteStopInfo {
 		private final long platformId;
 
-		RouteStopInfo(long platformId) {
+		/**
+		 * {@code stop.station.name} — MTR 4 carries {@code station} as a <b>field</b> on a route
+		 * stop, and the LCD packs read it exactly that way ({@code xl[i].station.name}). Rhino
+		 * hands back a bound function for a method of the same name, so a field is the only
+		 * spelling that works.
+		 */
+		public final StationInfo station;
+		/** {@code stop.route.name} — MTR 4's field again; read by the same packs. */
+		public final RouteInfo route;
+
+		RouteStopInfo(long platformId, Route routeRef) {
 			this.platformId = platformId;
+			final Station resolved = PIDSData.stationOf(platformId);
+			this.station = resolved == null ? null : new StationInfo(resolved);
+			this.route = routeRef == null ? null : new RouteInfo(routeRef);
 		}
 
 		/** {@code getStationName()} — MTR 4's spelling; this is what HKR prints. */
 		public String getStationName() {
-			final Station station = PIDSData.stationOf(platformId);
-			return station == null || station.name == null ? "" : station.name;
+			return station == null ? "" : station.name;
 		}
 
 		public long getPlatformId() {
