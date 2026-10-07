@@ -86,13 +86,16 @@ public final class ScriptDrawCalls {
 		@Override
 		void draw(ScriptRenderContext ctx, float z) {
 			pushTransform(ctx, z);
-			final VertexConsumer vertexConsumer = ctx.vertexConsumers.getBuffer(
-					MoreRenderLayers.getLight(WHITE_TEXTURE, false));
+			/* Drawn through the engine's own buffer, not the block entity's; see
+			   ScriptRenderContext#beginQuad for what goes wrong otherwise. */
+			final RenderType layer = MoreRenderLayers.getLight(WHITE_TEXTURE, false);
+			final VertexConsumer vertexConsumer = ctx.beginQuad(layer);
 			IDrawing.drawTexture(ctx.matrices, vertexConsumer,
 					0, 0, 0, (float) w, (float) h, 0,
 					0, 0, 1, 1, ctx.facing,
 					color, naturalLight ? ctx.light : IGui.MAX_LIGHT_GLOWING);
 			popTransform(ctx);
+			ctx.endQuad(layer);
 		}
 	}
 
@@ -204,15 +207,15 @@ public final class ScriptDrawCalls {
 			   which is what the weather icon looked like in game. JCM 2.x defaults a Texture to
 			   QueuedRenderLayer.LIGHT_2 for the same reason. */
 			final RenderType layer = MoreRenderLayers.getLight(ScriptTextures.resolve(textureId), true);
-			final VertexConsumer vertexConsumer = ctx.vertexConsumers.getBuffer(layer);
+			final VertexConsumer vertexConsumer = ctx.beginQuad(layer);
 			IDrawing.drawTexture(ctx.matrices, vertexConsumer,
 					0, 0, 0, (float) w, (float) h, 0,
 					u1, v1, u2, v2, ctx.facing,
 					color, naturalLight ? ctx.light : IGui.MAX_LIGHT_GLOWING);
 			popTransform(ctx);
-			/* End the batch here, so this quad cannot be reordered behind one the script drew
-			   before it; see ScriptRenderContext.flushLayer. */
-			ctx.flushLayer(layer);
+			/* Drawn here and now, so this quad cannot be reordered behind one the script drew
+			   before it; see ScriptRenderContext#beginQuad. */
+			ctx.endQuad(layer);
 		}
 	}
 

@@ -1,6 +1,10 @@
 package com.jsblock.script;
 
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.Direction;
@@ -187,39 +191,63 @@ public class ScriptRenderContext {
 	}
 
 	/**
-	 * Draws whatever is already queued in {@code layer}, now.
+	 * One quad buffer for the whole script engine, begun and drained per draw call.
 	 *
-	 * <h2>Why a script has to do this</h2>
-	 * <p>Script quads go through MTR's light layer, which is
-	 * {@code RenderType.beaconBeam(texture, true)}. That layer is built with
-	 * {@code sortOnUpload = true} and a {@code COLOR_WRITE} write-mask — it sorts the quads it
-	 * is given by distance from the camera and then draws them without writing depth. So which
-	 * quad ends up on top is decided by <em>where its centre is</em>, not by the order the
-	 * script drew it in.</p>
-	 *
-	 * <p>That is fine for a panel whose pieces are the same size, and wrong for one that is a
-	 * full-size background plus small overlays: the badge at the left edge of a 136-unit panel
-	 * is up to 0.7 blocks off the panel's centre, which is a far bigger term in that distance
-	 * than the 0.001-block depth step between two calls. Stand to one side and the badge's
-	 * centre is the farther of the two, so the background is drawn last and paints over it —
-	 * the badge is then only visible where it sticks out past the panel's silhouette. Walk to
-	 * the other side and it comes back.</p>
-	 *
-	 * <p>JCM 2.x has none of this because it queues its draws and replays them in order. Until
-	 * this port has a queue of its own, ending the batch after every quad reproduces the same
-	 * thing: a batch holding one quad cannot be reordered, so the paint order is the call
-	 * order again.</p>
-	 *
-	 * @param layer the render layer the caller just drew into, or {@code null} for none
+	 * <p>Only ever touched on the render thread, and only between a {@link #beginQuad} and its
+	 * matching {@link #endQuad}, so a single shared builder is enough — and it keeps the engine
+	 * from allocating one per panel per frame.</p>
 	 */
-	public void flushLayer(RenderType layer) {
-		if (layer == null) {
-			return;
+	private static BufferBuilder SCRIPT_QUADS;
+
+	/**
+	 * Starts a quad in {@code layer} in the script engine's <b>own</b> buffer and returns the
+	 * consumer to write it to. Pair every call with {@link #endQuad}.
+	 *
+	 * <h2>Why the panel does not use the block-entity buffer source</h2>
+	 * <p>Scripts draw a full-panel background and then small overlays on top of it, and expect
+	 * each call to land on top of the one before — that is what JCM 2.x's queued renderer
+	 * gives them. Neither way of going through the {@code MultiBufferSource} handed to the
+	 * block entity does:</p>
+	 *
+	 * <ul>
+	 *   <li>MTR's light layer is {@code RenderType.beaconBeam(texture, true)}, built with
+	 *       {@code sortOnUpload = true} and a {@code COLOR_WRITE} write-mask. It sorts the
+	 *       quads it is given by distance from the camera and draws them without writing depth,
+	 *       so a small overlay whose centre is farther away than the panel's centre is painted
+	 *       <em>first</em> and then covered by the background. Which overlays survive depends
+	 *       on where the player stands.</li>
+	 *   <li>Mods that take over entity rendering are free to group those quads into their own
+	 *       batches. <i>Accelerated Rendering</i>, for one, mixes into
+	 *       {@code MultiBufferSource.BufferSource.getBuffer} and hands back its own consumer,
+	 *       so the quads never reach a buffer that {@code endBatch} could flush in order — on a
+	 *       pack with that mod installed, every overlay vanished and only the background was
+	 *       left, from every angle.</li>
+	 * </ul>
+	 *
+	 * <p>Going through a buffer of our own and drawing it immediately fixes both: a batch
+	 * holding one quad cannot be reordered, and no other mod ever gets a say in it. The text
+	 * path already worked this way by accident — it draws through MTR's immediate source, which
+	 * is not the one the block-entity pass is given.</p>
+	 *
+	 * <p>The cost is one draw call per quad instead of one per layer per frame, which for a
+	 * handful of overlays per panel is not worth trading the layering for.</p>
+	 */
+	public VertexConsumer beginQuad(RenderType layer) {
+		if (SCRIPT_QUADS == null) {
+			SCRIPT_QUADS = new BufferBuilder(1536);
 		}
-		if (vertexConsumers instanceof MultiBufferSource.BufferSource) {
-			((MultiBufferSource.BufferSource) vertexConsumers).endBatch(layer);
-		} else if (immediate != null) {
-			immediate.endBatch(layer);
+		SCRIPT_QUADS.begin(VertexFormat.Mode.QUADS, layer.format());
+		return SCRIPT_QUADS;
+	}
+
+	/**
+	 * Draws the quad {@link #beginQuad} started, now. {@code RenderType.end} sets the layer's
+	 * state up, uploads and clears it again in one go, exactly as it would when a
+	 * {@code MultiBufferSource} flushed the layer.
+	 */
+	public void endQuad(RenderType layer) {
+		if (SCRIPT_QUADS != null) {
+			layer.end(SCRIPT_QUADS, RenderSystem.getVertexSorting());
 		}
 	}
 

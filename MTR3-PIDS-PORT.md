@@ -676,9 +676,45 @@ ClientData.DATA_CACHE, pos)`，不要 Level），所以直接把这个参数删�
 站到左边，徽章后画，又看得见。这就是「正面看不见、侧边能看到」，也是它只在某些站位复现的原因。
 
 JCM 2.x 没这问题，因为它把绘制**排队**、按顺序重放；这一版是直接画进 MTR 那个层的。
-修法就是把这个顺序找回来：**每画完一个 quad 就结束当前批次**（`ScriptRenderContext.flushLayer`），
-一个批次里只有一个 quad 就无从排序，出图顺序重新等于调用顺序。文字走的是字体层、本来就在
-后面 flush，不受影响。
+
+**第一次修错了，而且是实机日志指出来的。** 当时的想法是「每画完一个 quad 就结束当前批次」
+（`ScriptRenderContext.flushLayer`）——批次里只有一个 quad 就无从排序，顺序自然回来了。逻辑没错，
+但它**打错了对象**：我拿到的 `MultiBufferSource` 是不是 `BufferSource` 得先判断，代码里
+`vertexConsumers instanceof MultiBufferSource.BufferSource` 一失败就退回去 flush `immediate`
+（Tesselator 那个临时源），而脚本 quad 根本不在那儿——**整个修复等于没做**。
+
+诊断日志（临时的 `[PIDS flush]` 行）把真相打了出来：
+
+```
+layer=RenderType[beacon_beam:...[texture[jsblock:textures/pids/1.png]...
+source=com.github.argon4w.acceleratedrendering.compat.iris.buffers.
+       IrisEntityAcceleratableBufferSource
+isBufferSource=false   sameAsImmediate=false
+```
+
+那台实例装了 **Accelerated Rendering**（`com.github.argon4w.acceleratedrendering`，带 Iris 兼容层）。
+它 mixin 进 `MultiBufferSource.BufferSource.getBuffer`（`BufferSourceMixin.initAcceleration`），
+把方块实体渲染的 source 包成 `IrisEntityAcceleratableBufferSource`，并由 `IAccelerationHolder`
+决定是否把 quad 收进它自己的 mesh。于是那些 quad **压根到不了任何 `endBatch` 刷得动的缓冲**——
+`endBatch` 对它们是空操作。这也解释了为什么在同一台机器上**只有背景画得出来**：背景是整幅
+quad，落在它自己的 mesh 里；徽章、圆圈、天气图标各自颜色不同、纹理不同，各进各的 mesh，
+而这些 mesh 的绘制顺序由那个模组决定，背景那层永远压在上面。
+
+**关键旁证：文字一直是正常的。** 文字走 `MultiBufferSource.immediate(Tesselator...)`，
+是个独立的、没被绑定加速的 source——所以它按顺序画、画在最上面。**路径不同，命运就不同。**
+
+所以真正的修法是**别再走 `getBuffer` 这条路**：引擎自己持一个 `BufferBuilder`
+（`ScriptRenderContext.beginQuad` / `endQuad`），把 quad 直接写进去，然后立刻
+
+```java
+layer.end(builder, RenderSystem.getVertexSorting());   // setup → 上传 → clear，一次到位
+```
+
+画掉。这不碰 `MultiBufferSource`，既躲开加速模组的 mesh 分组，也让「单 quad 批次」无从排序——
+出图顺序重新等于脚本调用顺序，也就是 JCM 2.x 的语义。代价是每个 quad 一次 draw call，
+对一块面板上那几个叠加元素来说不值得为它牺牲层序。
+
+（这也说明无头检查为什么查不出来：`ScriptApiCheck` 能断言调用的**内容**，但「谁盖住谁」只在 GPU 上存在。）
 
 ### 7.4 编译通过证明不了的事
 
