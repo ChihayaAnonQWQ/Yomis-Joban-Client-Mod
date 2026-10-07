@@ -625,6 +625,37 @@ Rhino 拒绝二次安装时抛的是 **`SecurityException`**（不是它自己�
 不是班次）。它的回退重试**同样失败**，于是聊天栏只有那条红字，没有黄字——这就是「两种结果
 分开告知」的意义：面板真的坏了就直说，救回来了就不吓人。
 
+**5. `pids.station()` 对所有自动识别站台的面板都是 null**
+
+顺着上一条查下去发现的：`PIDSData.closestPlatformId(Level world, BlockPos pos)` 收了一个
+**从来没被用到**的 `world` 参数，而它唯一的用途是喂给开头的「没有 world 就没有答案」的守卫。
+脚本包装器传的正是 `null`：
+
+```java
+// PIDSWrapper
+return platformIds.isEmpty() ? PIDSData.closestPlatformId(null, blockPos) : platformIds.get(0);
+//                               ^^^^ 于是恒返回 0
+```
+
+→ `stationOf(0)` 查不到 → `pids.station()` 对所有**没手动指定站台**的面板**永远是 null**。
+后果分两种：判空的预设（1A 的 `st_ql.js`）显示「未知的车站」；不判空的（`sound_transit.js`
+第 24 行 `pids.station().getName()`）直接抛，面板空白。
+
+它还在悄悄影响 §7.9 第 1 条的路线图：HKR 靠 `pids.station()` 判断「我在本线路的第几站」，
+拿不到就永远从第 0 站开始画。
+
+MTR 3 的查找本来就只是查客户端缓存（`RailwayData.getClosePlatformId(ClientData.PLATFORMS,
+ClientData.DATA_CACHE, pos)`，不要 Level），所以直接把这个参数删掉即可。实机验证：
+`sound_transit` 从「抛异常、面板空白」变成无报错、`calls=12` 正常出图。
+
+**6. 顺手修了配置界面的一处遮挡**
+
+不是移植引入的（YJCM 原版就有）：`WidgetSuggestionTextField` 把候选列表画在输入框**正下方**，
+且没有背景，于是它盖住下面所有行；而那些行是**后加入**的控件，绘制顺序在后，标签反而压在
+列表上，两边都看不清。改成画在输入框**右侧**——两个 PIDS 配置界面上那片区域恰好是空的
+（复选框止于 `PANEL_WIDTH` = 20 + 144，其它输入框都在本框自己的 x 上，正是列表原来的落点），
+再加底色和边框。右侧放不下时退回下方，但这次有底色。
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。
