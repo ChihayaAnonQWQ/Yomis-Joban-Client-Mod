@@ -158,7 +158,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
            out of the block-entity renderer once per frame. */
         if (preset != null && preset.isScripted()) {
             try {
-                renderScripted(entity, world, preset, customMessages, hideArrivals, platformIds, delta, matrices, vertexConsumers);
+                renderScripted(entity, world, preset, customMessages, hideArrivals, platformIds, hidePlatforms, delta, matrices, vertexConsumers);
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -261,92 +261,76 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     }
 
     /**
-     * Finds the head block of the multi-block PIDS this block belongs to.
+     * Finds the key block of the panel this block is part of.
      *
-     * <p>JCM 2.x stores the structure's origin on the block entity and renders from it, so
-     * that every half produces the same geometry. MTR 3's PIDS blocks do not carry that, so
-     * the head has to be worked out from the world — and the two halves have to agree on the
-     * answer, or neither of them is the head and the panel is drawn twice.</p>
+     * <p>JCM 2.x decides which half is the key one by direction alone:
+     * {@code PIDSBlockEntity.isKeyBlock()} is {@code FACING == NORTH || FACING == EAST}. MTR's
+     * own block code agrees — {@code BlockPIDSBaseHorizontal.playerWillDestroy} reaches a
+     * {@code SOUTH}/{@code WEST} half's companion with {@code pos.relative(FACING)}, and
+     * {@code setPlacedBy} is what put it there and gave it the opposite FACING.</p>
      *
-     * <h2 Why the facing axis alone is not enough</h2>
-     * <p>{@code BlockPIDSBaseHorizontal.setPlacedBy} puts the second block at
-     * {@code pos.relative(FACING)} and gives it the <em>opposite</em> FACING. Walking
-     * backwards along the facing axis — what this method used to do — therefore finds the
-     * companion from the head but never from the second half: the second half's facing is
-     * reversed, so "backwards" points away from the panel. Both halves concluded they were
-     * the head and each drew the whole panel, one block apart. The log shows it as two
-     * "running script preset=pids_qlst" lines for the two blocks of one panel.</p>
+     * <p>The answer is used for one thing: keying the compiled script program, so that both
+     * halves of a panel share a single script state instead of running two. It does
+     * <b>not</b> decide what gets drawn — see {@link #renderScripted} — because JCM 2.x's
+     * {@code PIDSRenderer.renderCurated} draws from whichever half it was called for.</p>
      *
-     * <h2 How the companion is identified</h2>
-     * <p>By the two properties {@code setPlacedBy} guarantees: same block, opposite FACING.
-     * All four horizontal directions are tried, because MTR's rule is {@code relative(FACING)}
-     * while a structure placed by other means may sit across the facing axis instead. Requiring
-     * the opposite facing is what keeps two <em>separate</em> panels that happen to touch —
-     * they face the same way — from being mistaken for one.</p>
-     *
-     * @return the head block's position, or {@code pos} if this is already the head
+     * @return the key block's position, or {@code pos} when this already is the key half
      */
-    private static BlockPos headBlock(Level world, BlockPos pos, Direction facing) {
-        final net.minecraft.world.level.block.Block block = world.getBlockState(pos).getBlock();
-
-        BlockPos companion = null;
-        for (Direction direction : new Direction[]{
-                facing, facing.getOpposite(),
-                facing.getClockWise(), facing.getCounterClockWise()}) {
-            final BlockPos candidate = pos.relative(direction);
-            if (isCompanion(world, candidate, block, facing)) {
-                companion = candidate;
-                break;
-            }
-        }
-        if (companion == null && world.getBlockState(pos.relative(facing)).getBlock() == block) {
-            /* The companion is where setPlacedBy would have put it, but without the reversed
-               FACING -- a pair that was built or rotated by other means. Take it: the panel
-               still overlaps this one, which is the whole reason for picking a head. */
-            companion = pos.relative(facing);
-        }
-
-        reportPanelShapeOnce(pos, facing, companion);
-
-        if (companion == null) {
+    private static BlockPos keyBlock(Level world, BlockPos pos, Direction facing) {
+        if (isKeyFacing(facing)) {
             return pos;
         }
-        /* Neither half is marked as the origin — YJCM's copy of the block has no HALF
-           property, which is what MTR's own RenderPIDS uses to skip the lower half — so pick
-           the one both halves compute identically. */
-        return companion.compareTo(pos) < 0 ? companion : pos;
+        final BlockPos companion = pos.relative(facing);
+        if (world.getBlockState(companion).getBlock() == world.getBlockState(pos).getBlock()) {
+            return companion;
+        }
+        return pos;
     }
 
     /**
-     * @return whether {@code candidate} is the other block of this panel: the same block, with
-     * the facing this one would have been given by {@code setPlacedBy}.
+     * @return whether a block facing this way is the key half of its panel, which is JCM 2.x's
+     * {@code isKeyBlock()} rule applied to the block state.
      */
-    private static boolean isCompanion(Level world, BlockPos candidate, net.minecraft.world.level.block.Block block,
-                                       Direction facing) {
-        final net.minecraft.world.level.block.state.BlockState state = world.getBlockState(candidate);
-        if (state.getBlock() != block) {
-            return false;
+    private static boolean isKeyFacing(Direction facing) {
+        return facing == Direction.NORTH || facing == Direction.EAST;
+    }
+
+    /**
+     * @return the other half of this panel, or {@code null} when this is a single-block one.
+     *
+     * <p>Only used for the once-per-block diagnostic: it says whether a second renderer call
+     * belongs to the same panel, which is what makes "the panel is drawn twice" and "the panel
+     * is drawn once and one side is blank" distinguishable at all.</p>
+     */
+    private static BlockPos companionOf(Level world, BlockPos pos, Direction facing) {
+        final BlockPos candidate = pos.relative(facing);
+        final net.minecraft.world.level.block.Block block = world.getBlockState(pos).getBlock();
+        if (world.getBlockState(candidate).getBlock() != block) {
+            return null;
         }
-        final Direction candidateFacing = IBlock.getStatePropertySafe(state, HorizontalDirectionalBlock.FACING);
-        return candidateFacing == facing.getOpposite();
+        final Direction candidateFacing =
+                IBlock.getStatePropertySafe(world.getBlockState(candidate), HorizontalDirectionalBlock.FACING);
+        return candidateFacing == facing.getOpposite() ? candidate : null;
     }
 
     /** Panel shapes already reported, so the diagnostic does not repeat every frame. */
     private static final java.util.Set<String> REPORTED_SHAPES = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
-     * Reports once which block of a multi-block panel was chosen as the head, and how.
+     * Reports once per block which half of a panel it is, and what its companion is.
      *
-     * <p>A panel that renders twice leaves no trace on screen beyond a double image, and the
-     * shape of the structure is not visible from a screenshot. This records the block's own
-     * facing and the companion that was found, so "two renders" can be told apart from "one
-     * render and a texture that drew nothing".</p>
+     * <p>Two renderer calls for one panel and one renderer call for a two-sided panel look the
+     * same from outside as soon as the preset decides for itself which half paints — the
+     * 1A "station display" preset does exactly that with {@code pids.isKeyBlock()}. This
+     * records the block's own facing, its key/non-key role and the companion it found, so a
+     * panel that is silent can be traced without a screenshot.</p>
      */
     private static void reportPanelShapeOnce(BlockPos pos, Direction facing, BlockPos companion) {
         final String key = pos.asLong() + "|" + facing + "|" + (companion == null ? "-" : companion.asLong());
         if (REPORTED_SHAPES.add(key)) {
-            com.jsblock.Joban.LOGGER.info("[Joban Client] [PIDS] panel block at {}, {}, {} facing {}: companion {}",
+            com.jsblock.Joban.LOGGER.info("[Joban Client] [PIDS] panel block at {}, {}, {} facing {} ({} half): companion {}",
                     pos.getX(), pos.getY(), pos.getZ(), facing,
+                    isKeyFacing(facing) ? "key" : "other",
                     companion == null ? "<none, single block>"
                             : companion.getX() + ", " + companion.getY() + ", " + companion.getZ());
         }
@@ -476,7 +460,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * keeps a preset's background exactly covering whatever PIDS block it is placed on.</p>
      */
     protected void renderScripted(T entity, Level world, PIDSPreset preset, String[] customMessages,
-                                  boolean[] hideArrivals, List<Long> platformIds, float delta,
+                                  boolean[] hideArrivals, List<Long> platformIds, boolean hidePlatforms, float delta,
                                   PoseStack matrices, MultiBufferSource vertexConsumers) {
         final PIDSGeometry geometry = getLayoutGeometry();
         if (geometry == null) {
@@ -485,26 +469,22 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final BlockPos pos = entity.getBlockPos();
         final Direction facing = IBlock.getStatePropertySafe(world, pos, HorizontalDirectionalBlock.FACING);
 
-        /* One panel, one draw.
-         *
-         * A two-block PIDS has its renderer called once per half, at positions one block
-         * apart, and both calls drew the whole panel at almost the same depth. That is
-         * z-fighting, and on screen it reads as the panel's text flickering.
-         *
-         * JCM 2.x has no such problem because its block entity stores the structure origin
-         * and every half renders from it. MTR 3's PIDS block entities carry no origin, so the
-         * head is found instead by walking backwards along the facing axis; see headBlock.
-         *
-         * The program is keyed by the head position, not by this block, so a panel keeps one
-         * script state. The key is per-panel rather than per-preset so that two separate
-         * panels do not share a state.cycleTimer -- and both halves of one panel must share
-         * it, which is exactly what keying by the head gives. */
-        final BlockPos headPos = headBlock(world, pos, facing);
-        if (!headPos.equals(pos)) {
-            return;
-        }
+        /* Every half paints. That is what JCM 2.x does -- PIDSRenderer.renderCurated has no
+           key-block check, it renders from whichever block entity it was called for, anchored
+           at that block -- and it is what a two-block PIDS is: the halves sit back to back and
+           each draws its own copy on its own face.
+           
+           An earlier version of this method skipped every half that was not the "head", which
+           left each two-block panel showing on one side only. Which half paints, when a preset
+           cares, is the preset's business: it asks through pids.isKeyBlock().
+           
+           Both halves still share one compiled program, keyed by the key block, so a preset
+           that plays a sound or keeps a frame counter does it once per panel rather than once
+           per half -- and so that the two halves cannot drift apart. */
+        final BlockPos panelKey = keyBlock(world, pos, facing);
+        reportPanelShapeOnce(pos, facing, companionOf(world, pos, facing));
 
-        final com.jsblock.script.ScriptEngine.Program program = com.jsblock.script.ScriptEngine.programFor(preset, headPos);
+        final com.jsblock.script.ScriptEngine.Program program = com.jsblock.script.ScriptEngine.programFor(preset, panelKey);
         if (program == null) {
             return;
         }
@@ -538,7 +518,8 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
 
         final com.jsblock.script.PIDSWrapper wrapper = new com.jsblock.script.PIDSWrapper(
                 preset.id, hideArrivals == null ? 0 : hideArrivals.length,
-                canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList);
+                canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList,
+                isKeyFacing(facing), hidePlatforms);
 
         matrices.pushPose();
         /* Verbatim from JCM 2.x's RVPIDSRenderer: origin at the block centre

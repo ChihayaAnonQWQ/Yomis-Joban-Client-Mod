@@ -36,10 +36,21 @@ public class PIDSWrapper {
 	private final boolean[] rowHidden;
 	private final List<ScheduleEntry> scheduleList;
 	private final Arrivals arrivals;
+	/** Whether this block is the panel's key half; see {@link #isKeyBlock()}. */
+	private final boolean keyBlock;
+	/** Whether the block has its platform-number display switched off. */
+	private final boolean platformNumberHidden;
 
+	/** Convenience for callers with no panel geometry to report; see the full constructor. */
 	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
 					   List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
 					   List<ScheduleEntry> scheduleList) {
+		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList, true, false);
+	}
+
+	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
+					   List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
+					   List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden) {
 		this.type = type;
 		this.rows = rows;
 		this.width = width;
@@ -50,6 +61,8 @@ public class PIDSWrapper {
 		this.rowHidden = rowHidden == null ? new boolean[0] : rowHidden;
 		this.scheduleList = scheduleList == null ? new ArrayList<>() : new ArrayList<>(scheduleList);
 		this.arrivals = new Arrivals(this.scheduleList);
+		this.keyBlock = keyBlock;
+		this.platformNumberHidden = platformNumberHidden;
 	}
 
 	// ------------------------------------------------------------------
@@ -90,19 +103,32 @@ public class PIDSWrapper {
 	}
 
 	/**
-	 * @return {@code true}. MTR 4 distinguishes the "key" half of a two-block PIDS; MTR 3
-	 * drives both halves from one block entity, so from a script's point of view it always is.
+	 * {@code true} for the key half of a multi-block PIDS, {@code false} for the other one.
+	 *
+	 * <p>JCM 2.x's {@code PIDSBlockEntity.isKeyBlock()} is exactly
+	 * {@code FACING == NORTH || FACING == EAST}, and its block code agrees: the
+	 * {@code SOUTH}/{@code WEST} half is the one that reaches its companion with
+	 * {@code pos.relative(FACING)}. A double-sided PIDS is therefore one panel drawn from two
+	 * blocks, and presets use this flag to decide which half paints — {@code st_ql.js}, the
+	 * 1A "station display" preset, draws on the key half when the platform number is shown and
+	 * on the other half when it is hidden.</p>
+	 *
+	 * <p>This used to be hard-coded {@code true}, which made both halves paint the same
+	 * picture one block apart, and made the hidden-platform-number branch paint nothing at
+	 * all.</p>
 	 */
 	public boolean isKeyBlock() {
-		return true;
+		return keyBlock;
 	}
 
 	/**
-	 * @return {@code false}. MTR 3 has no per-preset platform-number toggle on the block; the
-	 * RV PIDS exposes one, but it is not reachable from here.
+	 * @return whether the block's platform-number display is switched off.
+	 *
+	 * <p>JCM 2.x stores this per PIDS block entity. On MTR 3 the RV PIDS exposes the flag and
+	 * the others do not, so a non-RV panel always reports {@code false}.</p>
 	 */
 	public boolean isPlatformNumberHidden() {
-		return false;
+		return platformNumberHidden;
 	}
 
 	/** @return the station the panel serves, or {@code null} when it cannot be resolved. */
@@ -152,19 +178,28 @@ public class PIDSWrapper {
 	// ==================================================================
 
 	/**
-	 * {@code pids.arrivals()} — {@code get(i)} never returns {@code null}.
+	 * {@code pids.arrivals()} — {@code get(i)} returns {@code null} past the end of the list.
 	 *
-	 * <p>JCM 2.x documents {@code get(i)} as nullable past the end of the list, and its own
-	 * {@code pids_1a.js} guards against it. Community presets generally do not: the
-	 * <em>HZYMTR CRT Pids</em> pack computes
-	 * {@code Math.ceil((pids.arrivals().get(1).arrivalTime() - Date.now()) / 60000)} on its
-	 * second line, so a platform with fewer than two upcoming trains threw
-	 * "Cannot call method arrivalTime of null", aborted {@code render()} before it had drawn
-	 * anything, and left the whole panel blank.</p>
+	 * <p>That is JCM 2.x's own contract: {@code ArrivalsWrapper.get} is
+	 * {@code i >= arrivals.size() ? null : ...}, and its {@code pids_1a.js} guards with
+	 * {@code if (arrival == null) return}. Presets rely on it to leave rows blank — HKR's
+	 * {@code drawFourArrivals} loops over four rows and draws only
+	 * {@code if (train)}.</p>
 	 *
-	 * <p>Returning a placeholder instead keeps such a preset working while changing nothing
-	 * for a platform that does have the trains. The placeholder reports itself through
-	 * {@link Arrival#isValid()} for scripts that want to tell the difference.</p>
+	 * <p>This port used to return a placeholder <em>object</em> instead, so that presets which
+	 * index past the end without checking — the CRT pack computes
+	 * {@code pids.arrivals().get(1).arrivalTime()} on its second line — would not throw. That
+	 * leniency cost more than it bought, because it is invisible from the preset's side:
+	 * {@code if (train)} became true for an empty slot, so every guarded preset drew a phantom
+	 * row. On HKR's board the phantom row went through {@code isNonPassenger}, which reports
+	 * "no route" for the placeholder, and printed the "not in service" wording reserved for a
+	 * genuinely empty train; its ETA then read "1 min" for ever, because the placeholder
+	 * reported an arrival time of <em>now</em>, which {@code Math.ceil(0 / 60)} rounds up to
+	 * one minute — and that text cycles languages every 60 ticks, which is the flicker that
+	 * was reported next to it.</p>
+	 *
+	 * <p>A preset that indexes past the end without a guard now throws, exactly as it would in
+	 * JCM 2.x; the engine reports it once and falls back to the preset's background.</p>
 	 */
 	public static class Arrivals {
 		private final List<Arrival> arrivals;
@@ -176,8 +211,9 @@ public class PIDSWrapper {
 			}
 		}
 
+		/** @return the arrival at {@code i}, or {@code null} when there is no such train */
 		public Arrival get(int i) {
-			return i >= 0 && i < arrivals.size() ? arrivals.get(i) : Arrival.absent();
+			return i >= 0 && i < arrivals.size() ? arrivals.get(i) : null;
 		}
 
 		public int size() {
@@ -233,31 +269,16 @@ public class PIDSWrapper {
 	 */
 	public static class Arrival {
 
-		/** Shared placeholder returned for an index past the end of the list. */
-		private static final Arrival ABSENT = new Arrival(null);
-
 		private final ScheduleEntry entry;
 
 		Arrival(ScheduleEntry entry) {
 			this.entry = entry;
 		}
 
-		/** @return the placeholder used when there is no such train. */
-		static Arrival absent() {
-			return ABSENT;
-		}
-
-		/**
-		 * @return {@code false} for the placeholder, {@code true} for a real arrival. Scripts
-		 * that want to skip empty rows can test this instead of comparing against null.
-		 */
-		public boolean isValid() {
-			return entry != null;
-		}
-
 		public long arrivalTime() {
-			/* An absent train reports "now", so a preset that renders the row anyway says
-			   "arriving" rather than showing a train scheduled in 1970. */
+			/* Past the end of the list this object is never handed out -- Arrivals.get returns
+			   null there -- so a null entry can only come from an internal caller. Report the
+			   current time rather than throwing out of a block-entity renderer. */
 			return entry == null ? System.currentTimeMillis() : entry.arrivalMillis;
 		}
 
@@ -336,7 +357,8 @@ public class PIDSWrapper {
 		 * rather than MTR 3's {@code Route}: a route stores platform ids only, and the station
 		 * names have to be resolved through each platform.</p>
 		 *
-		 * @return {@code null} for the absent placeholder, matching JCM 2.x's nullable accessor
+		 * @return the wrapper, or {@code null} when the route cannot be resolved — which is
+		 * also what {@code pids.arrivals().get(i)} reports for a row with no train
 		 */
 		public RouteInfo route() {
 			return entry == null ? null : new RouteInfo(PIDSData.route(entry.routeId));

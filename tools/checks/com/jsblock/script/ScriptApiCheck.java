@@ -100,6 +100,7 @@ public final class ScriptApiCheck {
 					+ " type=" + pids.type + " arrivals=" + pids.arrivals().size());
 
 			failures += callLifecycle(cx, scope, "create", state, pids);
+			failures += checkArrivalsContract(pids);
 
 			// render(ctx, state, pids) with a recording context, repeated to catch state drift.
 			List<String> recorded = Collections.emptyList();
@@ -135,6 +136,40 @@ public final class ScriptApiCheck {
 	}
 
 	// ------------------------------------------------------------------
+
+	/**
+	 * Pins the one part of the arrivals API that a preset can see and this port got wrong.
+	 *
+	 * <p>JCM 2.x's {@code ArrivalsWrapper.get} is
+	 * {@code i >= arrivals.size() ? null : ...}, and presets rely on it to leave a row blank —
+	 * HKR's board loops over four rows and draws only {@code if (train)}. This port used to
+	 * return a placeholder object instead, so that guard was always true and every preset
+	 * filled its empty rows with a phantom train. The placeholder is gone; this makes sure it
+	 * does not come back, because nothing else can tell the two behaviours apart.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkArrivalsContract(PIDSWrapper pids) {
+		int failures = 0;
+		final int size = pids.arrivals().size();
+
+		for (int index : new int[]{-1, size, size + 1, size + 8}) {
+			if (pids.arrivals().get(index) != null) {
+				System.out.println("FAIL arrivals().get(" + index + ") is not null past the end"
+						+ " -- a preset's `if (train)` guard would draw a phantom row");
+				failures++;
+			}
+		}
+		if (size > 0 && pids.arrivals().get(0) == null) {
+			System.out.println("FAIL arrivals().get(0) is null with " + size + " arrivals");
+			failures++;
+		}
+		if (failures == 0) {
+			System.out.println("OK   arrivals().get() is null past the end of a "
+					+ size + "-arrival list, as JCM 2.x documents");
+		}
+		return failures;
+	}
 
 	/**
 	 * Asserts that no script texture or rectangle is drawn fully transparent.
