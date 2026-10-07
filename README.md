@@ -23,6 +23,94 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 > - The YJCM-specific code is **NOT open source**. Copying, redistributing, or modifying it without permission is prohibited.
 > - If you fork this repository, you must keep both license files and this notice.
 
+## What this fork changes
+
+The branch **`feat/jcm-pids-components`** ports **JCM 2.x / MTR 4's PIDS system** onto
+**YJCM for MTR 3** (Minecraft 1.20.1, YMTR 3.6.3) — and then fixes everything that
+putting those panels into a world turned up, which is most of the list below. A PIDS
+preset either lays out correctly on a real block or it does not, and only the game can
+say which.
+
+Full write-up, in Chinese, with the decompiled evidence and the in-game logs:
+**[MTR3-PIDS-PORT.md](MTR3-PIDS-PORT.md)**. This section is the summary.
+
+### Added
+
+| | |
+|---|---|
+| Component layouts | `com.jsblock.pids` — 11 components; a resource pack declares the layout in JSON (`components`) |
+| JavaScript presets | `com.jsblock.script` — embedded Rhino 1.7.15; a JCM 2.x `.js` preset runs **unmodified** (`scriptFiles`) |
+| Script sandbox | class-access allow-list, a warning screen before switching it off, player-facing failure notices, a debug overlay |
+| 1A PIDS presets | `jsblock:pids_1a` gets the preset storage, auto-switch and config screen the LCD/RV PIDS already had |
+| Textures | JCM 2.x's PIDS artwork (`weather_*`, `plat_circle`, `rv_default`, `black`) |
+| Checks | `tools/run-pids-check.ps1` — three headless checks that run real presets through the real engine |
+| Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text |
+| Docs | `MTR3-PIDS-PORT.md` |
+
+A preset that declares neither `components` nor `scriptFiles` keeps the old hard-coded
+render path, unchanged.
+
+### Upstream defects fixed — the fork does not build without these
+
+| | |
+|---|---|
+| `ForgeConfig.java` missing | referenced by `JobanForge`, never committed upstream |
+| Gradle 8 | `classifier` was removed; now `archiveClassifier` |
+| `font` vs `fonts` | the preset reader used `fonts`, every renderer used `font`, so the key was silently dropped |
+
+### Rendering defects found in game
+
+| Symptom | Cause |
+|---|---|
+| Weather icon as a white square; the panel background flickering | script textures went through the opaque render layer; JCM 2.x uses a translucent one |
+| Route-number / car-count badge with no background, platform circle showing only its number, route-map bar and station dots missing | `.color()` takes a six-digit RGB and MTR 3 reads the alpha straight out of it; JCM 2.x adds `ARGB_BLACK` first |
+| Text growing on every marquee pass, then scrolling outside the panel | the scroll was implemented as leading spaces, so it took part in the width measurement |
+| Whole panel ~40% off to the left | the panel origin was derived from the panel size instead of copied from JCM 2.x's hard-coded literals |
+| Every two-block PIDS showing on one side only | one half was skipped; JCM 2.x draws from both, one face each |
+| A 1A panel painting twice, or not at all | `pids.isKeyBlock()` was hard-coded, so the preset could not tell the halves apart |
+| CJK drawn at half the size its own box reserved | the layout and the draw used two different CJK multipliers |
+
+### Data defects found in game
+
+| Symptom | Cause |
+|---|---|
+| Empty rows filled with "not in service", each with a permanent "1 min" that flips between languages | `arrivals().get(i)` returned a placeholder object past the end of the list instead of `null`, so a preset's own null check never fired |
+| `pids.station()` null on every panel that auto-detects its platform | the lookup was handed the `null` world its guard rejected — which also made the route map always start at the first stop |
+| `Route.getDestination` returning nothing on most routes | MTR 3 only reads per-stop custom destinations; MTR 4 falls back to the terminus |
+
+A preset that indexes past the end without checking now throws, as it does in JCM 2.x —
+and the engine recovers the frame by retrying it once with a placeholder, because a
+resource pack is not something the mod can edit. The throw stays in the log; the player
+gets one line, and gets the red error only when the retry could not save the panel.
+
+### Config screen
+
+The preset suggestion list was drawn under its text field and covered the rows below
+while those rows drew their labels on top of it. It is drawn beside the field now, with
+a background. Both PIDS config screens share the widget, so both are fixed.
+
+### Building MTR 3 against this branch
+
+MTR's development jars (`MTR-common-1.20-*-dev.jar`) are 404, so the build uses a
+Mojang-mapped MTR 3 jar instead:
+
+```
+~/.gradle/caches/forge_gradle/deobf_dependencies/maven/modrinth/ymtr/
+    1.20.1-3.6.3_mapped_official_1.20.1/ymtr-1.20.1-3.6.3_mapped_official_1.20.1.jar
+```
+
+Copy it to `checkouts/1.20/mtr-common.jar` (and `mtr-fabric.jar` / `mtr-forge.jar`;
+the three are identical). `checkouts/` is git-ignored.
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
+gradle build --no-daemon --console=plain --max-workers=1        # -> build/MTR-YJCM-1.20-*.jar
+.\tools\run-pids-check.ps1                                       # headless checks, non-zero on failure
+```
+
+A long stack trace during configuration is `build.gradle`'s `setupFiles` catch branch
+printing a failed `Minecraft-Mappings` download; it is not a build failure.
+
 ## FAQ & Support
 ### Why does my game crash?
 There's a variety of reasons, one of the main reasons is that <b>you're using the wrong version of the MTR Mod</b>.  
