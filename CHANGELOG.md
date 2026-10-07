@@ -4,7 +4,7 @@ Version numbers follow the upstream release this fork is built on, with the JS-P
 appended (`1.2.12-JSPIDS-1.0` was the first published port build).
 
 ## Compatible YMTR Version
-YMTR 3.2.2 -> Latest
+YMTR
 
 ## Changes
 - **Overlays drawn by a PIDS preset no longer vanish.** Badges, platform circles and weather
@@ -30,7 +30,7 @@ YMTR 3.2.2 -> Latest
 # Yomi's Joban Client Mod 1.2.4 has been released
 
 ## Compatible YMTR Version
-YMTR 3.2.2 -> Latest
+YMTR
 
 ## Changes
 - Compatible with YMTR.
