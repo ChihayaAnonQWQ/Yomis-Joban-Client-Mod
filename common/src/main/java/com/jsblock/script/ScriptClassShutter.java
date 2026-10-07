@@ -143,10 +143,18 @@ public final class ScriptClassShutter implements ClassShutter {
 	/**
 	 * Installs the shutter on a context that is about to run a script.
 	 *
-	 * <p>Rhino allows a context's shutter to be set once, so this is called immediately after
-	 * every {@code Context.enter()}. A context that already carries one is left alone rather
-	 * than allowed to throw: the shutter is per-context state, and re-entering a context that
-	 * this engine already configured is not an error.</p>
+	 * <p>Rhino allows a context's shutter to be set once, and answers a second attempt with a
+	 * {@link SecurityException} -- not the {@code IllegalStateException} its own javadoc
+	 * suggests. That distinction mattered: this method used to catch only the latter, so the
+	 * exception escaped into {@code Program}'s constructor, which calls {@code create()} while
+	 * the compile-time context is still entered. In game it surfaced as every scripted preset
+	 * reporting <em>"CRT PIDS (Style 1) threw in create(): Cannot overwrite existing
+	 * ClassShutter object"</em>, on a panel that then drew correctly anyway.</p>
+	 *
+	 * <p>Re-installing is not an error worth propagating either way: the shutter is a single
+	 * instance whose enabled flag is mutable, so a context that already carries it is already
+	 * configured correctly. Any runtime failure here is swallowed deliberately -- refusing to
+	 * run a preset because the sandbox was installed twice would be the worse outcome.</p>
 	 */
 	public static void install(Context cx, ScriptClassShutter shutter) {
 		if (cx == null || shutter == null) {
@@ -154,8 +162,23 @@ public final class ScriptClassShutter implements ClassShutter {
 		}
 		try {
 			cx.setClassShutter(shutter);
-		} catch (IllegalStateException alreadySet) {
-			// Left as configured by the earlier install on this context.
+		} catch (RuntimeException alreadyConfigured) {
+			// Already set on this context; the instance is shared and its flag is live, so the
+			// earlier install is still the one enforcing the rules.
+			LAST_INSTALL_SKIPPED = alreadyConfigured;
 		}
+	}
+
+	/**
+	 * The exception the last {@link #install} swallowed, or {@code null}.
+	 *
+	 * <p>Kept so the headless check can assert that a repeat install is refused <em>and</em>
+	 * handled, rather than merely that it does not throw.</p>
+	 */
+	private static volatile RuntimeException LAST_INSTALL_SKIPPED;
+
+	/** @return the exception the most recent {@link #install} swallowed, or {@code null}. */
+	public static RuntimeException lastInstallSkipped() {
+		return LAST_INSTALL_SKIPPED;
 	}
 }
