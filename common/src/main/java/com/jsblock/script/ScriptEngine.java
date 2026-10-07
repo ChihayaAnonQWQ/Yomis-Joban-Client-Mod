@@ -458,6 +458,14 @@ public final class ScriptEngine {
 		private volatile double lastExecutionMs;
 		/** The most recent failure, or {@code null}; cleared by a call that succeeds. */
 		private volatile String lastError;
+		/** How many distinct draw-call sequences this program has already written to the log. */
+		private static final int MAX_TRACES = 40;
+		/** The last sequence written, so an unchanged panel produces no output at all. */
+		private String lastTraceSignature;
+		/** Wall time of the last trace written, used to rate-limit a panel that redraws often. */
+		private long lastTraceMillis;
+		/** Traces written so far, bounded by {@link #MAX_TRACES}. */
+		private int traceCount;
 
 		Program(String key, String presetId, String displayName, net.minecraft.core.BlockPos blockPos, Scriptable scope) {
 			this.key = key;
@@ -595,7 +603,68 @@ public final class ScriptEngine {
 		 * its background, which scripts normally draw first — was never issued
 		 */
 		public boolean renderOrFail(ScriptRenderContext ctx, PIDSWrapper pids) {
-			return invokeChecked("render", ctx, pids);
+			final boolean success = invokeChecked("render", ctx, pids);
+			reportTrace(ctx, pids);
+			return success;
+		}
+
+		/**
+		 * Writes this frame's draw calls to the log whenever the sequence changes.
+		 *
+		 * <p>Answers the questions a screenshot cannot: whether a script reached the branch
+		 * that should have drawn something, and whether two calls that look like one are
+		 * fighting over the same depth. A panel that alternates between two texts shows up
+		 * here as two call lists that differ in exactly that text, which separates a
+		 * deliberate {@code cycleString} from genuine depth fighting.</p>
+		 *
+		 * <p>Only on change, and at most once a second: a preset redraws every frame, and a
+		 * marquee or a clock changes the sequence often enough to flood the log otherwise.</p>
+		 */
+		private void reportTrace(ScriptRenderContext ctx, PIDSWrapper pids) {
+			if (ctx == null || !ctx.isTracing()) {
+				return;
+			}
+			final List<String> calls = ctx.traceCalls();
+			final StringBuilder joined = new StringBuilder();
+			for (String call : calls) {
+				joined.append(call).append('\n');
+			}
+			final String signature = joined.toString();
+			if (signature.equals(lastTraceSignature)) {
+				return;
+			}
+			lastTraceSignature = signature;
+			final long now = System.currentTimeMillis();
+			if (now - lastTraceMillis < 1000L) {
+				return;
+			}
+			lastTraceMillis = now;
+			traceCount++;
+			if (traceCount > MAX_TRACES) {
+				if (traceCount == MAX_TRACES + 1) {
+					Joban.LOGGER.info("[Joban Client] [PIDS trace] {}: further changes are not logged.", key);
+				}
+				return;
+			}
+			final StringBuilder report = new StringBuilder();
+			report.append("[Joban Client] [PIDS trace] ").append(key)
+					.append(" gameTick=").append(traceTick())
+					.append(" zOrderStep=").append(ScriptRenderContext.Z_ORDER_STEP)
+					.append(" cards=").append(pids == null ? 0 : pids.arrivals().size())
+					.append(" calls=").append(calls.size());
+			for (int i = 0; i < calls.size(); i++) {
+				report.append("\n    ").append(i).append(": ").append(calls.get(i));
+			}
+			Joban.LOGGER.info(report.toString());
+		}
+
+		/** @return MTR's game tick, or the wall-clock equivalent outside a game. */
+		private static long traceTick() {
+			try {
+				return (long) mtr.MTRClient.getGameTick();
+			} catch (Throwable t) {
+				return System.currentTimeMillis() / 50L;
+			}
 		}
 
 		/** Runs the script's {@code dispose(ctx, state, pids)}; used when a preset is dropped. */

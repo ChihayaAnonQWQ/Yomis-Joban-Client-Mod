@@ -76,6 +76,17 @@ public class ScriptRenderContext {
 	/** Descriptions of the calls recorded in dry-run mode. */
 	private final List<String> recordedCalls;
 
+	/**
+	 * Whether this frame's draw calls should also be described into {@link #traceCalls}.
+	 *
+	 * <p>Set from {@link #tracingEnabled()} when the context is built. Kept off by default:
+	 * building a description per call costs a {@code String.format} each, which a PIDS that
+	 * redraws several times a frame should not pay for unasked.</p>
+	 */
+	private final boolean tracing;
+	/** Descriptions of this frame's calls, in call order; {@code null} when not tracing. */
+	private final List<String> traceCalls;
+
 	public ScriptRenderContext(PoseStack matrices, MultiBufferSource vertexConsumers,
 							   MultiBufferSource.BufferSource immediate, Direction facing, int light,
 							   int panelWidth, int panelHeight, float scriptScale) {
@@ -95,6 +106,38 @@ public class ScriptRenderContext {
 		this.scriptScale = scriptScale;
 		this.dryRun = dryRun;
 		this.recordedCalls = dryRun ? new ArrayList<>() : null;
+		this.tracing = !dryRun && tracingEnabled();
+		this.traceCalls = tracing ? new ArrayList<>() : null;
+	}
+
+	/**
+	 * @return whether scripts should have their draw calls described each frame.
+	 *
+	 * <p>Two switches, either of which is enough: the script debug switch in the config
+	 * screen, and the {@code jsblock.pids.trace} system property for a launch that should
+	 * trace without touching the player's config.</p>
+	 */
+	private static boolean tracingEnabled() {
+		try {
+			return com.jsblock.client.ClientConfig.getScriptDebugMode()
+					|| Boolean.getBoolean("jsblock.pids.trace");
+		} catch (Throwable t) {
+			/* The headless checks build contexts without ever loading the config. */
+			return Boolean.getBoolean("jsblock.pids.trace");
+		}
+	}
+
+	/** @return whether this context is recording the calls handed to it. */
+	public boolean isTracing() {
+		return tracing;
+	}
+
+	/**
+	 * @return a one-line description of every call drawn so far this frame, in call order, or
+	 * an empty list when tracing is off.
+	 */
+	public List<String> traceCalls() {
+		return traceCalls == null ? Collections.emptyList() : traceCalls;
 	}
 
 	/**
@@ -144,6 +187,10 @@ public class ScriptRenderContext {
 			drawCall.z = z;
 			recordedCalls.add(drawCall.describe());
 			return;
+		}
+		if (tracing) {
+			drawCall.z = z;
+			traceCalls.add(drawCall.describe());
 		}
 		drawCall.draw(this, z);
 	}
