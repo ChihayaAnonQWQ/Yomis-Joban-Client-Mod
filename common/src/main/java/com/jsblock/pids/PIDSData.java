@@ -91,9 +91,25 @@ public final class PIDSData {
 	 * Resolves the destination text a route shows when arriving at the stop described by
 	 * a schedule entry.
 	 *
-	 * <p>MTR 3 exposes the same two-step rule MTR 4 does: a per-stop custom destination
-	 * wins, otherwise {@link Route#getDestination(int)} is used. The {@code currentStationIndex}
-	 * carried by {@link ScheduleEntry} is the index of the stop the train is <em>heading to</em>.</p>
+	 * <p>MTR 3's {@link Route#getDestination(int)} only ever returns a <em>per-stop custom
+	 * destination</em>. Decompiled, it walks backwards from the given stop and gives up with
+	 * {@code null} as soon as none is set:</p>
+	 *
+	 * <pre>
+	 * int i = Math.min(platformIds.size() - 1, index);
+	 * while (i &gt;= 0) {
+	 *     String custom = platformIds.get(i).customDestination;
+	 *     if (destinationIsReset(custom)) return null;
+	 *     if (!custom.isEmpty()) return custom;
+	 *     i--;
+	 * }
+	 * return null;
+	 * </pre>
+	 *
+	 * <p>MTR 4's {@code ArrivalResponse.destination}, which is what a JCM 2.x preset reads, is
+	 * computed on the server and falls back to the station the route ends at. Without that
+	 * fallback every preset's "to ..." line is blank on any route whose author never typed a
+	 * custom destination, which is most of them.</p>
 	 *
 	 * @return the destination, or an empty string when it cannot be resolved.
 	 */
@@ -107,10 +123,31 @@ public final class PIDSData {
 		}
 		try {
 			final String destination = route.getDestination(entry.currentStationIndex);
-			return Route.destinationIsReset(destination) ? "" : destination;
+			if (destination != null && !destination.isEmpty() && !Route.destinationIsReset(destination)) {
+				return destination;
+			}
+			return terminusStationName(route);
 		} catch (Exception e) {
 			return "";
 		}
+	}
+
+	/**
+	 * The name of the station at the route's last stop, used when the route carries no custom
+	 * destination.
+	 *
+	 * <p>Not adjusted for circular routes: a loop's last stop is also its first, so a preset
+	 * asking a circular route where it is going gets the station it is standing in. MTR 4
+	 * special-cases that server-side; doing the same here needs the route's circular state
+	 * and a direction, which the schedule entry does not carry.</p>
+	 */
+	private static String terminusStationName(Route route) {
+		if (route.platformIds == null || route.platformIds.isEmpty()) {
+			return "";
+		}
+		final long terminusPlatformId = route.platformIds.get(route.platformIds.size() - 1).platformId;
+		final Station station = stationOf(terminusPlatformId);
+		return station == null || station.name == null ? "" : station.name;
 	}
 
 	/** @return the arrival's route name, or an empty string. */
