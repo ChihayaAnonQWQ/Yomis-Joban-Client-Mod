@@ -14,7 +14,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
- * This text field just suggest stuff, autofill when enter is pressed. <br>
+ * This text field just suggest stuff, autofill when enter or tab is pressed. <br>
  * Also make it red when it can't find any suggestion
  * @author LX86
  * @since 1.1.4
@@ -26,6 +26,21 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
     private final int RED_COLOR = 16733525;
     private final int WHITE_COLOR = 16777215;
     private String currentSuggestion = "";
+
+    /**
+     * The candidates Tab is cycling through, and where it is in them.
+     *
+     * <p>They cannot be read off {@link #matchedSuggestionList} while cycling: completing sets the
+     * field to a candidate in full, and the responder then filters by prefix, so the only match
+     * left is the one just typed and a second Tab would go nowhere. The list is therefore taken
+     * once, before the first completion, and dropped again as soon as the player edits the text
+     * by hand — which is also what resets vanilla's command suggestions.</p>
+     */
+    private List<String> cycleList = null;
+    private int cycleIndex = 0;
+
+    /** True while this widget is the one setting the value, so the responder can tell. */
+    private boolean completing = false;
 
     public WidgetSuggestionTextField(String defaultSuggestion, Collection<String> suggestionList, int maxLength, boolean strict) {
         super(defaultSuggestion, maxLength);
@@ -48,12 +63,40 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
                 setSuggestion(matchedSuggestionList.get(0).substring(text.length()));
                 currentSuggestion = matchedSuggestionList.get(0);
             }
+
+            if (!completing) {
+                cycleList = null;
+            }
             changedListener.accept(text);
         });
     }
 
+    /**
+     * {@code 258} is Tab, {@code 257} / {@code 335} are Enter and the numpad Enter.
+     *
+     * <p>Enter takes the suggestion the list is showing; Tab takes it too and then keeps walking
+     * down the candidates on repeat. The preset field is the one place a player types an id by
+     * hand, and the ids are long enough that neither key alone is pleasant.</p>
+     */
     @Override
     public boolean keyPressed(int i, int j, int k) {
+        if (i == 258 && this.canConsumeInput() && !matchedSuggestionList.isEmpty()) {
+            if (cycleList == null) {
+                cycleList = new ArrayList<>(matchedSuggestionList);
+                cycleIndex = 0;
+            }
+            if (cycleIndex >= cycleList.size()) {
+                cycleIndex = 0;
+            }
+            completing = true;
+            try {
+                this.setValue(cycleList.get(cycleIndex));
+            } finally {
+                completing = false;
+            }
+            cycleIndex++;
+            return true;
+        }
         if (this.canConsumeInput() && !this.getValue().isEmpty()) {
             /* 257 / 335 = Enter */
             if(i == 257 || i == 335) {
@@ -66,7 +109,12 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
-        if (!isFocused() || matchedSuggestionList.isEmpty()) {
+        /* While Tab is cycling, show the whole cycle and mark the one Tab will take next; a
+           plain prefix filter would collapse to the single completed id and the player would
+           have no way to see that there is anything left to cycle through. */
+        final List<String> shown = cycleList != null ? cycleList : matchedSuggestionList;
+        final int highlight = cycleList == null || cycleList.isEmpty() ? 0 : cycleIndex % cycleList.size();
+        if (!isFocused() || shown.isEmpty()) {
             return;
         }
         final Font font = Minecraft.getInstance().font;
@@ -81,8 +129,8 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
          * Beside it, the space is empty on both screens: their checkboxes stop at
          * PANEL_WIDTH (20 + 144) and the other text fields sit at this field's own x, which is
          * where the list used to be drawn. */
-        final int listWidth = matchedSuggestionList.stream().mapToInt(font::width).max().orElse(0) + 4;
-        final int listHeight = matchedSuggestionList.size() * font.lineHeight + 3;
+        final int listWidth = shown.stream().mapToInt(font::width).max().orElse(0) + 4;
+        final int listHeight = shown.size() * font.lineHeight + 3;
         final int fieldX = UtilitiesClient.getWidgetX(this);
         final int fieldY = UtilitiesClient.getWidgetY(this);
 
@@ -98,9 +146,9 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
         guiGraphics.fill(listX - 2, listY - 2, listX + listWidth, listY + listHeight, 0xE0101010);
         guiGraphics.renderOutline(listX - 3, listY - 3, listWidth + 2, listHeight + 2, 0xFF909090);
 
-        for (int i = 0; i < matchedSuggestionList.size(); i++) {
-            final int color = i == 0 ? ChatFormatting.YELLOW.getColor() : ARGB_WHITE;
-            guiGraphics.drawString(font, matchedSuggestionList.get(i), listX, listY + 1 + i * font.lineHeight, color, false);
+        for (int i = 0; i < shown.size(); i++) {
+            final int color = i == highlight ? ChatFormatting.YELLOW.getColor() : ARGB_WHITE;
+            guiGraphics.drawString(font, shown.get(i), listX, listY + 1 + i * font.lineHeight, color, false);
         }
     }
 }
