@@ -118,6 +118,7 @@ public final class ScriptApiCheck {
 			} else {
 				System.out.println("OK   render() produced draw calls");
 			}
+			failures += checkDrawColoursAreOpaque(recorded);
 
 			failures += callLifecycle(cx, scope, "dispose", state, pids);
 		} catch (Exception e) {
@@ -134,6 +135,47 @@ public final class ScriptApiCheck {
 	}
 
 	// ------------------------------------------------------------------
+
+	/**
+	 * Asserts that no script texture or rectangle is drawn fully transparent.
+	 *
+	 * <p>A preset writes an RGB colour — {@code .color(0x009944)} — and MTR 3's
+	 * {@code IDrawing.drawTexture} reads the alpha straight out of it, so a value with no alpha
+	 * channel draws nothing at all. That is invisible on a screenshot and cannot be reasoned
+	 * about from a preset, so it is pinned here instead: every {@code Texture} and
+	 * {@code Rectangle} in the recorded frame must carry alpha {@code FF}.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkDrawColoursAreOpaque(List<String> recorded) {
+		final java.util.regex.Pattern pattern =
+				java.util.regex.Pattern.compile("^(Texture|Rectangle)\\(.*color=([0-9A-Fa-f]{8})\\)");
+		int checked = 0;
+		int failures = 0;
+		for (String call : recorded) {
+			final java.util.regex.Matcher matcher = pattern.matcher(call);
+			if (!matcher.find()) {
+				continue;
+			}
+			checked++;
+			final int color = (int) Long.parseLong(matcher.group(2), 16);
+			if ((color >>> 24) != 0xFF) {
+				System.out.println("FAIL " + matcher.group(1) + " is drawn with alpha "
+						+ String.format("%02X", color >>> 24) + ", so nothing is drawn: " + call);
+				failures++;
+			}
+		}
+		if (checked == 0) {
+			/* A text-only preset -- the built-in pids_1a.js is one -- has nothing to check
+			   here; the presets that do draw textures carry this assertion. */
+			System.out.println("OK   no Texture/Rectangle call to check in this preset");
+			return 0;
+		}
+		System.out.println(failures == 0
+				? "OK   all " + checked + " texture/rectangle colours are opaque"
+				: "FAIL " + failures + " of " + checked + " colours are transparent");
+		return failures;
+	}
 
 	/**
 	 * @param count how many upcoming trains to simulate. JCM 2.x's {@code arrivals().get(i)}

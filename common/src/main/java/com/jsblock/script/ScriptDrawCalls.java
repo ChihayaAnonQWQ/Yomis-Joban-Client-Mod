@@ -56,7 +56,7 @@ public final class ScriptDrawCalls {
 		}
 
 		public Rectangle color(int color) {
-			this.color = color;
+			this.color = opaque(color);
 			return this;
 		}
 
@@ -140,8 +140,15 @@ public final class ScriptDrawCalls {
 			return this;
 		}
 
+		/**
+		 * {@code .color(0xRRGGBB)} — a preset writes the colour without an alpha channel, so
+		 * it is made opaque here; see {@link ScriptDrawCall#opaque}.
+		 *
+		 * <p>Normalised on the way in rather than at draw time, so that the value the debug
+		 * trace and the headless check print is the value that reaches the renderer.</p>
+		 */
 		public Texture color(int color) {
-			this.color = color;
+			this.color = opaque(color);
 			return this;
 		}
 
@@ -173,8 +180,8 @@ public final class ScriptDrawCalls {
 
 		@Override
 		public String describe() {
-			return String.format("Texture(z=%s pos=%s,%s size=%sx%s texture=%s uv=%s,%s,%s,%s)", z,
-					x, y, w, h, textureId, u1, v1, u2, v2);
+			return String.format("Texture(z=%s pos=%s,%s size=%sx%s texture=%s uv=%s,%s,%s,%s color=%08X)", z,
+					x, y, w, h, textureId, u1, v1, u2, v2, color);
 		}
 
 		@Override

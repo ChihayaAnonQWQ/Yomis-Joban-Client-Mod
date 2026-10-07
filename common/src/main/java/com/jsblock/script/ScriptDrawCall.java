@@ -15,6 +15,35 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 	/** Script units per block, from JCM 2.x's {@code PIDSPresetBase.BASE_SCALE = 1/96F}. */
 	public static final float BASE_SCALE = 1F / 96F;
 
+	/** JCM 2.x's {@code RenderHelper.ARGB_BLACK}. */
+	protected static final int ARGB_BLACK = 0xFF000000;
+
+	/**
+	 * Makes a draw call's colour opaque, which is what every JCM 2.x wrapper does to it.
+	 *
+	 * <p>A preset writes a plain RGB literal — {@code .color(0xFFFFFF)} for white,
+	 * {@code .color(0x009944)} for a route colour — and JCM 2.x's {@code TextureWrapper} and
+	 * {@code RectangleWrapper} both draw with {@code ARGB_BLACK + color}. MTR 3's
+	 * {@code IDrawing.drawTexture} takes the alpha from {@code color >> 24} and does not add
+	 * one, so without this the quad is drawn fully transparent and simply vanishes. That is
+	 * what a route-number badge and a route-map line look like when their colour "does
+	 * nothing": the text over them still shows, because vanilla's font renderer forces opaque
+	 * on its own ({@code if ((color & 0xFC000000) == 0) color |= 0xFF000000}), and nothing in
+	 * the texture path does.
+	 *
+	 * <p>JCM 2.x spells this {@code ARGB_BLACK + color}. {@code |} is the same operation for
+	 * every RGB-only value a preset can write (anything below {@code 0x01000000}) and keeps
+	 * the default {@code ARGB_WHITE} intact, where {@code +} would carry into the blue channel
+	 * and produce {@code 0xFFFFFFFE}.
+	 *
+	 * <p>The JSON component path already does this — {@code PIDSAlign.color} turns a six-digit
+	 * {@code RRGGBB} into {@code 0xFF000000 | value} — so this only brings the script path in
+	 * line with the rest of the port.</p>
+	 */
+	protected static int opaque(int color) {
+		return color | ARGB_BLACK;
+	}
+
 	protected double x;
 	protected double y;
 	protected double w;
