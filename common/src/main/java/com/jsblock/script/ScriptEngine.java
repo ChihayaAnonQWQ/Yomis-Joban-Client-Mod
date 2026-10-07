@@ -185,6 +185,8 @@ public final class ScriptEngine {
 		ScriptableObject.putProperty(scope, "Resources", new NativeJavaClass(scope, Resources.class));
 		ScriptableObject.putProperty(scope, "TextUtil", new NativeJavaClass(scope, TextUtil.class));
 		ScriptableObject.putProperty(scope, "MinecraftClient", new NativeJavaClass(scope, MinecraftClient.class));
+		/* A constructible class, not a bag of statics: scripts write new RateLimit(seconds). */
+		ScriptableObject.putProperty(scope, "RateLimit", new NativeJavaClass(scope, RateLimit.class));
 		ScriptableObject.putProperty(scope, "Text", new NativeJavaClass(scope, ScriptDrawCalls.Text.class));
 		ScriptableObject.putProperty(scope, "Texture", new NativeJavaClass(scope, ScriptDrawCalls.Texture.class));
 		ScriptableObject.putProperty(scope, "Rectangle", new NativeJavaClass(scope, ScriptDrawCalls.Rectangle.class));
@@ -350,6 +352,40 @@ public final class ScriptEngine {
 				}
 			}
 			return result.toString().trim();
+		}
+	}
+
+	/**
+	 * {@code new RateLimit(seconds)} — throttles part of a script's work to a fixed interval.
+	 *
+	 * <p>Ported from JCM 2.x's {@code RateLimitJS}
+	 * (fabric/src/main/java/com/lx862/mtrscripting/core/util/RateLimitJS.java), MIT License,
+	 * Copyright (c) 2022-present Zbx1425. JCM 2.x measures against {@code TimingJS.globalElapsed};
+	 * only differences of that clock are ever used, so a monotonic clock here is equivalent.
+	 * It must be a real class rather than a holder of statics because presets construct it:
+	 * {@code pids_ql_lite.js} calls {@code new RateLimit(...)} on its sixth line, and without it
+	 * the whole preset failed to evaluate.</p>
+	 */
+	public static final class RateLimit {
+		private double lastTime;
+		private final double interval;
+
+		public RateLimit(double interval) {
+			this.interval = interval;
+		}
+
+		/** @return {@code true} at most once per interval, and always on the first call */
+		public boolean shouldUpdate() {
+			final double now = System.nanoTime() / 1e9;
+			if (now - lastTime > interval) {
+				lastTime = now;
+				return true;
+			}
+			return false;
+		}
+
+		public void resetCoolDown() {
+			lastTime = 0;
 		}
 	}
 
