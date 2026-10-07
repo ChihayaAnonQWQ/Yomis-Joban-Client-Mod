@@ -38,6 +38,13 @@ processResources {
 			"mc_version": rootProject.mc_requirement.replace(".x", "")
 		)
 	}
+	/* The expanded values are not task inputs by themselves, so bumping mod_version left this
+	   task UP-TO-DATE and the released jar kept whichever version it was first built with --
+	   every build from 1.2.12 onwards shipped a mods.toml saying "1.2.12+mc1.20" while
+	   fabric.mod.json, whose project happens to track it, said the real thing. Declaring the
+	   version as an input makes the task re-run when it changes. */
+	inputs.property("mod_version", project.mod_version)
+	inputs.property("minecraft_version", rootProject.minecraft_version)
 }
 
 shadowJar {
