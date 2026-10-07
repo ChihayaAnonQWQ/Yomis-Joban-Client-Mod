@@ -1,6 +1,6 @@
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.4
 
-## Compatible YMTR Version
+## Compatible MTR Version
 YMTR
 
 ## Changes
@@ -21,7 +21,7 @@ YMTR
 
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.3
 
-## Compatible YMTR Version
+## Compatible MTR Version
 YMTR
 
 ## Changes
@@ -40,7 +40,7 @@ YMTR
 
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.2
 
-## Compatible YMTR Version
+## Compatible MTR Version
 YMTR
 
 ## Changes
@@ -62,7 +62,7 @@ YMTR
 Version numbers follow the upstream release this fork is built on, with the JS-PIDS port revision
 appended (`1.2.12-JSPIDS-1.0` was the first published port build).
 
-## Compatible YMTR Version
+## Compatible MTR Version
 YMTR
 
 ## Changes
@@ -88,7 +88,7 @@ YMTR
 
 # Yomi's Joban Client Mod 1.2.4 has been released
 
-## Compatible YMTR Version
+## Compatible MTR Version
 YMTR
 
 ## Changes
