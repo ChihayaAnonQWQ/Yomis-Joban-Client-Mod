@@ -66,16 +66,41 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
-        if(isFocused()) {
-            Font font = Minecraft.getInstance().font;
+        if (!isFocused() || matchedSuggestionList.isEmpty()) {
+            return;
+        }
+        final Font font = Minecraft.getInstance().font;
 
-            int i = 0;
+        /* The list is drawn beside the field, not under it.
+         *
+         * Under it was the original behaviour, and it covered every row below -- on both PIDS
+         * config screens the arrival- and departure-switch rows sit there. Those rows are
+         * separate widgets added after this one, so they render on top of the list and neither
+         * the candidates nor their labels can be read.
+         *
+         * Beside it, the space is empty on both screens: their checkboxes stop at
+         * PANEL_WIDTH (20 + 144) and the other text fields sit at this field's own x, which is
+         * where the list used to be drawn. */
+        final int listWidth = matchedSuggestionList.stream().mapToInt(font::width).max().orElse(0) + 4;
+        final int listHeight = matchedSuggestionList.size() * font.lineHeight + 3;
+        final int fieldX = UtilitiesClient.getWidgetX(this);
+        final int fieldY = UtilitiesClient.getWidgetY(this);
 
-            for(String suggestion : matchedSuggestionList) {
-                int color = i == 0 ? ChatFormatting.YELLOW.getColor() : ARGB_WHITE;
-                guiGraphics.drawString(font, suggestion, UtilitiesClient.getWidgetX(this), (i * font.lineHeight) + (UtilitiesClient.getWidgetY(this) + height + TEXT_FIELD_PADDING), color, false);
-                i++;
-            }
+        int listX = fieldX + width + 3;
+        int listY = fieldY;
+        if (listX + listWidth > Minecraft.getInstance().getWindow().getGuiScaledWidth() - 2) {
+            /* No room to the right -- underneath is the old behaviour, but with a background
+               this time, so whatever it lands on does not turn into unreadable overlap. */
+            listX = fieldX;
+            listY = fieldY + height + TEXT_FIELD_PADDING;
+        }
+
+        guiGraphics.fill(listX - 2, listY - 2, listX + listWidth, listY + listHeight, 0xE0101010);
+        guiGraphics.renderOutline(listX - 3, listY - 3, listWidth + 2, listHeight + 2, 0xFF909090);
+
+        for (int i = 0; i < matchedSuggestionList.size(); i++) {
+            final int color = i == 0 ? ChatFormatting.YELLOW.getColor() : ARGB_WHITE;
+            guiGraphics.drawString(font, matchedSuggestionList.get(i), listX, listY + 1 + i * font.lineHeight, color, false);
         }
     }
 }
