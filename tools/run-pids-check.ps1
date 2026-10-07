@@ -93,7 +93,8 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $checkSources = @(
     'tools\checks\com\jsblock\pids\PIDSPresetCheck.java',
-    'tools\checks\com\jsblock\script\ScriptApiCheck.java'
+    'tools\checks\com\jsblock\script\ScriptApiCheck.java',
+    'tools\checks\com\jsblock\script\ScriptShutterCheck.java'
 )
 foreach ($source in $checkSources) {
     if (-not (Test-Path $source)) { throw "check source missing: $source" }
@@ -114,6 +115,17 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.pids.PIDSPresetCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "PIDSPresetCheck (exit $NativeExitCode)" }
+
+# The sandbox is checked before the presets: if the shutter is wrong, every script below is
+# either blocked or unguarded, and the reason should be obvious from this block rather than
+# inferred from sixteen script failures.
+Write-Host ''
+Write-Host '== script sandbox (ScriptShutterCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptShutterCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptShutterCheck (exit $NativeExitCode)" }
 
 # The built-in pids_1a.js is the script the mod ships, so it is the one that must never
 # regress. Anything passed through -Script is run in addition to it.
