@@ -26,9 +26,18 @@ public final class PIDSData {
 	private PIDSData() {
 	}
 
-	/** @return the platform nearest to {@code pos}, or {@code 0} when none is known. */
-	public static long closestPlatformId(Level world, BlockPos pos) {
-		if (world == null || pos == null) {
+	/**
+	 * @return the platform nearest to {@code pos}, or {@code 0} when none is known.
+	 *
+	 * <p>Takes no {@code Level} on purpose. MTR 3's lookup is a query against the client cache
+	 * and never needed one, but this used to carry a {@code world} argument that only fed a
+	 * "no world, no answer" guard — and the script wrapper passed {@code null} to it, so every
+	 * auto-detected panel resolved platform {@code 0}, {@code stationOf(0)} found nothing, and
+	 * {@code pids.station()} answered {@code null} for all of them. A preset that guarded it
+	 * showed "unknown station"; one that did not, like {@code sound_transit.js}, threw.</p>
+	 */
+	public static long closestPlatformId(BlockPos pos) {
+		if (pos == null) {
 			return 0;
 		}
 		try {

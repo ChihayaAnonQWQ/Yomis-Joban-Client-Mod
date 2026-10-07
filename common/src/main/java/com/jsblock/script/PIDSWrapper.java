@@ -199,7 +199,7 @@ public class PIDSWrapper {
 	}
 
 	private long primaryPlatformId() {
-		return platformIds.isEmpty() ? PIDSData.closestPlatformId(null, blockPos) : platformIds.get(0);
+		return platformIds.isEmpty() ? PIDSData.closestPlatformId(blockPos) : platformIds.get(0);
 	}
 
 	// ==================================================================

@@ -127,7 +127,7 @@ public class PIDSContext {
 
 	/** @return the platform id this PIDS primarily watches, or {@code 0} when unknown. */
 	public long primaryPlatformId() {
-		return platformIds.isEmpty() ? PIDSData.closestPlatformId(world, pos) : platformIds.get(0);
+		return platformIds.isEmpty() ? PIDSData.closestPlatformId(pos) : platformIds.get(0);
 	}
 
 	/** @return a mutable copy of the platform ids, never {@code null}. */
