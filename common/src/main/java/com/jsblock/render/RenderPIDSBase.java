@@ -9,6 +9,7 @@ import com.jsblock.data.PIDSPreset;
 import com.jsblock.pids.PIDSContext;
 import com.jsblock.pids.PIDSGeometry;
 import com.jsblock.pids.PIDSGraphics;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -399,6 +400,24 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     private float panelRotateXDegrees = 0F;
 
     /**
+     * Whether this panel belongs to a PIDS Projector, which is not attached to its block at all.
+     *
+     * <p>A projector's panel is placed by its own offset, rotation and scale, so it replaces the
+     * whole transform rather than adjusting the profile. It lives here, as a switch, rather than in
+     * a subclass, because a subclass referenced from {@code JobanClient}'s renderer registration
+     * made that class impossible to load on Forge -- every reference resolved and the class was
+     * present in the jar, and the loader still refused it. A flag on an existing renderer has no
+     * such problem and the same behaviour.</p>
+     */
+    private boolean projectorMode = false;
+
+    /** @see #projectorMode */
+    public RenderPIDSBase<T> setProjectorMode(boolean projector) {
+        this.projectorMode = projector;
+        return this;
+    }
+
+    /**
      * Adopts another PIDS shape's JCM 2.x panel transform and canvas.
      *
      * <p>JCM 2.x gives each renderer its own literals -- RVPIDSRenderer
@@ -565,23 +584,18 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 isKeyFacing(facing), hidePlatforms);
 
         matrices.pushPose();
-        /* Verbatim from JCM 2.x's RVPIDSRenderer: origin at the block centre
-           (StoredMatrixTransformations starts at 0.5 + the block position), the same two
-           rotations, then the panel's own hard-coded translate, JCM 2.x's 0.005-block lift,
-           and a flat 1/96 base scale.
-           Every number here is JCM 2.x's. The previous version derived equivalents from
-           panelLeft()/panelOffsetY()/geometry.scale, and that derivation is what kept moving
-           the panel. RenderLCDPIDS and RenderPIDS1A supply their own literals. */
-        matrices.translate(0.5, 0.5, 0.5);
-        UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
-        UtilitiesClient.rotateZDegrees(matrices, 180);
-        /* YJCM's renderer leans the panel here, after the facing rotations and before the
-           translate, so the translate runs in the leaning frame. The SIL shapes need it; see
-           panelRotateXDegrees. */
-        matrices.mulPose(Axis.XP.rotationDegrees(panelRotateXDegrees));
-        matrices.translate(scriptPanelTranslateX(), scriptPanelTranslateY(), scriptPanelTranslateZ());
-        matrices.translate(0F, 0F, -SCRIPT_PANEL_OUTWARD);
-        matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
+        applyScriptPanelTransform(matrices, entity, world, pos, facing, geometry);
+        drawProjectorFrameIfAiming(world, facing, matrices, vertexConsumers, canvasWidth, canvasHeight);
+
+        /* The depth test, said outright.
+           
+           A panel never writes depth -- that is what the light layers are -- and the layers never
+           set the depth *test* either, so whatever state is current applies to it. The block entity
+           pass normally has it on, but the pixelation pass binds a framebuffer with no depth buffer
+           attached, and nothing guarantees the state afterwards: the result is a panel drawn over
+           the blocks in front of it, which is what a projector's panel does. Turning it on here is
+           cheap and cannot make a correctly occluded panel wrong. */
+        RenderSystem.enableDepthTest();
 
         /* Whole-screen pixelation, when this preset's scale says so. The resource pack declares a
            scale for presets drawn for a low-resolution screen; the client config overrides it,
@@ -636,6 +650,107 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
 
         immediate.endBatch();
         matrices.popPose();
+    }
+
+    /**
+     * Draws the projector's frame, while the player holds a brush.
+     *
+     * <p>JCM 2.x shows it so a projector can be aimed without guessing where its panel will land:
+     * one quad of {@code jsblock:textures/block/light_1.png}, which is a hollow glow, stretched one
+     * canvas unit outside the panel on every side — the same texture and the same -1 / +1 outset
+     * their renderer uses. Nothing is drawn for any other PIDS.</p>
+     */
+    protected void drawProjectorFrameIfAiming(Level world, Direction facing, PoseStack matrices,
+                                              MultiBufferSource vertexConsumers, int canvasWidth, int canvasHeight) {
+        if (!projectorMode) {
+            return;
+        }
+        final net.minecraft.world.entity.player.Player player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player == null) {
+            return;
+        }
+        /* MTR's own test, with the runnable standing in for the answer: it is a held-item check, and
+           running it here is how the mod asks the same question elsewhere. */
+        final boolean[] aiming = {false};
+        IBlock.checkHoldingBrush(world, player, () -> aiming[0] = true);
+        if (!aiming[0]) {
+            return;
+        }
+        /* Four thin strips rather than one quad of a glow texture.
+           
+           JCM 2.x stretches jsblock:textures/block/light_1.png across the whole panel and relies on
+           it being a hollow ring -- but it is a solid 16x16 of flat colour, so the same call paints
+           an opaque slab over the panel instead of framing it. Four edges say the same thing and
+           cannot cover anything, whatever the texture turns out to be. */
+        final VertexConsumer consumer = vertexConsumers.getBuffer(MoreRenderLayers.getLight(
+                new net.minecraft.resources.ResourceLocation("jsblock:textures/block/light_1.png"), false));
+        final float thickness = 1.5F;
+        final float width = canvasWidth;
+        final float height = canvasHeight;
+        drawFrameStrip(matrices, consumer, facing, 0F, 0F, width, thickness);
+        drawFrameStrip(matrices, consumer, facing, 0F, height - thickness, width, thickness);
+        drawFrameStrip(matrices, consumer, facing, 0F, thickness, thickness, height - thickness * 2F);
+        drawFrameStrip(matrices, consumer, facing, width - thickness, thickness, thickness, height - thickness * 2F);
+    }
+
+    /** One edge of {@link #drawProjectorFrameIfAiming}, in canvas units. */
+    private void drawFrameStrip(PoseStack matrices, VertexConsumer consumer, Direction facing,
+                                float x, float y, float stripWidth, float stripHeight) {
+        IDrawing.drawTexture(matrices, consumer,
+                x, y, 0.1F, x + stripWidth, y + stripHeight, 0.1F,
+                0, 0, 1, 1, facing, 0xFFFF0000, MAX_LIGHT_GLOWING);
+    }
+
+    /**
+     * Puts the pose stack where the script's canvas coordinates apply, for this block's shape.
+     *
+     * <p>Verbatim from JCM 2.x's RVPIDSRenderer: origin at the block centre
+     * (StoredMatrixTransformations starts at 0.5 + the block position), the same two rotations,
+     * then the panel's own hard-coded translate, JCM 2.x's 0.005-block lift, and a flat 1/96 base
+     * scale. Every number here is JCM 2.x's. The previous version derived equivalents from
+     * panelLeft()/panelOffsetY()/geometry.scale, and that derivation is what kept moving the
+     * panel. RenderLCDPIDS and RenderPIDS1A supply their own literals through the profile, and
+     * RenderProjectorPIDS replaces the whole chain because its panel is not on the block at all.</p>
+     */
+    protected void applyScriptPanelTransform(PoseStack matrices, T entity, Level world, BlockPos pos,
+                                             Direction facing, PIDSGeometry geometry) {
+        if (projectorMode && entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+            /* JCM 2.x's projector chain, but only after the base transform every PIDS gets.
+               
+               Their projector renderer extends the ordinary PIDS renderer, so its chain runs on top
+               of the block centre, the facing rotation and the 180 degree Z flip -- and that
+               half-turn is what puts the panel the right way up. Replacing the whole transform
+               instead, which the first version of this did, leaves the panel mirrored: its text
+               comes out upside down. */
+            matrices.translate(0.5, 0.5, 0.5);
+            UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
+            UtilitiesClient.rotateZDegrees(matrices, 180);
+
+            final com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector projector =
+                    (com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) entity;
+            final float panelScale = (float) projector.getScale();
+            UtilitiesClient.rotateYDegrees(matrices, 90);
+            matrices.translate(-0.5F + (float) projector.getOffsetX(),
+                    -0.5F - (float) projector.getOffsetY(),
+                    0.5F + (float) projector.getOffsetZ());
+            matrices.mulPose(Axis.XP.rotationDegrees((float) projector.getRotateX()));
+            matrices.mulPose(Axis.YP.rotationDegrees((float) projector.getRotateY()));
+            matrices.mulPose(Axis.ZP.rotationDegrees((float) projector.getRotateZ()));
+            matrices.scale(com.jsblock.block.PIDSProjector.PROJECTOR_PANEL_SCALE * panelScale,
+                    com.jsblock.block.PIDSProjector.PROJECTOR_PANEL_SCALE * panelScale, 1F);
+            matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
+            return;
+        }
+        matrices.translate(0.5, 0.5, 0.5);
+        UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
+        UtilitiesClient.rotateZDegrees(matrices, 180);
+        /* YJCM's renderer leans the panel here, after the facing rotations and before the
+           translate, so the translate runs in the leaning frame. The SIL shapes need it; see
+           panelRotateXDegrees. */
+        matrices.mulPose(Axis.XP.rotationDegrees(panelRotateXDegrees));
+        matrices.translate(scriptPanelTranslateX(), scriptPanelTranslateY(), scriptPanelTranslateZ());
+        matrices.translate(0F, 0F, -SCRIPT_PANEL_OUTWARD);
+        matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
     }
 
     /**

@@ -12,6 +12,7 @@ import com.jsblock.client.ClientConfig;
 import com.jsblock.screen.ButterflyLightScreen;
 import com.jsblock.screen.FareSaverScreen;
 import com.jsblock.screen.JobanPIDSConfigScreen;
+import com.jsblock.screen.PIDSProjectorScreen;
 import com.jsblock.screen.RVPIDSConfigScreen;
 import com.jsblock.screen.SoundLooperScreen;
 import com.jsblock.screen.SubsidyMachineScreen;
@@ -308,4 +309,51 @@ public class PacketClient {
             NetworkAudioPlayer.play(url, finalVolume, pos);
         });
     }
+
+	/** Saves the projector's settings back to the server. */
+	public static void sendPIDSProjectorC2S(BlockPos pos, String presetID, java.util.Set<Long> platformIds,
+											double offsetX, double offsetY, double offsetZ,
+											double rotateX, double rotateY, double rotateZ, double scale) {
+		final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
+		packet.writeBlockPos(pos);
+		packet.writeUtf(presetID);
+		packet.writeInt(platformIds.size());
+		platformIds.forEach(packet::writeLong);
+		packet.writeDouble(offsetX);
+		packet.writeDouble(offsetY);
+		packet.writeDouble(offsetZ);
+		packet.writeDouble(rotateX);
+		packet.writeDouble(rotateY);
+		packet.writeDouble(rotateZ);
+		packet.writeDouble(scale);
+		RegistryClient.sendToServer(IPacketJoban.PACKET_UPDATE_PIDS_PROJECTOR, packet);
+	}
+
+	public static void openPIDSProjectorScreenS2C(FriendlyByteBuf packet) {
+		final Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft.level == null) {
+			return;
+		}
+		final BlockPos pos = packet.readBlockPos();
+		final String presetID = packet.readUtf();
+		final java.util.Set<Long> platformIds = new java.util.HashSet<>();
+		final int platformCount = packet.readInt();
+		for (int i = 0; i < platformCount; i++) {
+			platformIds.add(packet.readLong());
+		}
+		final double offsetX = packet.readDouble();
+		final double offsetY = packet.readDouble();
+		final double offsetZ = packet.readDouble();
+		final double rotateX = packet.readDouble();
+		final double rotateY = packet.readDouble();
+		final double rotateZ = packet.readDouble();
+		final double scale = packet.readDouble();
+		if (minecraft.level.getBlockEntity(pos) instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+			minecraft.execute(() -> {
+				if (!(minecraft.screen instanceof PIDSProjectorScreen)) {
+					UtilitiesClient.setScreen(minecraft, new PIDSProjectorScreen(pos, presetID, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale));
+				}
+			});
+		}
+	}
 }

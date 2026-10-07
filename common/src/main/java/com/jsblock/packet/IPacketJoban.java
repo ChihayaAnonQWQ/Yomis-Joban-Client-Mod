@@ -22,4 +22,8 @@ public interface IPacketJoban {
     ResourceLocation PACKET_OPEN_SOUND_LOOPER_SCREEN = new ResourceLocation(Joban.MOD_ID, "packet_open_sound_looper_screen");
     ResourceLocation PACKET_OPEN_SUBSIDY_CONFIG_SCREEN = new ResourceLocation(Joban.MOD_ID, "packet_open_subsidy_config_screen");
     ResourceLocation PACKET_PLAY_NETWORK_SOUND = new ResourceLocation(Joban.MOD_ID, "play_network_sound");
+    /* PIDS Projector: its own screen and its own update, so the two-block PIDS configuration flow
+       stays untouched. */
+    ResourceLocation PACKET_UPDATE_PIDS_PROJECTOR = new ResourceLocation(Joban.MOD_ID, "packet_pids_projector_update");
+    ResourceLocation PACKET_OPEN_PIDS_PROJECTOR_SCREEN = new ResourceLocation(Joban.MOD_ID, "packet_open_pids_projector_screen");
 }

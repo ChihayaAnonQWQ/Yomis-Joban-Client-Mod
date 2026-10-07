@@ -944,6 +944,70 @@ layer.clearRenderState();
 3. **在别人的渲染管线里做离屏，先问「谁会抢 framebuffer」**：MC 的每一层绘制都会 ✗。
 4. **诊断要能「二分」而不是「描述」**：把清屏色改成**红色** ✓，一次运行就把「没进目标」和「进了目标但合成采不到」分开了 ✓ —— 比截图描述有效得多 ✓。
 
+**15. PIDS 投影仪：从 JCM 2.x 移植，以及四个坑**
+
+JCM 2.x 的 `PIDSProjector` 是**一块隐形方块 + 把预设面板投到空中任意位置** ✓ —— 偏移/旋转/缩放逐方块
+存 NBT ✓，界面里调 ✓。它渲染的就是**普通预设** ✓，所以本分支支持的脚本预设、像素化**全部通用** ✓。
+
+移植本身不难（方块 + 方块实体 + 一个变换 + 界面 ✓），难的是**四个和渲染/网络管线有关的坑** ✓，
+每一个的症状都指向错误的方向 ✗：
+
+**坑 1：新建的渲染器类，从 `JobanClient` 引用它，会让整个 `JobanClient` 加载失败**
+
+```
+java.lang.NoClassDefFoundError: forge/com/jsblock/JobanClient
+Caused by: java.lang.ClassNotFoundException: forge.com.jsblock.JobanClient
+```
+
+而：类**在 jar 里** ✓、内部类名与路径**逐个核对一致** ✓、它引用的 14 个类**全部能解析** ✓、
+日志里**零条 mixin 错误** ✓。二分三步定出触发点：
+
+| 做法 | 结果 |
+|---|---|
+| 不注册 | 正常 ✓ |
+| 用**已有**的 `RenderRVPIDS` 注册 | 正常 ✓ |
+| 只**引用**新类（`if (nanoTime()==42) new …`，永不执行）| 正常 ✓ |
+| 用新类**注册** | **崩** ✗ |
+
+修法：**不新建类** ✓ —— 改成在已有的 `RenderRVPIDS` 上加一个 `setProjectorMode(true)` 开关 ✓，
+变换分支写在 `RenderPIDSBase` 里 ✓。功能完全相同 ✓，`JobanClient` 不再引用任何新类 ✓。
+
+**坑 2：服务端接收器漏注册，界面保存后什么都不发生**
+
+界面上改了数值、关掉 ✓ —— 面板纹丝不动 ✗。日志里**没有任何报错** ✗。诊断行把它照出来了 ✓：
+
+```
+有: Registering C2S receiver with id jsblock:packet_joban_pids_update   ← 对照
+无: ... jsblock:packet_pids_projector_update                            ← 缺的
+```
+
+包发出去了 ✓，服务端**没人接** ✓ → 丢弃 ✓。修法就是补那一行 ✓ —— 但**为什么会漏** ✗：
+补丁脚本的锚点缩进用了 Tab ✗ 而文件用空格 ✗ → 替换失败 ✓，而它**同时**改了 import ✓ → 于是**报了成功** ✗。
+**教训：脚本化的批量替换必须核对"锚点是否真的命中"，不能只看它有没有输出** ✓。
+
+**坑 3：四个网络包方法读写顺序不一致 → 直接断线**
+
+```
+Internal Exception: java.lang.IndexOutOfBoundsException:
+  readerIndex(119) + length(8) exceeds writerIndex(123)
+```
+
+加站台集合时，四个方法（S2C 写/读 ✓、C2S 写/读 ✓）**只改了两个** ✗ → 一端多读、一端少读 ✓ → 断线 ✓。
+**修法**：把四个方法的读写顺序**并排列出来逐条核对** ✓（pos → preset → count → longs → 7 doubles ✓）。
+**教训：任何一次改包，都要把四个方法放在一起看** ✓，改一个忘一个是这类 bug 的常态 ✓。
+
+**坑 4：空模型方块没标 `noOcclusion`，相邻方块会被剔面**
+
+症状是玩家报告的，描述得很准 ✓：「投影机六个面贴上别的方块，从投影机方向看能直接看到方块后面的东西」✓。
+原因：投影机**模型是空的** ✓ 但方块属性没标 `noOcclusion` ✗ → 游戏当它是**实心不透明方块** ✓ →
+**剔掉相邻方块贴着它的那一面** ✗ → 而它自己又什么都不画 ✓ → 那个位置成了**一个洞** ✓。
+**修法**：`.noOcclusion()` + `.isViewBlocking(→false)` + `.isSuffocating(→false)` ✓ —— 为此给
+`BlockPIDSBaseHorizontal` / `JobanPIDSBase` 各开了一个可传 `Properties` 的构造器 ✓。
+
+**一个已知问题（未修）**：投影仪界面里的数字输入框，**要先点一下才显示数值** ✗。值本身是对的 ✓
+（保存和应用都正常 ✓），只是**文字没画出来** ✓。用的是 MTR 自己的 `WidgetBetterTextField` ✓，
+两条常规解法（构造器给初值 ✓、`init()` 里 `setValue` ✓）都试过无效 ✗。留待单独排查 ✓。
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。

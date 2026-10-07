@@ -38,6 +38,7 @@ import com.jsblock.block.MTRStairs1;
 import com.jsblock.block.ModelE44;
 import com.jsblock.block.PIDS1A;
 import com.jsblock.block.PIDSLCD;
+import com.jsblock.block.PIDSProjector;
 import com.jsblock.block.PIDSRV;
 import com.jsblock.block.PIDSRVSIL1;
 import com.jsblock.block.PIDSRVSIL2;
@@ -111,6 +112,7 @@ public interface Blocks {
     RegistryObject<Block> PIDS_1A = new RegistryObject<>(PIDS1A::new);
     RegistryObject<Block> PIDS_LCD = new RegistryObject<>(PIDSLCD::new);
     RegistryObject<Block> PIDS_RV_TCL = new RegistryObject<>(PIDSRV::new);
+	RegistryObject<Block> PIDS_PROJECTOR = new RegistryObject<>(PIDSProjector::new);
     RegistryObject<Block> PIDS_RV_SIL_1 = new RegistryObject<>(PIDSRVSIL1::new);
     RegistryObject<Block> PIDS_RV_SIL_2 = new RegistryObject<>(PIDSRVSIL2::new);
     RegistryObject<Block> RV_PIDS_POLE = new RegistryObject<>(() -> new RVPIDSPole(BlockBehaviour.Properties.of().requiresCorrectToolForDrops().strength(1.0f).noOcclusion()));

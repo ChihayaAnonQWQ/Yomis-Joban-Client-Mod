@@ -21,6 +21,7 @@ import static com.jsblock.Compatibilities.incompatible;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_BUTTERFLY_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_FARESAVER_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_JOBAN_PIDS_CONFIG;
+import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_PIDS_PROJECTOR;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_RV_PIDS_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SOUND_LOOPER_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SUBSIDY_CONFIG;
@@ -98,6 +99,7 @@ public class Joban {
             registerBlockItem.accept("pids_rv", Blocks.PIDS_RV_TCL, ItemGroups.PIDS);
             registerBlockItem.accept("pids_rv_sil", Blocks.PIDS_RV_SIL_1, ItemGroups.PIDS);
             registerBlockItem.accept("pids_rv_sil_2", Blocks.PIDS_RV_SIL_2, ItemGroups.PIDS);
+            registerBlockItem.accept("pids_projector", Blocks.PIDS_PROJECTOR, ItemGroups.PIDS);
             registerBlockItem.accept("rv_pids_pole", Blocks.RV_PIDS_POLE, ItemGroups.PIDS);
             registerBlockItem.accept("station_ceiling_1", Blocks.STATION_CEILING_1, ItemGroups.CEILING);
             registerBlockItem.accept("station_ceiling_1_station_color", Blocks.STATION_CEILING_1_STATION_COLOR, ItemGroups.CEILING);
@@ -139,6 +141,7 @@ public class Joban {
             registerBlockEntityType.accept("pids_5", BlockEntityTypes.PIDS_RV_TILE_ENTITY);
             registerBlockEntityType.accept("pids_rv_sil", BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_1);
             registerBlockEntityType.accept("pids_rv_sil_2", BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_2);
+            registerBlockEntityType.accept("pids_projector", BlockEntityTypes.PIDS_PROJECTOR_TILE_ENTITY);
             registerBlockEntityType.accept("pids_4a", BlockEntityTypes.PIDS_LCD_TILE_ENTITY);
             registerBlockEntityType.accept("signal_light_red_1", BlockEntityTypes.SIGNAL_LIGHT_RED_ENTITY_1);
             registerBlockEntityType.accept("signal_light_red_2", BlockEntityTypes.SIGNAL_LIGHT_RED_ENTITY_2);
@@ -159,6 +162,7 @@ public class Joban {
             Registry.registerNetworkReceiver(PACKET_UPDATE_RV_PIDS_CONFIG, PacketServer::receiveRVPIDSConfigC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_SOUND_LOOPER_CONFIG, PacketServer::receiveSoundLooperC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_SUBSIDY_CONFIG, PacketServer::receiveSubsidyC2S);
+            Registry.registerNetworkReceiver(PACKET_UPDATE_PIDS_PROJECTOR, PacketServer::receivePIDSProjectorC2S);
 
             Registry.registerPlayerJoinEvent(PacketServer::sendVersionCheckS2C);
         } catch (NoClassDefFoundError | NoSuchFieldError | NoSuchMethodError ex) {

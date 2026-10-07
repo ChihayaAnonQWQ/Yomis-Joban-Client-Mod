@@ -130,7 +130,7 @@
   "gui.jsblock.pids_preset": "PIDS Preset",
   "gui.jsblock.subsidy": "$%d added to your balance, your balance is now $%d",
   "gui.jsblock.subsidy_timeout": "Please wait %d seconds before trying again.",
-  "gui.jsblock.subsidy_maxed":  "You have reached the maximum MTR Balance!",
+  "gui.jsblock.subsidy_maxed": "You have reached the maximum MTR Balance!",
   "gui.jsblock.subsidyScreen.price": "Subsidy Balance",
   "gui.jsblock.subsidyScreen.timeout": "Timeout (In Seconds)",
   "gui.jsblock.looper.use_network_audio": "Use Network Audio",
@@ -145,5 +145,12 @@
   "gui.jsblock.script_restriction.about": "PIDS presets are JavaScript files that ship inside resource packs.",
   "gui.jsblock.script_restriction.consequence": "With restrictions off, a preset script can use any Java class.",
   "gui.jsblock.script_restriction.caution": "That includes reading and writing files and starting programs.",
-  "gui.jsblock.script_restriction.note": "Resource packs arrive with servers and modpacks you do not control. Only turn this off if you trust every pack you load."
+  "gui.jsblock.script_restriction.note": "Resource packs arrive with servers and modpacks you do not control. Only turn this off if you trust every pack you load.",
+  "block.jsblock.pids_projector": "PIDS Projector",
+  "lore.jsblock.pids_projector": "A projector that projects PIDS information.",
+  "gui.jsblock.pids_projector": "PIDS Projector",
+  "gui.jsblock.pids_projector.preset": "Display format",
+  "gui.jsblock.pids_projector.offset": "Position offset (blocks)",
+  "gui.jsblock.pids_projector.rotate": "Rotation (degrees)",
+  "gui.jsblock.pids_projector.scale": "Scale"
 }

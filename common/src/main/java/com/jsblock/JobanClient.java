@@ -2,6 +2,7 @@ package com.jsblock;
 
 import com.jsblock.block.PIDS1A;
 import com.jsblock.block.PIDSLCD;
+import com.jsblock.block.PIDSProjector;
 import com.jsblock.block.PIDSRV;
 import com.jsblock.block.PIDSRVSIL1;
 import com.jsblock.block.PIDSRVSIL2;
@@ -110,6 +111,16 @@ public class JobanClient {
         });
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_LCD_TILE_ENTITY.get(), dispatcher -> new RenderLCDPIDS<>(dispatcher, PIDSLCD.TileEntityBlockPIDS4.MAX_ARRIVALS, 5.7F, 9.5F, 6, 11.5F, 21, true, false, false, 0xEFE29E, 0));
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_TILE_ENTITY.get(), dispatcher -> new RenderRVPIDS<>(dispatcher, PIDSRV.TileEntityBlockPIDSRV.MAX_ARRIVALS, 6, 8.25F, 6, 11F, 20, true, false, 0x000000, 0));
+        /* The projector draws the same presets with its own pose; see RenderProjectorPIDS. */
+        /* BISECT A: 暂时注释，验证是否是这一行导致 JobanClient 无法加载 */
+        /* The projector shares the RV renderer with a switch rather than getting a renderer class of
+           its own; the panel is placed by the block entity's own offset, rotation and scale. */
+        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_PROJECTOR_TILE_ENTITY.get(), dispatcher -> {
+            final RenderRVPIDS<PIDSProjector.TileEntityBlockPIDSProjector> projectorRenderer =
+                    new RenderRVPIDS<>(dispatcher, PIDSProjector.TileEntityBlockPIDSProjector.MAX_ARRIVALS, 6, 8.25F, 6, 11F, 20, true, false, 0x000000, 0);
+            projectorRenderer.setProjectorMode(true);
+            return projectorRenderer;
+        });
         /* The two SIL shapes are the slanted signs: YJCM's renderer leans them 22.5 degrees about
            the panel's X axis, and their halves (opposite FACING) come out mirrored into a V. A
            script panel has to be told both the lean and its own translate -- reusing RV's draws it
@@ -150,6 +161,7 @@ public class JobanClient {
         RegistryClient.registerNetworkReceiver(IPacketJoban.PACKET_OPEN_SUBSIDY_CONFIG_SCREEN, PacketClient::openSubsidyScreenS2C);
         RegistryClient.registerNetworkReceiver(IPacketJoban.PACKET_PLAY_NETWORK_SOUND, PacketClient::playNetworkSoundS2C);
         RegistryClient.registerNetworkReceiver(IPacketJoban.PACKET_OPEN_SOUND_LOOPER_SCREEN, PacketClient::openSoundLooperScreenS2C);
+        RegistryClient.registerNetworkReceiver(IPacketJoban.PACKET_OPEN_PIDS_PROJECTOR_SCREEN, PacketClient::openPIDSProjectorScreenS2C);
         RegistryClient.registerNetworkReceiver(IPacketJoban.PACKET_VERSION_CHECK, PacketClient::versionCheckS2C);
     }
 

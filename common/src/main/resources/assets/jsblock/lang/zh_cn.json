@@ -130,7 +130,7 @@
   "gui.jsblock.pids_preset": "显示格式",
   "gui.jsblock.subsidy": "已把 $%d 加入你的余额，你现在的余额是 $%d",
   "gui.jsblock.subsidy_timeout": "请等待%d秒后再重试。",
-  "gui.jsblock.subsidy_maxed":  "你的余额已满!",
+  "gui.jsblock.subsidy_maxed": "你的余额已满!",
   "gui.jsblock.subsidyScreen.price": "补贴金额",
   "gui.jsblock.subsidyScreen.timeout": "速度限制 (秒)",
   "gui.jsblock.looper.use_network_audio": "使用网络音频",
@@ -145,5 +145,12 @@
   "gui.jsblock.script_restriction.about": "PIDS 预设是随资源包分发的 JavaScript 文件。",
   "gui.jsblock.script_restriction.consequence": "关闭限制后，预设脚本可以使用任意 Java 类。",
   "gui.jsblock.script_restriction.caution": "这包括读写文件与启动外部程序。",
-  "gui.jsblock.script_restriction.note": "资源包可能来自你无法控制的服务器与整合包，请确认你信任所加载的每一个资源包。"
+  "gui.jsblock.script_restriction.note": "资源包可能来自你无法控制的服务器与整合包，请确认你信任所加载的每一个资源包。",
+  "block.jsblock.pids_projector": "乘客资讯显示屏投影仪",
+  "lore.jsblock.pids_projector": "一台把乘客资讯投到空中的投影仪。",
+  "gui.jsblock.pids_projector": "乘客资讯显示屏投影仪",
+  "gui.jsblock.pids_projector.preset": "显示格式",
+  "gui.jsblock.pids_projector.offset": "位置偏移 (格)",
+  "gui.jsblock.pids_projector.rotate": "旋转 (度)",
+  "gui.jsblock.pids_projector.scale": "大小"
 }

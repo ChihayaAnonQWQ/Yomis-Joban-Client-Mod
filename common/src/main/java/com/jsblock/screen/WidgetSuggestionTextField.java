@@ -137,10 +137,19 @@ public class WidgetSuggestionTextField extends WidgetBetterTextField {
         int listX = fieldX + width + 3;
         int listY = fieldY;
         if (listX + listWidth > Minecraft.getInstance().getWindow().getGuiScaledWidth() - 2) {
-            /* No room to the right -- underneath is the old behaviour, but with a background
-               this time, so whatever it lands on does not turn into unreadable overlap. */
-            listX = fieldX;
-            listY = fieldY + height + TEXT_FIELD_PADDING;
+            /* Right first, then left, then below.
+               
+               Below is the original behaviour and it is the worst of the three: on both PIDS config
+               screens and on the projector's, the fields sit directly under this one, so the list
+               lands on top of them and neither can be read. The left is usually wide open — on the
+               projector screen the whole panel is — so try that before giving up on the sides. */
+            final int leftX = fieldX - listWidth - 3;
+            if (leftX >= 2) {
+                listX = leftX;
+            } else {
+                listX = fieldX;
+                listY = fieldY + height + TEXT_FIELD_PADDING;
+            }
         }
 
         guiGraphics.fill(listX - 2, listY - 2, listX + listWidth, listY + listHeight, 0xE0101010);

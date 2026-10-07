@@ -43,7 +43,18 @@ import java.util.List;
 public abstract class BlockPIDSBaseHorizontal extends BlockDirectionalMapper implements EntityBlockMapper, IPIDS {
 
     public BlockPIDSBaseHorizontal() {
-        super(Properties.of().mapColor(MapColor.COLOR_GRAY).requiresCorrectToolForDrops().strength(2).lightLevel(state -> 5));
+        this(Properties.of().mapColor(MapColor.COLOR_GRAY).requiresCorrectToolForDrops().strength(2).lightLevel(state -> 5));
+    }
+
+    /**
+     * For a PIDS shape that needs its own block properties.
+     *
+     * <p>The projector is the reason: it draws nothing of its own, so without {@code noOcclusion} the
+     * game believes it is an opaque cube and culls the touching face of every block placed against
+     * it -- leaving a hole you can see the world through, because there is no model behind it.</p>
+     */
+    protected BlockPIDSBaseHorizontal(Properties properties) {
+        super(properties);
     }
 
     @Override
