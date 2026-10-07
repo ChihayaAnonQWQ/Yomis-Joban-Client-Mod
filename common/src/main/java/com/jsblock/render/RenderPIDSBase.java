@@ -367,10 +367,22 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * own values; the default is the RV set.</p>
      */
     /* Mutable so a renderer can adopt another PIDS shape's JCM 2.x literals at registration
-       time, without a subclass per shape. Defaults are RVPIDSRenderer's. */
+       time, without a subclass per shape. Defaults are RVPIDSRenderer's in X and Y; Z is
+       pulled in from JCM 2.x's -0.128 to suit MTR 3's block model, see below. */
     private float panelTranslateX = -0.21F;
     private float panelTranslateY = -0.14F;
-    private float panelTranslateZ = -0.128F;
+    /**
+     * Depth of the panel from the block centre, before {@link #SCRIPT_PANEL_OUTWARD}.
+     *
+     * <p>JCM 2.x uses {@code -0.128}, tuned against MTR 4's model, and this fork added
+     * {@code 0.02} on top of it — 0.148 blocks from the centre. MTR 3's own RV model
+     * ({@code pids_rv.json}) is a mount rather than a screen: a post, two side plates that run
+     * the block's full depth along the centre line, and a pole. The panel has to clear the
+     * plates, so the usable range is narrow and was measured in game rather than derived:
+     * 0.120 puts the panel inside the mount and the plates cut through it, 0.148 is clear but
+     * leaves a gap that reads as a floating board. This sits between the two.</p>
+     */
+    private float panelTranslateZ = -0.114F;
     private int canvasWidth = 136;
     private int canvasHeight = 76;
 

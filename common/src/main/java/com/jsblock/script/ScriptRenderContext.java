@@ -39,19 +39,34 @@ public class ScriptRenderContext {
 
 	/**
 	 * Depth step between successive draw calls, in <b>script units</b>, applied as a
-	 * <b>negative</b> offset.
+	 * <b>negative</b> offset. JCM 2.x's own value ({@code zOrderStep = 0.0002} in
+	 * {@code PIDSScriptContext}), in its unit.
 	 *
 	 * <p>The panel is drawn inside a space that has been rotated 180 degrees about Z, so
 	 * positive Z points <em>into</em> the block — the same reason YJCM's own renderers pull
 	 * their geometry out with a negative {@code SMALL_OFFSET}. Offsetting later calls
-	 * <em>outward</em> therefore both separates them from the background and keeps them clear
-	 * of the block's own screen face, instead of burying them behind it.</p>
+	 * <em>outward</em> therefore separates them from the background without burying them
+	 * behind it.</p>
 	 *
-	 * <p>One script unit is 1/96 block, so this is about 0.001 blocks per layer. JCM 2.x's own
-	 * 0.0002 gives 2e-6 blocks here, which is too little to stop the background, the advert and
-	 * the text from resolving differently frame to frame — that was the flicker.</p>
+	 * <h2>Why this went up by 500x and came back</h2>
+	 * <p>One script unit is 1/96 block, so JCM 2.x's step is 2e-6 blocks — far below anything
+	 * the depth buffer can resolve. That was fine in JCM 2.x, which queues its draws and replays
+	 * them in order. This port used to hand its quads to the block entity's buffer instead,
+	 * where they were sorted by distance and drawn as one batch, and 2e-6 blocks was too little
+	 * to keep the background, the advert and the text from resolving differently from frame to
+	 * frame: the panel flickered. The step was raised to {@code -0.1} (about 0.001 blocks) to
+	 * force the order.</p>
+	 *
+	 * <p>That workaround cost more than it bought. Every call moved a little further out, and a
+	 * preset that draws a row as several elements — {@code met_bus_stop} and most of the
+	 * Japanese-style packs do — accumulated it into a visible staircase, one row per step, with
+	 * forty calls reaching 4 cm.</p>
+	 *
+	 * <p>Quads are no longer batched at all ({@link #beginQuad}), so the order is the call order
+	 * and nothing competes for depth. The step is back to JCM 2.x's value: it only has to keep
+	 * the calls nominally apart, not to settle a sort.</p>
 	 */
-	public static final float Z_ORDER_STEP = -0.1F;
+	public static final float Z_ORDER_STEP = -0.0002F;
 
 	public final PoseStack matrices;
 	public final MultiBufferSource vertexConsumers;
