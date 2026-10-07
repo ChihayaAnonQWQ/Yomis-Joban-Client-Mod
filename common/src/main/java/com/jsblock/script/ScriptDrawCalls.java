@@ -408,12 +408,8 @@ public final class ScriptDrawCalls {
 			}
 			pushTransform(ctx, z);
 
-			/* The marquee's scroll belongs to the transform. Putting it in the string instead
-			   fed it to the fit-to-box measurement, and the text then changed size as it moved. */
-			final double marqueeShift = marqueeShift();
-			if (marqueeShift != 0) {
-				ctx.matrices.translate((float) marqueeShift, 0F, 0F);
-			}
+			/* No transform for the marquee: the scroll is a window onto the string now, so
+			   the run never leaves the box. See renderText. */
 
 			final IGui.HorizontalAlignment horizontalAlignment;
 			switch (alignment) {
@@ -496,37 +492,52 @@ public final class ScriptDrawCalls {
 		}
 
 		/**
-		 * @return the string to draw. The marquee's scroll is applied as a transform, not by
-		 * padding this with spaces -- see {@link #marqueeShift()}.
+		 * @return the part of the string the box can show, for a marquee.
+		 *
+		 * <p>JCM 2.x scrolls a marquee character by character and clips the run against its
+		 * box. This does the same by choosing the window rather than clipping pixels: leading
+		 * characters that have scrolled past the left edge are dropped, and characters that
+		 * would stick out of the right edge are trimmed. Sliding the whole run through a
+		 * transform instead -- which is what this did before -- simply drew it outside the
+		 * panel, since nothing in this render path clips to a rectangle.</p>
 		 */
 		private String renderText(ScriptRenderContext ctx) {
-			return textContent;
+			if (overflowMode != OVERFLOW_MARQUEE) {
+				return textContent;
+			}
+			final net.minecraft.client.gui.Font font = Minecraft.getInstance().font;
+			final double total = font.width(textContent);
+			if (total <= w) {
+				return textContent;
+			}
+
+			/* Travel far enough for the whole string to pass through the box once. */
+			final double scrolled = (total + w) * marqueeProgress();
+			int cut = 0;
+			while (cut < textContent.length() && font.width(textContent.substring(0, cut + 1)) < scrolled) {
+				cut++;
+			}
+
+			String visible = textContent.substring(cut);
+			while (!visible.isEmpty() && font.width(visible) > w) {
+				visible = visible.substring(0, visible.length() - 1);
+			}
+			return visible;
 		}
 
 		/**
-		 * How far the marquee has scrolled, in canvas units, applied as a translate.
+		 * The marquee's position in its cycle, from 0 to 1.
 		 *
-		 * <p>This used to be implemented by prepending up to {@code w} spaces to the string.
-		 * The padding is part of the string as far as the renderer is concerned, and
-		 * {@code drawStringWithFont} derives its fit-to-box scale from the measured width:
-		 * {@code scaleX = totalWidth / maxWidth}. So the more padding there was, the harder
-		 * the whole run was shrunk, and since the padding drains away as the cycle runs the
-		 * text <em>grew</em> from the moment it appeared.</p>
-		 *
-		 * <p>JCM 2.x scrolls character by character and clips against the box; this slides
-		 * the whole run, which reads the same for the short notices a PIDS shows.</p>
+		 * <p>JCM 2.x scrolls character by character; the duration defaults to ten ticks per
+		 * character, which is what the length-based default reproduces here.</p>
 		 */
-		private double marqueeShift() {
-			if (overflowMode != OVERFLOW_MARQUEE) {
-				return 0;
-			}
+		private double marqueeProgress() {
 			final double cycleTicks = marqueeDurationOverride > 0
 					? marqueeDurationOverride * 20D
 					: Math.max(20D, textContent.length() * 10D);
-			final double progress = marqueeProgressOverride >= 0
+			return marqueeProgressOverride >= 0
 					? marqueeProgressOverride
 					: (System.currentTimeMillis() / 50D % cycleTicks) / cycleTicks;
-			return w * (1D - progress);
 		}
 	}
 }
