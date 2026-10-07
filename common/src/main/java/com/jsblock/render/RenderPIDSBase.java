@@ -541,15 +541,50 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 matrices, vertexConsumers, immediate, facing, MAX_LIGHT_GLOWING,
                 canvasWidth, canvasHeight, scriptScale);
 
-        if (!program.renderOrFail(ctx, wrapper)) {
+        if (!program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper)) {
             /* The script threw, very likely before it reached its own background call, which is
-               why a script error used to leave the panel completely black. Show the preset
-               artwork instead so the failure is visible without being opaque. */
-            drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
+               why a script error used to leave the panel completely black.
+               
+               The most common cause by far is a preset that reads arrivals().get(i) past the end
+               without checking, which JCM 2.x answers with null and then breaks on as well -- the
+               CRT pack does it for the second train. The pack cannot be edited from here, so the
+               frame is retried once with a placeholder there instead: a board showing a
+               placeholder row beats a board showing nothing. The choice sticks for this program,
+               so the retry happens once and not every frame. A preset that guards, as HKR's
+               board does, never gets here and keeps its empty rows empty.
+               
+               Only a throw that mentions null is retried: that is what an unguarded
+               arrivals().get(i) produces ("Cannot call method ... of null"), and a failure with
+               some other cause should not be re-run under a different arrivals contract. */
+            if (mentionsNull(program.getLastError()) && program.adoptLenientArrivals()) {
+                ctx.restartDrawCalls();
+                if (program.renderOrFail(ctx, wrapper.withLenientArrivals())) {
+                    /* Drawn after all, so the player does not need the red line. The throw stays
+                       in the log for the preset author, and one line explains what was done. */
+                    program.discardFailureNotice();
+                    program.reportLenientFallback();
+                } else {
+                    /* The null was not an arrival -- sound_transit.js dies on a null station
+                       instead -- so the panel really is broken and says so. */
+                    program.flushFailureNotice();
+                    drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
+                }
+            } else {
+                program.flushFailureNotice();
+                drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
+            }
         }
 
         immediate.endBatch();
         matrices.popPose();
+    }
+
+    /**
+     * @return whether a script error reads like an access on a null arrival, which is what
+     * {@code pids.arrivals().get(i)} past the end produces ("Cannot call method ... of null").
+     */
+    private static boolean mentionsNull(String error) {
+        return error != null && error.toLowerCase(java.util.Locale.ROOT).contains("null");
     }
 
     /**

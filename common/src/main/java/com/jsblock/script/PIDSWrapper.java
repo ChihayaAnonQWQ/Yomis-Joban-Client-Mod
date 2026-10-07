@@ -40,6 +40,8 @@ public class PIDSWrapper {
 	private final boolean keyBlock;
 	/** Whether the block has its platform-number display switched off. */
 	private final boolean platformNumberHidden;
+	/** Whether {@code arrivals().get(i)} hands out a placeholder past the end; see {@link Arrivals}. */
+	private final boolean lenientArrivals;
 
 	/** Convenience for callers with no panel geometry to report; see the full constructor. */
 	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
@@ -51,6 +53,14 @@ public class PIDSWrapper {
 	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
 					   List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
 					   List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden) {
+		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList,
+				keyBlock, platformNumberHidden, false);
+	}
+
+	private PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
+						List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
+						List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden,
+						boolean lenientArrivals) {
 		this.type = type;
 		this.rows = rows;
 		this.width = width;
@@ -60,9 +70,28 @@ public class PIDSWrapper {
 		this.customMessages = customMessages == null ? new String[0] : customMessages;
 		this.rowHidden = rowHidden == null ? new boolean[0] : rowHidden;
 		this.scheduleList = scheduleList == null ? new ArrayList<>() : new ArrayList<>(scheduleList);
-		this.arrivals = new Arrivals(this.scheduleList);
+		this.arrivals = new Arrivals(this.scheduleList, lenientArrivals);
 		this.keyBlock = keyBlock;
 		this.platformNumberHidden = platformNumberHidden;
+		this.lenientArrivals = lenientArrivals;
+	}
+
+	/**
+	 * @return a copy of this wrapper whose {@code arrivals().get(i)} returns a placeholder past
+	 * the end instead of {@code null}.
+	 *
+	 * <p>Only handed to a script that has already proved it cannot cope with {@code null} — one
+	 * that threw when it indexed past the end. See
+	 * {@link ScriptEngine.Program#adoptLenientArrivals()}.</p>
+	 */
+	public PIDSWrapper withLenientArrivals() {
+		return new PIDSWrapper(type, rows, width, height, blockPos, platformIds, customMessages,
+				rowHidden, scheduleList, keyBlock, platformNumberHidden, true);
+	}
+
+	/** @return whether {@code arrivals().get(i)} hands out a placeholder past the end. */
+	public boolean isLenientArrivals() {
+		return lenientArrivals;
 	}
 
 	// ------------------------------------------------------------------
@@ -198,22 +227,36 @@ public class PIDSWrapper {
 	 * one minute — and that text cycles languages every 60 ticks, which is the flicker that
 	 * was reported next to it.</p>
 	 *
-	 * <p>A preset that indexes past the end without a guard now throws, exactly as it would in
-	 * JCM 2.x; the engine reports it once and falls back to the preset's background.</p>
+	 * <p>A preset that indexes past the end without a guard throws, exactly as it would in
+	 * JCM 2.x; the engine reports it once and falls back to the preset's background. If that
+	 * throw is the only thing standing between the preset and a working board, the engine
+	 * retries the frame with {@link PIDSWrapper#withLenientArrivals()} and keeps that choice
+	 * for the panel — a resource pack cannot be edited from here, and a board showing a
+	 * placeholder is better than a board showing nothing. Guarded presets never get there and
+	 * keep the strict, correct behaviour.</p>
 	 */
 	public static class Arrivals {
 		private final List<Arrival> arrivals;
+		/** Whether an index past the end yields the placeholder rather than {@code null}. */
+		private final boolean lenient;
 
-		Arrivals(List<ScheduleEntry> scheduleList) {
+		Arrivals(List<ScheduleEntry> scheduleList, boolean lenient) {
 			this.arrivals = new ArrayList<>();
 			for (ScheduleEntry entry : scheduleList) {
 				this.arrivals.add(new Arrival(entry));
 			}
+			this.lenient = lenient;
 		}
 
-		/** @return the arrival at {@code i}, or {@code null} when there is no such train */
+		/**
+		 * @return the arrival at {@code i}; {@code null} when there is no such train, unless
+		 * this wrapper is lenient, in which case a placeholder that answers every accessor
+		 */
 		public Arrival get(int i) {
-			return i >= 0 && i < arrivals.size() ? arrivals.get(i) : null;
+			if (i >= 0 && i < arrivals.size()) {
+				return arrivals.get(i);
+			}
+			return lenient ? Arrival.absent() : null;
 		}
 
 		public int size() {
@@ -269,16 +312,29 @@ public class PIDSWrapper {
 	 */
 	public static class Arrival {
 
+		/**
+		 * The object a <em>lenient</em> wrapper hands out past the end of the list.
+		 *
+		 * <p>It is deliberately not a real train: it reports the current time so a preset that
+		 * renders the row anyway says "arriving" rather than a train scheduled in 1970, it has
+		 * no route, and its destination is empty. That is also why the strict behaviour has to
+		 * stay the default — a guarded preset cannot tell this object from a real train except
+		 * by the empty fields, and HKR's board turned it into a row of "not in service".</p>
+		 */
+		private static final Arrival ABSENT = new Arrival(null);
+
 		private final ScheduleEntry entry;
 
 		Arrival(ScheduleEntry entry) {
 			this.entry = entry;
 		}
 
+		/** @return the placeholder handed out by a lenient wrapper */
+		static Arrival absent() {
+			return ABSENT;
+		}
+
 		public long arrivalTime() {
-			/* Past the end of the list this object is never handed out -- Arrivals.get returns
-			   null there -- so a null entry can only come from an internal caller. Report the
-			   current time rather than throwing out of a block-entity renderer. */
 			return entry == null ? System.currentTimeMillis() : entry.arrivalMillis;
 		}
 

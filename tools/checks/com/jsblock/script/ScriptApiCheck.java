@@ -101,6 +101,7 @@ public final class ScriptApiCheck {
 
 			failures += callLifecycle(cx, scope, "create", state, pids);
 			failures += checkArrivalsContract(pids);
+			failures += checkLenientRetryRenders(cx, scope, state, pids);
 
 			// render(ctx, state, pids) with a recording context, repeated to catch state drift.
 			List<String> recorded = Collections.emptyList();
@@ -164,11 +165,80 @@ public final class ScriptApiCheck {
 			System.out.println("FAIL arrivals().get(0) is null with " + size + " arrivals");
 			failures++;
 		}
+
+		/* The other half of the contract: the engine retries a throwing preset with this
+		   wrapper, so every accessor on the placeholder has to answer instead of throwing. */
+		final PIDSWrapper lenient = pids.withLenientArrivals();
+		if (!lenient.isLenientArrivals()) {
+			System.out.println("FAIL withLenientArrivals() did not produce a lenient wrapper");
+			failures++;
+		}
+		final PIDSWrapper.Arrival placeholder = lenient.arrivals().get(size);
+		if (placeholder == null) {
+			System.out.println("FAIL the lenient wrapper returns null past the end"
+					+ " -- a preset that does not check would throw again on the retry");
+			failures++;
+		} else {
+			try {
+				final long eta = placeholder.arrivalTime();
+				final String destination = placeholder.destination();
+				final int cars = placeholder.carCount();
+				final String routeNumber = placeholder.routeNumber();
+				final PIDSWrapper.RouteInfo route = placeholder.route();
+				final boolean departed = placeholder.departed();
+				if (destination == null || routeNumber == null) {
+					System.out.println("FAIL the placeholder returned a null string accessor");
+					failures++;
+				}
+				if (route != null) {
+					System.out.println("FAIL the placeholder resolved a route; a preset would take"
+							+ " the empty platform for a real train");
+					failures++;
+				}
+				System.out.println("OK   placeholder past the end: eta=" + (eta > 0 ? "set" : "unset")
+						+ " cars=" + cars + " route=none departed=" + departed);
+			} catch (Exception e) {
+				System.out.println("FAIL an accessor on the placeholder threw: " + e);
+				failures++;
+			}
+		}
+
 		if (failures == 0) {
 			System.out.println("OK   arrivals().get() is null past the end of a "
 					+ size + "-arrival list, as JCM 2.x documents");
 		}
 		return failures;
+	}
+
+	/**
+	 * Runs one frame with the fallback wrapper the engine retries with.
+	 *
+	 * <p>When a preset throws, {@code RenderPIDSBase} retries the frame with
+	 * {@code arrivals().get(i)} handing out a placeholder. That retry only helps if the preset
+	 * can actually finish against it, and the presets it exists for are exactly the ones that
+	 * cannot be run any other way — so this exercises it on every preset the check is given,
+	 * guarded or not. A guarded preset renders the same either way; an unguarded one is the
+	 * case being proved.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkLenientRetryRenders(Context cx, Scriptable scope, ScriptableObject state,
+												PIDSWrapper pids) {
+		final ScriptRenderContext ctx = ScriptRenderContext.dryRun(pids.width, pids.height, 1F);
+		final Object fn = scope.get("render", scope);
+		if (!(fn instanceof Function)) {
+			return 0;
+		}
+		try {
+			((Function) fn).call(cx, scope, scope, new Object[]{ctx, state, pids.withLenientArrivals()});
+			System.out.println("OK   render() also completes against the placeholder arrivals ("
+					+ ctx.recordedCalls().size() + " calls), which is what the engine retries with");
+			return 0;
+		} catch (Exception e) {
+			System.out.println("FAIL render() threw against the placeholder arrivals too, so the retry"
+					+ " cannot rescue this preset: " + e);
+			return 1;
+		}
 	}
 
 	/**

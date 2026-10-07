@@ -170,9 +170,23 @@ public class ScriptRenderContext {
 		this.zOrderStep = distance;
 	}
 
+	/**
+	 * Rewinds the per-call depth counter and forgets the calls recorded so far.
+	 *
+	 * <p>Used when a frame is retried — see {@code RenderPIDSBase.renderScripted}. Without it
+	 * the second attempt would stack a second copy of everything <em>behind</em> the copy the
+	 * first attempt had already drawn: the retry has to land on the same depths, where a
+	 * repeated call is the same geometry at the same place rather than a competing layer.</p>
+	 */
+	public void restartDrawCalls() {
+		drawCallIndex = 0;
+		if (traceCalls != null) {
+			traceCalls.clear();
+		}
+	}
+
 	/** {@code ctx.draw(call)} — draws a {@code Text}/{@code Texture}/{@code Rectangle}. */
-	public void draw(Object call) {
-		if (!(call instanceof ScriptDrawCall)) {
+	public void draw(Object call) {		if (!(call instanceof ScriptDrawCall)) {
 			throw new IllegalArgumentException(
 					"ctx.draw() expects a Text/Texture/Rectangle, got "
 							+ (call == null ? "null" : call.getClass().getName()));

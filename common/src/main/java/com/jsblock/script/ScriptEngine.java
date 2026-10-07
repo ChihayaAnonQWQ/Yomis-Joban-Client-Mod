@@ -466,6 +466,38 @@ public final class ScriptEngine {
 		private long lastTraceMillis;
 		/** Traces written so far, bounded by {@link #MAX_TRACES}. */
 		private int traceCount;
+		/** Set once the preset has thrown and been given the lenient arrivals wrapper. */
+		private volatile boolean lenientArrivals;
+		/** Set once the player has been told about the placeholder arrivals. */
+		private volatile boolean lenientReported;
+		/**
+		 * The chat line a failed render queued, held until the caller knows whether the frame
+		 * was recovered. See {@link #flushFailureNotice()} and {@link #discardFailureNotice()}.
+		 */
+		private volatile Runnable pendingFailureNotice;
+
+		/**
+		 * Sends the notice a failed render queued.
+		 *
+		 * <p>Called when the frame could not be recovered, so the player does need to know.</p>
+		 */
+		public void flushFailureNotice() {
+			final Runnable notice = pendingFailureNotice;
+			pendingFailureNotice = null;
+			if (notice != null) {
+				notice.run();
+			}
+		}
+
+		/**
+		 * Drops the notice a failed render queued, because the retry drew the frame after all.
+		 *
+		 * <p>The throw is still in the log — a preset author needs it — but the player watching
+		 * a working board does not need to be told about it.</p>
+		 */
+		public void discardFailureNotice() {
+			pendingFailureNotice = null;
+		}
 
 		Program(String key, String presetId, String displayName, net.minecraft.core.BlockPos blockPos, Scriptable scope) {
 			this.key = key;
@@ -518,15 +550,21 @@ public final class ScriptEngine {
 		}
 
 		private Object invoke(String function, ScriptRenderContext ctx, PIDSWrapper pids) {
-			return invokeInternal(function, ctx, pids, false);
+			return invokeInternal(function, ctx, pids, false, false);
 		}
 
 		/** @return {@code true} when the function ran without throwing. */
 		private boolean invokeChecked(String function, ScriptRenderContext ctx, PIDSWrapper pids) {
-			return (Boolean) invokeInternal(function, ctx, pids, true);
+			return (Boolean) invokeInternal(function, ctx, pids, true, true);
 		}
 
-		private Object invokeInternal(String function, ScriptRenderContext ctx, PIDSWrapper pids, boolean returnSuccess) {
+		/**
+		 * @param deferPlayerNotice hold the chat line back instead of sending it, for a failure
+		 *                          the caller may still recover from by retrying the frame; see
+		 *                          {@link #flushFailureNotice()} and {@link #discardFailureNotice()}
+		 */
+		private Object invokeInternal(String function, ScriptRenderContext ctx, PIDSWrapper pids,
+									  boolean returnSuccess, boolean deferPlayerNotice) {
 			if (!isDefined(function)) {
 				return returnSuccess ? Boolean.TRUE : Undefined.instance;
 			}
@@ -561,7 +599,14 @@ public final class ScriptEngine {
 								pids.arrivals().size(), pids.rows, pids.type);
 					}
 					Joban.LOGGER.error("[Joban Client]   (repeated failures of this kind are suppressed until reload)");
-					notifyPlayer(function, e);
+					final Runnable notice = () -> notifyPlayer(function, e);
+					if (deferPlayerNotice) {
+						/* The frame may still be drawn by the retry, and a red line about a panel
+						   that then paints itself is worse than no line at all. */
+						pendingFailureNotice = notice;
+					} else {
+						notice.run();
+					}
 				}
 				return returnSuccess ? Boolean.FALSE : Undefined.instance;
 			} finally {
@@ -606,6 +651,68 @@ public final class ScriptEngine {
 			final boolean success = invokeChecked("render", ctx, pids);
 			reportTrace(ctx, pids);
 			return success;
+		}
+
+		/** @return whether this program is currently handed the lenient arrivals wrapper. */
+		public boolean usesLenientArrivals() {
+			return lenientArrivals;
+		}
+
+		/**
+		 * Switches this program to the lenient arrivals wrapper, the first time only.
+		 *
+		 * <p>Called after a script threw while reading an arrival, so that the frame can be
+		 * retried with {@code arrivals().get(i)} handing out a placeholder instead of
+		 * {@code null}. The usual cause is a preset that indexes past the end without checking
+		 * — the CRT pack reaches for the second train on a platform that has one — which JCM 2.x
+		 * breaks on too. A resource pack cannot be fixed from here, so the choice is between a
+		 * board that shows something and a board that shows nothing, and this takes the first.
+		 * Guarded presets never reach this point, so they keep the strict behaviour that leaves
+		 * their empty rows blank.</p>
+		 *
+		 * <p>Nothing is reported here: the caller does not yet know whether the retry draws the
+		 * frame, and this wrapper only helps when the null was an arrival. The report is
+		 * {@link #reportLenientFallback()}, sent once the retry has actually worked.</p>
+		 *
+		 * @return {@code true} for the call that switched it, so the caller retries once and
+		 * not once per frame
+		 */
+		public boolean adoptLenientArrivals() {
+			synchronized (this) {
+				if (lenientArrivals) {
+					return false;
+				}
+				lenientArrivals = true;
+			}
+			return true;
+		}
+
+		/**
+		 * Says, once, that this preset is being drawn with the placeholder arrivals.
+		 *
+		 * <p>The throw is already in the log; this is the explanation for it, and the only line
+		 * the player sees — so it is sent when the retry has <em>worked</em>, and never for a
+		 * panel that is showing its background because the retry failed as well.</p>
+		 */
+		public void reportLenientFallback() {
+			if (lenientReported) {
+				return;
+			}
+			lenientReported = true;
+			Joban.LOGGER.warn("[Joban Client] PIDS preset \"{}\" reads arrivals().get(i) past the end of the"
+					+ " list without checking for null, which is what JCM 2.x returns there. It is now drawn"
+					+ " with a placeholder arrival, so its empty rows may show wording meant for an empty"
+					+ " train. Fix the preset to test for null.", key);
+			ERROR_NOTIFIER.queue(() -> {
+				final net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+				if (minecraft == null || minecraft.player == null) {
+					return;
+				}
+				minecraft.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+						"\u00a7e[Joban Client] \u00a7f" + getDisplayName()
+								+ " \u00a7easks for more trains than the platform has and does not check for it."
+								+ " Showing it with placeholder rows."), false);
+			});
 		}
 
 		/**
