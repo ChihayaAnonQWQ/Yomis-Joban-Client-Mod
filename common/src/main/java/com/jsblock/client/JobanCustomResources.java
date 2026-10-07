@@ -37,6 +37,9 @@ public class JobanCustomResources {
         /* Compiled PIDS programs hold a snapshot of the previous resource pack's scripts, so
            they must be dropped alongside the presets that reference them. */
         com.jsblock.script.ScriptEngine.reset();
+        /* The per-block diagnostics say which path draws a panel; they have to be re-armed or
+           a panel switched to a new preset would stay silent about it. */
+        com.jsblock.render.RenderPIDSBase.forgetReportedPanels();
 
         /* Add default preset */
         PIDSPresets.put("door_cls_apg", defaultPreset1);

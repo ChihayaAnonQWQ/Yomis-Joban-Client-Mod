@@ -264,24 +264,98 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * Finds the head block of the multi-block PIDS this block belongs to.
      *
      * <p>JCM 2.x stores the structure's origin on the block entity and renders from it, so
-     * that every half produces the same geometry. MTR 3's PIDS blocks do not carry that, but
-     * the head is reachable: walk backwards along the facing axis for as long as the blocks
-     * are the same type.</p>
+     * that every half produces the same geometry. MTR 3's PIDS blocks do not carry that, so
+     * the head has to be worked out from the world — and the two halves have to agree on the
+     * answer, or neither of them is the head and the panel is drawn twice.</p>
+     *
+     * <h2 Why the facing axis alone is not enough</h2>
+     * <p>{@code BlockPIDSBaseHorizontal.setPlacedBy} puts the second block at
+     * {@code pos.relative(FACING)} and gives it the <em>opposite</em> FACING. Walking
+     * backwards along the facing axis — what this method used to do — therefore finds the
+     * companion from the head but never from the second half: the second half's facing is
+     * reversed, so "backwards" points away from the panel. Both halves concluded they were
+     * the head and each drew the whole panel, one block apart. The log shows it as two
+     * "running script preset=pids_qlst" lines for the two blocks of one panel.</p>
+     *
+     * <h2 How the companion is identified</h2>
+     * <p>By the two properties {@code setPlacedBy} guarantees: same block, opposite FACING.
+     * All four horizontal directions are tried, because MTR's rule is {@code relative(FACING)}
+     * while a structure placed by other means may sit across the facing axis instead. Requiring
+     * the opposite facing is what keeps two <em>separate</em> panels that happen to touch —
+     * they face the same way — from being mistaken for one.</p>
      *
      * @return the head block's position, or {@code pos} if this is already the head
      */
     private static BlockPos headBlock(Level world, BlockPos pos, Direction facing) {
         final net.minecraft.world.level.block.Block block = world.getBlockState(pos).getBlock();
-        BlockPos current = pos;
-        final Direction backwards = facing.getOpposite();
-        for (int i = 0; i < 8; i++) {
-            final BlockPos candidate = current.relative(backwards);
-            if (world.getBlockState(candidate).getBlock() != block) {
-                return current;
+
+        BlockPos companion = null;
+        for (Direction direction : new Direction[]{
+                facing, facing.getOpposite(),
+                facing.getClockWise(), facing.getCounterClockWise()}) {
+            final BlockPos candidate = pos.relative(direction);
+            if (isCompanion(world, candidate, block, facing)) {
+                companion = candidate;
+                break;
             }
-            current = candidate;
         }
-        return current;
+        if (companion == null && world.getBlockState(pos.relative(facing)).getBlock() == block) {
+            /* The companion is where setPlacedBy would have put it, but without the reversed
+               FACING -- a pair that was built or rotated by other means. Take it: the panel
+               still overlaps this one, which is the whole reason for picking a head. */
+            companion = pos.relative(facing);
+        }
+
+        reportPanelShapeOnce(pos, facing, companion);
+
+        if (companion == null) {
+            return pos;
+        }
+        /* Neither half is marked as the origin — YJCM's copy of the block has no HALF
+           property, which is what MTR's own RenderPIDS uses to skip the lower half — so pick
+           the one both halves compute identically. */
+        return companion.compareTo(pos) < 0 ? companion : pos;
+    }
+
+    /**
+     * @return whether {@code candidate} is the other block of this panel: the same block, with
+     * the facing this one would have been given by {@code setPlacedBy}.
+     */
+    private static boolean isCompanion(Level world, BlockPos candidate, net.minecraft.world.level.block.Block block,
+                                       Direction facing) {
+        final net.minecraft.world.level.block.state.BlockState state = world.getBlockState(candidate);
+        if (state.getBlock() != block) {
+            return false;
+        }
+        final Direction candidateFacing = IBlock.getStatePropertySafe(state, HorizontalDirectionalBlock.FACING);
+        return candidateFacing == facing.getOpposite();
+    }
+
+    /** Panel shapes already reported, so the diagnostic does not repeat every frame. */
+    private static final java.util.Set<String> REPORTED_SHAPES = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Reports once which block of a multi-block panel was chosen as the head, and how.
+     *
+     * <p>A panel that renders twice leaves no trace on screen beyond a double image, and the
+     * shape of the structure is not visible from a screenshot. This records the block's own
+     * facing and the companion that was found, so "two renders" can be told apart from "one
+     * render and a texture that drew nothing".</p>
+     */
+    private static void reportPanelShapeOnce(BlockPos pos, Direction facing, BlockPos companion) {
+        final String key = pos.asLong() + "|" + facing + "|" + (companion == null ? "-" : companion.asLong());
+        if (REPORTED_SHAPES.add(key)) {
+            com.jsblock.Joban.LOGGER.info("[Joban Client] [PIDS] panel block at {}, {}, {} facing {}: companion {}",
+                    pos.getX(), pos.getY(), pos.getZ(), facing,
+                    companion == null ? "<none, single block>"
+                            : companion.getX() + ", " + companion.getY() + ", " + companion.getZ());
+        }
+    }
+
+    /** Drops the once-per-block diagnostics; called when resources reload. */
+    public static void forgetReportedPanels() {
+        REPORTED_PANELS.clear();
+        REPORTED_SHAPES.clear();
     }
 
     /**
