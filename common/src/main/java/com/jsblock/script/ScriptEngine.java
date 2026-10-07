@@ -44,7 +44,26 @@ public final class ScriptEngine {
 	/** Scripts currently being included, so a cycle cannot recurse forever. */
 	private static final Set<String> INCLUDE_STACK = new HashSet<>();
 
+	/**
+	 * Player-facing script failures, delivered from the client tick rather than from inside
+	 * a block-entity renderer. Port of JCM 2.x's {@code ScriptManager.scriptErrorNotifier}.
+	 */
+	public static final ScriptErrorNotifier ERROR_NOTIFIER = new ScriptErrorNotifier();
+
+	/** The Rhino class shutter. A live instance so the config screen can switch it off. */
+	private static final ScriptClassShutter SHUTTER = new ScriptClassShutter();
+
 	private ScriptEngine() {
+	}
+
+	/** @return the shutter guarding every script scope, so its enabled flag can be toggled. */
+	public static ScriptClassShutter shutter() {
+		return SHUTTER;
+	}
+
+	/** @return every compiled program. Used by the debug overlay; not a copy on purpose. */
+	public static java.util.Collection<Program> programs() {
+		return PROGRAMS.values();
 	}
 
 	// ==================================================================
@@ -68,14 +87,14 @@ public final class ScriptEngine {
 		if (cached != null) {
 			return cached;
 		}
-		final Program program = compile(key, preset);
+		final Program program = compile(key, preset, pos);
 		if (program != null) {
 			PROGRAMS.put(key, program);
 		}
 		return program;
 	}
 
-	private static Program compile(String key, PIDSPreset preset) {
+	private static Program compile(String key, PIDSPreset preset, net.minecraft.core.BlockPos pos) {
 		final Context cx = Context.enter();
 		try {
 			final Scriptable scope = newScope(cx);
@@ -91,7 +110,7 @@ public final class ScriptEngine {
 				return null;
 			}
 
-			return new Program(key, scope);
+			return new Program(key, preset.id, preset.displayName(), pos, scope);
 		} catch (Exception e) {
 			Joban.LOGGER.error("[Joban Client] Failed to compile PIDS scripts for \"" + preset.id + "\": " + e);
 			return null;
@@ -105,6 +124,8 @@ public final class ScriptEngine {
 		PROGRAMS.clear();
 		/* Script textures are keyed by the identifiers the old pack used, so they must go too. */
 		ScriptTextures.reset();
+		/* Undelivered failure notices describe programs that no longer exist. */
+		ERROR_NOTIFIER.reset();
 	}
 
 	/**
@@ -117,6 +138,8 @@ public final class ScriptEngine {
 	public static Scriptable newScope(Context cx) {
 		cx.setLanguageVersion(Context.VERSION_ES6);
 		cx.setOptimizationLevel(-1); // Rhino's interpreter: avoids class generation issues on a mod classloader.
+		/* The shutter has to be in place before a single line of pack-provided script runs. */
+		ScriptClassShutter.install(cx, SHUTTER);
 		final Scriptable scope = cx.initStandardObjects();
 		registerGlobals(cx, scope);
 		return scope;
@@ -423,14 +446,24 @@ public final class ScriptEngine {
 	public static final class Program {
 
 		private final String key;
+		private final String presetId;
+		private final String displayName;
+		private final net.minecraft.core.BlockPos blockPos;
 		private final Scriptable scope;
 		/** Per-program script state, the {@code state} argument JCM 2.x hands to the script. */
 		private final ScriptableObject state;
 		/** Distinct failures already reported, so a per-frame throw cannot flood the log. */
 		private final Set<String> reportedErrors = new HashSet<>();
+		/** Wall time of the last function call, for the debug overlay. */
+		private volatile double lastExecutionMs;
+		/** The most recent failure, or {@code null}; cleared by a call that succeeds. */
+		private volatile String lastError;
 
-		Program(String key, Scriptable scope) {
+		Program(String key, String presetId, String displayName, net.minecraft.core.BlockPos blockPos, Scriptable scope) {
 			this.key = key;
+			this.presetId = presetId;
+			this.displayName = displayName;
+			this.blockPos = blockPos;
 			this.scope = scope;
 			this.state = new ScriptableObject() {
 				@Override
@@ -445,6 +478,31 @@ public final class ScriptEngine {
 
 		public String getKey() {
 			return key;
+		}
+
+		/** @return the preset id this program was compiled for. */
+		public String getPresetId() {
+			return presetId;
+		}
+
+		/** @return the preset name shown to players, falling back to the id. */
+		public String getDisplayName() {
+			return displayName == null || displayName.isEmpty() ? presetId : displayName;
+		}
+
+		/** @return the block this program belongs to, or {@code null}. */
+		public net.minecraft.core.BlockPos getBlockPos() {
+			return blockPos;
+		}
+
+		/** @return milliseconds spent in the last {@code create}/{@code render}/{@code dispose} call. */
+		public double getLastExecutionMs() {
+			return lastExecutionMs;
+		}
+
+		/** @return the last failure message, or {@code null} when the last call succeeded. */
+		public String getLastError() {
+			return lastError;
 		}
 
 		private boolean isDefined(String function) {
@@ -465,21 +523,27 @@ public final class ScriptEngine {
 				return returnSuccess ? Boolean.TRUE : Undefined.instance;
 			}
 			final Context cx = Context.enter();
+			final long started = System.nanoTime();
 			try {
 				cx.setLanguageVersion(Context.VERSION_ES6);
 				cx.setOptimizationLevel(-1);
+				ScriptClassShutter.install(cx, SHUTTER);
 				final Object fn = scope.get(function, scope);
 				/* Always three arguments, so a script that ignores ctx (as create/dispose
 				   usually do) still receives its state and pids in the right positions. */
 				final Object[] args = new Object[]{ctx, state, pids};
 				final Object result = ((org.mozilla.javascript.Function) fn).call(cx, scope, scope, args);
+				lastExecutionMs = (System.nanoTime() - started) / 1_000_000.0;
+				lastError = null;
 				return returnSuccess ? Boolean.TRUE : result;
 			} catch (Exception e) {
 				/* A script that throws keeps throwing every frame -- the earlier build wrote
 				   ~8 MB of log in a few seconds this way. Report the first occurrence of each
 				   distinct failure with enough context to act on it, then stay quiet until the
 				   next resource reload recompiles the program. */
+				lastExecutionMs = (System.nanoTime() - started) / 1_000_000.0;
 				final String signature = function + "|" + e.getClass().getSimpleName() + "|" + e.getMessage();
+				lastError = function + "(): " + e.getMessage();
 				if (reportedErrors.add(signature)) {
 					Joban.LOGGER.error("[Joban Client] PIDS script \"{}\" threw in {}(): {}", key, function, e.toString());
 					if (pids != null) {
@@ -489,11 +553,36 @@ public final class ScriptEngine {
 								pids.arrivals().size(), pids.rows, pids.type);
 					}
 					Joban.LOGGER.error("[Joban Client]   (repeated failures of this kind are suppressed until reload)");
+					notifyPlayer(function, e);
 				}
 				return returnSuccess ? Boolean.FALSE : Undefined.instance;
 			} finally {
 				Context.exit();
 			}
+		}
+
+		/**
+		 * Queues a chat line telling the player this preset is broken.
+		 *
+		 * <p>JCM 2.x only does this in debug mode; here it is its own config switch, on by
+		 * default, because a PIDS panel that stays black is otherwise indistinguishable from
+		 * a preset that simply draws nothing. The message names the preset and the function,
+		 * not the stack trace -- the log has that.</p>
+		 */
+		private void notifyPlayer(String function, Exception e) {
+			if (!com.jsblock.client.ClientConfig.isScriptErrorNotificationEnabled()) {
+				return;
+			}
+			final String preset = displayName == null ? presetId : displayName;
+			final String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+			ERROR_NOTIFIER.queue(() -> {
+				final net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+				if (minecraft == null || minecraft.player == null) {
+					return;
+				}
+				minecraft.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+						"\u00a7c[Joban Client] PIDS \u00a7f" + preset + " \u00a7cthrew in " + function + "(): " + message), false);
+			});
 		}
 
 		/** Runs the script's {@code render(ctx, state, pids)} for one frame. */

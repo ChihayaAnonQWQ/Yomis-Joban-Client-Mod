@@ -137,5 +137,13 @@
   "gui.jsblock.looper.network_audio_url": "Network Audio URL",
   "item.jsblock.apg_door_drl": "APG (Disneyland Resorts Line Variants)",
   "item.jsblock.apg_glass_drl": "APG (Disneyland Resorts Line Variants)",
-  "item.jsblock.apg_glass_end_drl": "APG (Disneyland Resorts Line Variants)"
+  "item.jsblock.apg_glass_end_drl": "APG (Disneyland Resorts Line Variants)",
+  "gui.jsblock.config.script_error_notifications": "Report PIDS Script Errors in Chat",
+  "gui.jsblock.config.script_debug_mode": "Show PIDS Scripting Debug Overlay",
+  "gui.jsblock.config.script_restrictions_disabled": "Let PIDS Scripts Use Any Java Class (not recommended)",
+  "gui.jsblock.script_restriction.title": "Turn off script restrictions?",
+  "gui.jsblock.script_restriction.about": "PIDS presets are JavaScript files that ship inside resource packs.",
+  "gui.jsblock.script_restriction.consequence": "With restrictions off, a preset script can use any Java class.",
+  "gui.jsblock.script_restriction.caution": "That includes reading and writing files and starting programs.",
+  "gui.jsblock.script_restriction.note": "Resource packs arrive with servers and modpacks you do not control. Only turn this off if you trust every pack you load."
 }

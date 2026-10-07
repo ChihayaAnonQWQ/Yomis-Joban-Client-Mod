@@ -20,6 +20,18 @@ public class ClientConfig {
     private static boolean renderDisabled = false;
     private static boolean bypassServerVersionCheck = false;
     private static boolean debugMode = false;
+    /**
+     * Whether a PIDS script that throws should say so in chat.
+     *
+     * <p>On by default: a panel that stays black looks the same whether its script threw or
+     * simply draws nothing, and the log is not where a player looks. JCM 2.x ties this to its
+     * debug switch instead, which leaves exactly the player who needs it without it.</p>
+     */
+    private static boolean scriptErrorNotifications = true;
+    /** Whether to draw the PIDS scripting debug overlay. Off by default; it is a dev tool. */
+    private static boolean scriptDebugMode = false;
+    /** Whether to let PIDS scripts reach arbitrary Java classes. See {@code ScriptClassShutter}. */
+    private static boolean scriptRestrictionsDisabled = false;
 
     /**
      * This loads the config file and sets the variable internally
@@ -50,6 +62,20 @@ public class ClientConfig {
             if(jsonConfig.has("debugMode")) {
                 debugMode = jsonConfig.get("debugMode").getAsBoolean();
             }
+
+            /* PIDS scripting switches. Each falls back to its default when absent, so an
+               existing jsclient.json from an older build keeps working unchanged. */
+            if(jsonConfig.has("scriptErrorNotifications")) {
+                scriptErrorNotifications = jsonConfig.get("scriptErrorNotifications").getAsBoolean();
+            }
+
+            if(jsonConfig.has("scriptDebugMode")) {
+                scriptDebugMode = jsonConfig.get("scriptDebugMode").getAsBoolean();
+            }
+
+            if(jsonConfig.has("scriptRestrictionsDisabled")) {
+                scriptRestrictionsDisabled = jsonConfig.get("scriptRestrictionsDisabled").getAsBoolean();
+            }
         } catch (Exception e) {
             e.printStackTrace();
             try {
@@ -69,6 +95,9 @@ public class ClientConfig {
         jsonConfig.addProperty("renderDisabled", renderDisabled);
         jsonConfig.addProperty("bypassVersionCheck", bypassServerVersionCheck);
         jsonConfig.addProperty("debugMode", debugMode);
+        jsonConfig.addProperty("scriptErrorNotifications", scriptErrorNotifications);
+        jsonConfig.addProperty("scriptDebugMode", scriptDebugMode);
+        jsonConfig.addProperty("scriptRestrictionsDisabled", scriptRestrictionsDisabled);
 
         try {
             Files.write(Paths.get(CONFIG_PATH), Collections.singleton(new GsonBuilder().setPrettyPrinting().create().toJson(jsonConfig)));
@@ -102,5 +131,38 @@ public class ClientConfig {
     public static boolean setVersionCheckDisabled(boolean disabled) {
         bypassServerVersionCheck = disabled;
         return bypassServerVersionCheck;
+    }
+
+    /** @return whether a PIDS script that throws should be reported in chat. */
+    public static boolean isScriptErrorNotificationEnabled() {
+        return scriptErrorNotifications;
+    }
+
+    public static boolean setScriptErrorNotification(boolean enabled) {
+        scriptErrorNotifications = enabled;
+        return scriptErrorNotifications;
+    }
+
+    /** @return whether the PIDS scripting debug overlay is drawn. */
+    public static boolean getScriptDebugMode() {
+        return scriptDebugMode;
+    }
+
+    public static boolean setScriptDebugMode(boolean enabled) {
+        scriptDebugMode = enabled;
+        return scriptDebugMode;
+    }
+
+    /**
+     * @return whether PIDS scripts may reach arbitrary Java classes. When {@code true} the
+     * class shutter is off, exactly as JCM 2.x behaves once the player accepts the warning.
+     */
+    public static boolean getScriptRestrictionsDisabled() {
+        return scriptRestrictionsDisabled;
+    }
+
+    public static boolean setScriptRestrictionsDisabled(boolean disabled) {
+        scriptRestrictionsDisabled = disabled;
+        return scriptRestrictionsDisabled;
     }
 }

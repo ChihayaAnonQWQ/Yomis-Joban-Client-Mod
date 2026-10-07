@@ -32,6 +32,9 @@ public class ConfigScreen extends ConfigScreenBase implements IGui {
 	private boolean enableRendering;
 	private boolean ignoreVerCheck;
 	private boolean debugMode;
+	private boolean scriptErrorNotifications;
+	private boolean scriptDebugMode;
+	private boolean scriptRestrictionsDisabled;
 	private boolean initalized;
 
 	private static final Component TITLE_TEXT = Text.translatable("gui.jsblock.brand");
@@ -68,6 +71,36 @@ public class ConfigScreen extends ConfigScreenBase implements IGui {
 				button.setMessage(getBooleanButtonText(debugMode));
 			});
 
+			scriptErrorNotifications = ClientConfig.isScriptErrorNotificationEnabled();
+			scriptDebugMode = ClientConfig.getScriptDebugMode();
+			scriptRestrictionsDisabled = ClientConfig.getScriptRestrictionsDisabled();
+
+			registerConfigRowButton(Text.translatable("gui.jsblock.config.script_error_notifications"), getBooleanButtonText(scriptErrorNotifications), button -> {
+				scriptErrorNotifications = ClientConfig.setScriptErrorNotification(!scriptErrorNotifications);
+				button.setMessage(getBooleanButtonText(scriptErrorNotifications));
+			});
+
+			registerConfigRowButton(Text.translatable("gui.jsblock.config.script_debug_mode"), getBooleanButtonText(scriptDebugMode), button -> {
+				scriptDebugMode = ClientConfig.setScriptDebugMode(!scriptDebugMode);
+				button.setMessage(getBooleanButtonText(scriptDebugMode));
+			});
+
+			/* Turning the restrictions OFF is the direction that needs a warning, so that is
+			   the only direction that asks. Turning them back on is always safe and silent. */
+			registerConfigRowButton(Text.translatable("gui.jsblock.config.script_restrictions_disabled"), getBooleanButtonText(scriptRestrictionsDisabled), button -> {
+				if (!scriptRestrictionsDisabled) {
+					UtilitiesClient.setScreen(minecraft, new ScriptRestrictionWarningScreen(
+							() -> {
+								scriptRestrictionsDisabled = ClientConfig.setScriptRestrictionsDisabled(true);
+								button.setMessage(getBooleanButtonText(scriptRestrictionsDisabled));
+							},
+							() -> button.setMessage(getBooleanButtonText(scriptRestrictionsDisabled))));
+					return;
+				}
+				scriptRestrictionsDisabled = ClientConfig.setScriptRestrictionsDisabled(false);
+				button.setMessage(getBooleanButtonText(scriptRestrictionsDisabled));
+			});
+
 			Button saveButton = UtilitiesClient.newButton(Text.translatable("gui.jsblock.config.save"), button1 -> {
 				closeScreen(true);
 			});
@@ -80,6 +113,9 @@ public class ConfigScreen extends ConfigScreenBase implements IGui {
 				ClientConfig.setRenderDisabled(false);
 				ClientConfig.setVersionCheckDisabled(false);
 				ClientConfig.setDebugMode(false);
+				ClientConfig.setScriptErrorNotification(true);
+				ClientConfig.setScriptDebugMode(false);
+				ClientConfig.setScriptRestrictionsDisabled(false);
 				closeScreen(true);
 			});
 

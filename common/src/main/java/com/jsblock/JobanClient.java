@@ -18,6 +18,10 @@ import com.jsblock.render.RenderLCDPIDS;
 import com.jsblock.render.RenderRVPIDS;
 import com.jsblock.render.RenderSignalLight;
 import com.jsblock.render.RenderStationNameTall;
+import com.jsblock.script.ScriptDebugOverlay;
+import com.jsblock.script.ScriptEngine;
+import dev.architectury.event.events.client.ClientGuiEvent;
+import dev.architectury.event.events.client.ClientTickEvent;
 import dev.architectury.injectables.annotations.ExpectPlatform;
 import mtr.RegistryClient;
 import mtr.data.PIDSType;
@@ -38,6 +42,18 @@ public class JobanClient {
         if (ClientConfig.getRenderDisabled()) {
             Joban.LOGGER.info("[Joban Client] Rendering for all JCM blocks are disabled.");
         }
+
+        /* PIDS scripting.
+           The class shutter follows the config switch so that flipping it takes effect without
+           a restart. Script failures are delivered from the client tick rather than from the
+           block-entity renderer they were thrown in: that runs mid-frame, and for a block the
+           player may not even be looking at. The overlay draws into the HUD. */
+        ScriptEngine.shutter().setEnabled(!ClientConfig.getScriptRestrictionsDisabled());
+        ClientGuiEvent.RENDER_HUD.register((graphics, tickDelta) -> ScriptDebugOverlay.render(graphics));
+        ClientTickEvent.CLIENT_POST.register(client -> {
+            ScriptEngine.shutter().setEnabled(!ClientConfig.getScriptRestrictionsDisabled());
+            ScriptEngine.ERROR_NOTIFIER.flush();
+        });
 
         /* Allow transparent texture for the block */
         RegistryClient.registerBlockRenderType(RenderType.cutout(), Blocks.APG_DOOR_DRL.get());
