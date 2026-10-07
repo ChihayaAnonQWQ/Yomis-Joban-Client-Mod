@@ -1,3 +1,22 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-1.2
+
+## Compatible YMTR Version
+YMTR
+
+## Changes
+- **The panel no longer floats off its block.** JCM 2.x's panel translate (`-0.128` on Z) was
+  tuned against MTR 4's model; MTR 3's RV model is a mount rather than a screen — a base, two
+  side plates running the block's full depth along its centre line, and a pole — so the panel sat
+  0.148 blocks out and the gap was plain to see from the side. It is 0.134 now. The usable range
+  is narrow and was measured in game: 0.120 puts the panel inside the mount and the plates cut
+  through it, 0.148 clears it but reads as a floating board.
+- **Presets that draw a row as several elements no longer creep outward line by line.** The depth
+  step between draw calls was `-0.1` script units — 500 times JCM 2.x's `0.0002`, and 5 times it
+  in blocks — so forty calls accumulated 4 cm and `met_bus_stop` and the Japanese-style packs
+  came out as a staircase. The large step was a workaround for the flicker the old sorted batch
+  produced; quads are drawn one at a time now, in call order, so nothing competes for depth and
+  the step is back to JCM 2.x's value.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.1
 
 Version numbers follow the upstream release this fork is built on, with the JS-PIDS port revision
