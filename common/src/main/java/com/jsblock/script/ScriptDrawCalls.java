@@ -448,11 +448,22 @@ public final class ScriptDrawCalls {
 			}
 
 			final int textLight = naturalLight ? ctx.light : IGui.MAX_LIGHT_GLOWING;
-			/* sameSize = true is what makes JCM 2.x text fit: IDrawingJoban doubles CJK glyphs
-			   by default to compensate for MTR's half-height CJK glyphs, but that widening is
-			   YJCM's own convention and JCM 2.x presets are laid out without it. A five-glyph
-			   label at x=101 with scale 0.5 spans 101..146 doubled -- past the right edge of a
-			   133-wide canvas -- and 101..123 without, which is what the preset expects. */
+			/* sameSize = false, matching what the built-in renderers use.
+			 *
+			 * IDrawingJoban reserves twice the line height and width for a CJK run whichever
+			 * way this is set, and only the *drawing* reads the flag:
+			 *
+			 *     totalHeight += IGui.LINE_HEIGHT * (isCJK ? 2 : 1);
+			 *     final int extraScale = isCJK && !sameSize ? 2 : 1;
+			 *
+			 * So passing true reserves room for a double-size run and then draws it single
+			 * size: Chinese comes out at half the size it was laid out for, while Latin is
+			 * untouched because isCJK is false for it. That is exactly "the English is fine,
+			 * the Chinese is much smaller", seen in game.
+			 *
+			 * An earlier revision passed true to stop a five-glyph label overflowing its box,
+			 * but the box is what constrains it -- presets that care set size(...),
+			 * stretchXY() or scaleXY(), and drawStringWithFont scales the run to fit. */
 			IDrawingJoban.drawStringWithFont(
 					ctx.matrices,
 					Minecraft.getInstance().font,
@@ -469,7 +480,7 @@ public final class ScriptDrawCalls {
 					shadow,
 					textLight,
 					fontId == null ? DEFAULT_FONT : fontId,
-					true,
+					false,
 					null
 			);
 
