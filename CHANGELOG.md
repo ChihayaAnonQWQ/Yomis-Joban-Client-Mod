@@ -3,8 +3,8 @@
 Version numbers follow the upstream release this fork is built on, with the JS-PIDS port revision
 appended (`1.2.12-JSPIDS-1.0` was the first published port build).
 
-## Compatible MTR Version
-MTR 3.2.2 -> Latest
+## Compatible YMTR Version
+YMTR 3.2.2 -> Latest
 
 ## Changes
 - **Overlays drawn by a PIDS preset no longer vanish.** Badges, platform circles and weather
@@ -29,8 +29,8 @@ MTR 3.2.2 -> Latest
 
 # Yomi's Joban Client Mod 1.2.4 has been released
 
-## Compatible MTR Version
-MTR 3.2.2 -> Latest
+## Compatible YMTR Version
+YMTR 3.2.2 -> Latest
 
 ## Changes
 - Compatible with YMTR.
