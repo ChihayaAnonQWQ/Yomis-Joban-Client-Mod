@@ -412,7 +412,56 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 | `ScriptShutterCheck`（24 条规则断言 + 4 个真实作用域探针） | ✅ **SHUTTER OK** —— 四个被禁类在**使用**时全部被拒 | 本次运行 |
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
 | 脚本沙箱（ClassShutter）开启后仍能跑通全部 16 个用例 | ✅ 通过（首轮 16/16 失败，见 §4.6，修好后全绿） | 本次运行 |
-| 游戏内视觉效果 | ✅ LCD / RV / 1A 均已实机加载确认 | 前序会话（本机 `Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） |
+| **实机运行**（本次会话，`Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） | ✅ 脚本管线跑通，4 个不同资源包预设同屏渲染，聊天栏无报错 | 见 §7.8 |
+
+### 7.8 实机验证记录（本次会话）
+
+游戏由 `Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3` 启动，装的是本分支构建出的
+`MTR-YJCM-1.20-1.2.12.jar`，进入一个已有 PIDS 方块的世界。三条独立证据：
+
+**1. 脚本管线在实机里跑通，画布正是 JCM 2.x 的字面量**
+
+```
+[PIDS] running script preset=nanbin_crt_pids_1 canvas=136x76 scriptScale=1.0 outward=0.02 canvasArrivals=1 rows=4 at -13, -58, 3
+[PIDS] client data: routes=1 platforms=3 stations=3 platformIdToStation=3
+```
+
+`canvas=136x76` 是 `RVPIDSRenderer` 的硬编码字面量（§4.5），说明画布不是被推导出来的。
+`canvasArrivals=0` 的行也出现过——空站台不抛异常。
+
+**2. 四个不同的资源包脚本预设同屏渲染。** 截图里同时可见：三块 HKR RV 型面板
+（`HKR_PIDS`，路号 11514、时钟 20:20）、右上「本月乘車優惠券 / 賞月畫」、
+右中青色 CRT 型（`nanbin_crt_pids_1`，「歡迎使用南濱創意系列模組」、20:19、即將到達）、
+右下另一块 HKR 面板。没有黑屏，没有失败回退。
+
+**3. 上一节加的失败提示确实工作——并且当场抓出一个只有实机才暴露的 bug。**
+
+聊天栏出现红字：
+
+```
+[Joban Client] PIDS CRT PIDS (Style 1) threw in create(): Cannot overwrite existing ClassShutter object
+```
+
+`ScriptEngine.programFor()` **在同一个已进入的 Context 里**先编译、再构造 `Program`，
+而 `Program` 的构造函数会调 `create()`——于是再次进入同一个 Context 并二次安装白名单。
+Rhino 拒绝二次安装时抛的是 **`SecurityException`**（不是它自己文档暗示的
+`IllegalStateException`），而 `install()` 只 catch 了后者，异常就逃进了脚本的 `create()`，
+被当成预设失败报出来。面板随后仍画对了，所以这个问题**只有看聊天栏才会发现**。
+
+> 既有的三个检查都看不见它：`ScriptApiCheck` 和 `ScriptShutterCheck` 都是
+> `newScope()` 之后直接求值，从不走「先编译、再构造 Program」这条会嵌套 Context 的路径。
+> 修好后 `ScriptShutterCheck` 增加了这一条：在活着的 Context 上二次安装，断言它**被拒绝
+> 且被处理**，并断言此后白名单仍在拦截 `java.lang.System`。
+
+**遗留观察（非本分支的问题）**：日志里每个 CRT 面板都会有一条
+
+```
+[Joban Client] PIDS script nanbin:pids/scripts/crt_pids_1.js is missing or empty.
+```
+
+这是资源包自身的旧 bug——`crt_pids_1.js` 第一行 `include(Resources.id("nanbin:pids/scripts/crt_pids_1.js"))`
+是个路径写错的自引用（文件实际在 `pids/script/` 单数目录下）。`yjcm-recon\pids-fixed\`
+里那份修好的副本删掉了这一行。不影响渲染，报一条 WARN。
 
 被 `ScriptApiCheck` 实际跑过的预设：
 
