@@ -770,11 +770,11 @@ public String name() { return station.name == null ? "" : station.name; }
 | 类 | 字段 | 谁在读 |
 |---|---|---|
 | `StationInfo` | `name` / `id` / `zone` | HKR 的线路图（`currentStation.name`）|
-| `RouteStopInfo` | `station` / `route` | c10e LCD 包（`xl[i].station.name`、`routePlats[i].station.name`）|
-| `RouteInfo` | `name` | c10e（`r.name`）|
+| `RouteStopInfo` | `station` / `route` | MTR 4 形状的停靠点写法（`stop.station.name`）|
+| `RouteInfo` | `name` | 同上（`route.name`）|
 
 **这一类错误值得记一笔**：把 133 个脚本（所有资源包 + 内置 + recon）扫一遍「字段式访问」就能定位，
-命中恰好是 HKR 三个文件 + c10e 三个文件；而 MTR 自家的列车脚本（`train.siding().name`、
+命中集中在少数几个文件；而 MTR 自家的列车脚本（`train.siding().name`、
 `stationList[i].station.name`）走的是 MTR 的 API，与我们无关。
 
 **10. 车门即将关闭永远不出现：`departureTime()` 与停站时长的单位**
