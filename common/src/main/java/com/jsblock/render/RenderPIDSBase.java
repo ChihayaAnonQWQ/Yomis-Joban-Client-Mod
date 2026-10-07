@@ -411,10 +411,26 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final BlockPos pos = entity.getBlockPos();
         final Direction facing = IBlock.getStatePropertySafe(world, pos, HorizontalDirectionalBlock.FACING);
 
-        /* Keyed by position: JCM 2.x gives each PIDS its own script state, see
-           ScriptEngine.programFor. Both halves of a panel would otherwise share one
-           state.cycleTimer and disagree about which view they are showing. */
-        final com.jsblock.script.ScriptEngine.Program program = com.jsblock.script.ScriptEngine.programFor(preset, pos);
+        /* One panel, one draw.
+         *
+         * A two-block PIDS has its renderer called once per half, at positions one block
+         * apart, and both calls drew the whole panel at almost the same depth. That is
+         * z-fighting, and on screen it reads as the panel's text flickering.
+         *
+         * JCM 2.x has no such problem because its block entity stores the structure origin
+         * and every half renders from it. MTR 3's PIDS block entities carry no origin, so the
+         * head is found instead by walking backwards along the facing axis; see headBlock.
+         *
+         * The program is keyed by the head position, not by this block, so a panel keeps one
+         * script state. The key is per-panel rather than per-preset so that two separate
+         * panels do not share a state.cycleTimer -- and both halves of one panel must share
+         * it, which is exactly what keying by the head gives. */
+        final BlockPos headPos = headBlock(world, pos, facing);
+        if (!headPos.equals(pos)) {
+            return;
+        }
+
+        final com.jsblock.script.ScriptEngine.Program program = com.jsblock.script.ScriptEngine.programFor(preset, headPos);
         if (program == null) {
             return;
         }
