@@ -1,3 +1,22 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-1.3
+
+## Compatible YMTR Version
+YMTR
+
+## Changes
+- **The slanted SIL signs work.** The two SIL shapes are V-shaped: their halves face opposite ways,
+  so one 22.5-degree lean comes out mirrored and forms the V. YJCM's own renderer leans the panel
+  with `mulPose(XP.rotationDegrees(rotation))` between the facing rotations and the panel
+  translate; this port never did, so a script panel was drawn flat and straight through the middle
+  of the V. The lean is supported now, and the two SIL shapes carry their own translate —
+  (-0.21, -0.410, -0.520) against the plain RV's (-0.21, -0.14, -0.114) — because YJCM's renderer
+  is handed (startY 11.7, startZ 2.45, rotation 22.5) for them and (8.25, 6, 0) for the plain one.
+  Every one of those numbers was measured in game; the table is in the port document.
+- **The preset field completes on Tab.** It suggested ids and Enter filled one in, but the ids are
+  long and the list could not be walked. Tab takes the next candidate and keeps walking on repeat,
+  wrapping at the end, and typing by hand resets the walk — the behaviour vanilla's command
+  suggestions have, which this widget was written to imitate.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.2
 
 ## Compatible YMTR Version
