@@ -258,6 +258,45 @@ Z 值另外按实机观感微调过（面板要离开方块表面，否则会与
 RV 与 LCD 见 `RenderPIDSBase` / `RenderLCDPIDS`，1A 为 `-0.112`（在 JCM 2.x 的
 `-0.130` 基础上向方块内侧收回 0.018）。
 
+### 4.6 脚本沙箱与可见性（JCM 2.x 真有的那部分 GUI）
+
+**JCM 2.x 并没有 PIDS 脚本文本编辑器。** PIDS 预设在那里也是资源包文件、运行时只读；
+它的 `mtrscripting/mod/gui/` 下是 EyeCandy（MTR 4 独有的积木方块）的配置界面，而
+`PIDSPresetScreen` 只是预设选择列表（等价物 YJCM 本来就有）。所以这里移植的是
+JCM 2.x 围绕脚本真正具备的四件东西：
+
+| 本分支 | JCM 2.x 对应物 | 作用 |
+|---|---|---|
+| `ScriptClassShutter` | `MTRClassShutter` | Rhino 类访问白名单。预设来自资源包，资源包来自服务器与整合包，**预设是不可信代码**——没有它，`java.nio.file.Files` 离脚本只有一次调用 |
+| `ScriptRestrictionWarningScreen` | 同名 | 关闭限制前的确认界面，只在「关闭」这个方向弹出 |
+| `ScriptErrorNotifier` | 同名 | 失败的面向玩家投递队列 |
+| `ScriptDebugOverlay` | `MTRScriptDebugOverlay` | 调试浮层：存活脚本实例、方块坐标、执行耗时、哪一个在抛异常 |
+
+**为什么失败提示要排队而不是直接发聊天栏**：脚本是在方块实体渲染里抛的，那时渲染线程
+正在出帧，而且那块方块玩家可能根本看不见。所以失败在发生处写日志，面向玩家的那一半
+入队，由客户端 tick 投递。
+
+**为什么失败提示默认开着**：JCM 2.x 把它绑在调试开关上，结果是唯一需要它的人（预设坏了、
+面板全黑的普通玩家）反而看不到。这里它是独立开关，默认开。
+
+白名单是 JCM 2.x 的，包名从 `com.lx862.mtrscripting` 换到 `com.jsblock.script`；
+deny 规则只在 allow 规则命中之后才查，所以 `java.lang.*` 可以放行而
+`java.lang.System`、`java.lang.Class` 仍不可及。
+
+> **无头检查在这里立刻见效**：ClassShutter 一打开，16 个用例**全部**失败，报
+> `Access to Java class "net.minecraft.resources.ResourceLocation" is prohibited`。
+> `Resources.id()` 返回这个类型，而 Rhino 连返回值包装也要过白名单——连随 mod 附带的
+> `pids_util.js` 都加载不了。修法是**精确放行这一个类**并写明理由，而不是为了省事放开
+> 整个 `net.minecraft.*`（那等于把 Minecraft 的文件与网络访问一并交给脚本）。
+
+配置项（`config/jsclient.json`，配置界面里可切换）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `scriptErrorNotifications` | `true` | 脚本抛异常时在聊天栏提示 |
+| `scriptDebugMode` | `false` | 绘制脚本调试浮层 |
+| `scriptRestrictionsDisabled` | `false` | 关闭类访问限制（会先弹警告界面） |
+
 ---
 
 ## 5. 顺带修复的三个上游缺陷
@@ -364,9 +403,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 
 | 项目 | 状态 | 证据 |
 |---|---|---|
-| `:common` / `:fabric` / `:forge` 全量 `gradle build`（含 `mergeJars`） | ✅ **BUILD SUCCESSFUL**（35s，6 executed / 15 up-to-date） | 本次运行 |
+| `:common` / `:fabric` / `:forge` 全量 `gradle build`（含 `mergeJars`） | ✅ **BUILD SUCCESSFUL** | 本次运行 |
 | `PIDSPresetCheck` | ✅ **ALL CHECKS PASSED** | 本次运行 |
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
+| 脚本沙箱（ClassShutter）开启后仍能跑通全部 16 个用例 | ✅ 通过（首轮 16/16 失败，见 §4.6，修好后全绿） | 本次运行 |
 | 游戏内视觉效果 | ✅ LCD / RV / 1A 均已实机加载确认 | 前序会话（本机 `Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） |
 
 被 `ScriptApiCheck` 实际跑过的预设：
@@ -417,7 +457,9 @@ public float panelLeft() { return startX - panelWidth / 2F; }   // 错的
 - `PIDSComponent.COMPONENTS` 只含 JCM 那 11 种组件；组件树里若有未实现的类型，
   加载时会**一次性告警**并跳过该元素，其余组件照常渲染，不会整份预设失败。
 - 脚本子系统目前只服务 PIDS。JCM 2.x 的 `mtrscripting` 还带 Lift / Vehicle / EyeCandy
-  三套脚本绑定，本分支**未移植**，也没有移植其 GUI 脚本编辑器。
+  三套脚本绑定，本分支**未移植**。
+- JCM 2.x 没有 PIDS 脚本文本编辑器，本分支也没有：改预设仍然是编辑资源包里的 `.js`。
+  画面上的 GUI 只有 §4.6 那四件（沙箱开关、限制警告、失败提示、调试浮层）。
 - 脚本的 GPU 绘制路径只有实机才能验证；无头检查覆盖不到像素结果。
 
 ---
