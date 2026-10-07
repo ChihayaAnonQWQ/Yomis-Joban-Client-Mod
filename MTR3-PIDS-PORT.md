@@ -684,6 +684,12 @@ public float panelLeft() { return startX - panelWidth / 2F; }   // 错的
 
 ### 7.6 已知限制
 
+- **1A 型「乘客资讯显示屏」（`jsblock:pids_1a`）在「未选择预设」时会套用铁路愿景（RV PIDS）
+  的版式。** 为了让 1A 接入预设体系，它的渲染器从 MTR 自带的 `RenderPIDS<>` 换成了 YJCM 的
+  `RenderRVPIDS<>`（见附录），而没选预设时走的就是后者内置的那套版式，与方块型号无关——
+  它是这次强制改动带来的副作用，不是渲染错位。**规避方法**：用刷子右键该方块，把「PIDS 预设」
+  改成任意资源包提供的显示格式；之后面板由脚本/布局路径绘制。
+  （`jsblock:pids_4`（LCD）与 `jsblock:pids_rv` 本来就是各自的渲染器，不受影响。）
 - `weather_icon` 不附带任何贴图——MTR 3/YJCM 没有可复用的天气美术资源，
   必须由预设提供三张纹理，否则该组件自动跳过。
 - `PIDSComponent.COMPONENTS` 只含 JCM 那 11 种组件；组件树里若有未实现的类型，

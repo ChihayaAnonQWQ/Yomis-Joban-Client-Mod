@@ -98,6 +98,21 @@ Both PIDS config screens share the widget, so both are fixed.
 
 ![The PIDS preset list drawn beside its field, with the row labels left readable](docs/pids-config-preset-list.png)
 
+### Known issues
+
+- **A 1A PIDS with no preset selected is drawn in the Railway Vision PIDS style.** The 1A
+  passenger information display had to be moved onto YJCM's RV renderer for it to take part
+  in the preset system, and a block with no preset selected falls back to that renderer's own
+  layout. **Workaround:** use the brush on the block and switch "PIDS Preset" to any display
+  format a resource pack provides — from then on the panel is drawn by the preset, not by the
+  built-in layout.
+
+![A 1A PIDS with no preset selected, drawn in the Railway Vision PIDS style](docs/pids-1a-no-preset-close.png)
+
+The light blue striped boards in the station below are the ones with no preset selected:
+
+![The same boards among the rest of the station](docs/pids-1a-no-preset-station.png)
+
 ### Building MTR 3 against this branch
 
 MTR's development jars (`MTR-common-1.20-*-dev.jar`) are 404, so the build uses a
