@@ -1,3 +1,23 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-1.5
+
+## Compatible MTR Version
+MTR
+
+## Changes
+- **The PIDS Projector, ported from JCM 2.x.** One invisible block that projects a preset's panel
+  into the air at an offset, a rotation and a scale of your choosing, with a configuration screen of
+  its own: the preset (with the same suggestion list as every other PIDS screen), position offset,
+  rotation, scale, and MTR's platform filter. It draws ordinary presets, so every scripted one works
+  on it, pixelation included, and the direct render path is untouched.
+- **A guide frame.** With a brush in hand the panel's edges are outlined, so a projector can be
+  aimed without guessing where its panel will land.
+
+## Known issue
+- The projector screen's number fields show their value only after being clicked. The values are
+  correct — they are saved and applied either way — but the text is not drawn until the field has
+  focus. The widget involved is MTR's own, and the two obvious causes (setting the value in the
+  constructor, and setting it in `init()`) have both been tried. To be fixed separately.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.4
 
 ## Compatible MTR Version
