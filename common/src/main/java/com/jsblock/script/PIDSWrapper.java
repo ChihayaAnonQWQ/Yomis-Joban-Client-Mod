@@ -198,8 +198,30 @@ public class PIDSWrapper {
 		return station == null || station.name == null ? "" : station.name;
 	}
 
+	/**
+	 * The platform this panel is standing at.
+	 *
+	 * <p>MTR's own answer, from {@code IPIDS.TileEntityPIDS#getPlatformId}: the platform closest
+	 * to the block, with the block entity's {@code platformIds} not consulted at all.</p>
+	 *
+	 * <p>This used to answer {@code platformIds.get(0)} whenever that set was non-empty, and the
+	 * set is a <b>{@code Set<Long>}</b> — copying it into a list gives hash order, not anything
+	 * meaningful. For a panel that serves several platforms the id that happened to land first
+	 * often belongs to a station at the other end of the line, so {@code pids.station()} named
+	 * that station instead of the one the panel is at. HKR's route-map strip starts its three
+	 * stops from the current station, so it then drew the line's opening stations — and the
+	 * platform number, the "arriving at this station" wording and anything else keyed off the
+	 * current station were wrong in the same way.</p>
+	 *
+	 * <p>The set is still the fallback for the case MTR cannot answer: no platform near enough
+	 * for {@code getClosePlatformId} to pick one.</p>
+	 */
 	private long primaryPlatformId() {
-		return platformIds.isEmpty() ? PIDSData.closestPlatformId(blockPos) : platformIds.get(0);
+		final long closest = PIDSData.closestPlatformId(blockPos);
+		if (closest != 0) {
+			return closest;
+		}
+		return platformIds.isEmpty() ? 0 : platformIds.get(0);
 	}
 
 	// ==================================================================

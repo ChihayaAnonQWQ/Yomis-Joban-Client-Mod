@@ -125,9 +125,22 @@ public class PIDSContext {
 		return row >= 0 && row < customMessages.length && customMessages[row] != null ? customMessages[row] : "";
 	}
 
-	/** @return the platform id this PIDS primarily watches, or {@code 0} when unknown. */
+	/**
+	 * @return the platform id this PIDS primarily watches, or {@code 0} when unknown
+	 *
+	 * <p>MTR's rule, from {@code IPIDS.TileEntityPIDS#getPlatformId}: the platform closest to
+	 * the block. {@code platformIds} is a {@code Set<Long>}, so its first element in list form
+	 * is whatever hash order produced, and for a panel serving several platforms that is
+	 * regularly a station elsewhere on the line — {@code PlatformComponent} and
+	 * {@code StationNameComponent} then named the wrong station. The set is only the fallback
+	 * for when no platform is close enough to be found.</p>
+	 */
 	public long primaryPlatformId() {
-		return platformIds.isEmpty() ? PIDSData.closestPlatformId(pos) : platformIds.get(0);
+		final long closest = PIDSData.closestPlatformId(pos);
+		if (closest != 0) {
+			return closest;
+		}
+		return platformIds.isEmpty() ? 0 : platformIds.get(0);
 	}
 
 	/** @return a mutable copy of the platform ids, never {@code null}. */

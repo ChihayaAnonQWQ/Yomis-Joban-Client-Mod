@@ -78,6 +78,11 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
             final List<ScheduleEntry> scheduleList = new ArrayList<>();
             long primaryPlatformId = 0;
 
+            /* The panel's own platform is the one nearest the block -- MTR's rule, see
+               IPIDS.TileEntityPIDS#getPlatformId. platformIds is a Set<Long>, so taking its
+               first element picked an arbitrary platform, often a station at the other end of
+               the line; it is used here only to gather schedules and as the fallback. */
+            primaryPlatformId = RailwayData.getClosePlatformId(ClientData.PLATFORMS, ClientData.DATA_CACHE, pos);
             if (!platformIds.isEmpty()) {
                 for (long platformId : platformIds) {
                     final Set<ScheduleEntry> schedules = ClientData.SCHEDULES_FOR_PLATFORM.get(platformId);
@@ -85,11 +90,11 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                         scheduleList.addAll(schedules);
                     }
                 }
-                primaryPlatformId = platformIds.get(0);
+                if (primaryPlatformId == 0) {
+                    primaryPlatformId = platformIds.get(0);
+                }
             } else {
-                final long closestPlatformId = RailwayData.getClosePlatformId(ClientData.PLATFORMS, ClientData.DATA_CACHE, pos);
-                primaryPlatformId = closestPlatformId;
-                final Set<ScheduleEntry> schedules = ClientData.SCHEDULES_FOR_PLATFORM.get(closestPlatformId);
+                final Set<ScheduleEntry> schedules = ClientData.SCHEDULES_FOR_PLATFORM.get(primaryPlatformId);
                 if (schedules != null) {
                     scheduleList.addAll(schedules);
                 }
