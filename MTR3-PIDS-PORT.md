@@ -383,7 +383,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
 | 检查 | 覆盖内容 |
 |---|---|
 | `PIDSPresetCheck` | 三个附带布局预设的解析（逐条打印组件树）、未知组件的降级、**显示行映射**语义（4 组用例比对内置渲染器的推进规则） |
+| `ScriptShutterCheck` | 脚本沙箱。24 条白名单/黑名单断言，再用**真实引擎作用域**去够四个被禁类（见 §7.7） |
 | `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画 |
+
+沙箱检查排在脚本检查**之前**：白名单若写错，下面每个脚本要么被拦住、要么毫无防护，
+先看到沙箱那一块就能直接定位，不必从 16 个脚本失败里反推。
 
 `ScriptApiCheck` 默认对随 mod 附带的 `pids_1a.js` 跑 **0 / 1 / 2 / 4 四种班次数**
 （0 是空站台，4 超过所有 PIDS 的行数），并且每个用例跑 2 帧以捕捉状态漂移。
@@ -405,6 +409,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 |---|---|---|
 | `:common` / `:fabric` / `:forge` 全量 `gradle build`（含 `mergeJars`） | ✅ **BUILD SUCCESSFUL** | 本次运行 |
 | `PIDSPresetCheck` | ✅ **ALL CHECKS PASSED** | 本次运行 |
+| `ScriptShutterCheck`（24 条规则断言 + 4 个真实作用域探针） | ✅ **SHUTTER OK** —— 四个被禁类在**使用**时全部被拒 | 本次运行 |
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
 | 脚本沙箱（ClassShutter）开启后仍能跑通全部 16 个用例 | ✅ 通过（首轮 16/16 失败，见 §4.6，修好后全绿） | 本次运行 |
 | 游戏内视觉效果 | ✅ LCD / RV / 1A 均已实机加载确认 | 前序会话（本机 `Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） |
@@ -461,6 +466,31 @@ public float panelLeft() { return startX - panelWidth / 2F; }   // 错的
 - JCM 2.x 没有 PIDS 脚本文本编辑器，本分支也没有：改预设仍然是编辑资源包里的 `.js`。
   画面上的 GUI 只有 §4.6 那四件（沙箱开关、限制警告、失败提示、调试浮层）。
 - 脚本的 GPU 绘制路径只有实机才能验证；无头检查覆盖不到像素结果。
+
+### 7.7 沙箱检查暴露的一件事：光提名字不等于够得着
+
+写 `ScriptShutterCheck` 的端到端那一半时，第一版断言是这样写的：
+
+```java
+cx.evaluateString(scope, "java.lang.System", ...)   // 期望抛异常，结果没抛
+```
+
+它**没抛**，返回的是 `[JavaPackage java.lang.System]` —— Rhino 里裸写一个类名得到的是
+**懒解析的包对象**，白名单要到真正**碰成员**时才查。也就是说：
+
+> 对裸类名做断言，无论白名单怎么写都会「通过」。这样的测试等于没有。
+
+改成会强制解析的表达式后，四个探针全部被拒：
+
+| 探针 | 结果 |
+|---|---|
+| `java.lang.System.nanoTime()` | 拒绝（`EcmaError`） |
+| `java.lang.Class.forName("java.lang.String")` | 拒绝 |
+| `new java.io.File(".").getName()` | 拒绝 |
+| `java.lang.Runtime.getRuntime().availableProcessors()` | 拒绝 |
+
+结论是**沙箱在使用点确实有效**，此前那次失败是断言写错，不是白名单漏了。这条经验也适用于
+`ScriptApiCheck`：它之所以有价值，是因为它**真的调用** API，而不是检查 API 存在。
 
 ---
 
