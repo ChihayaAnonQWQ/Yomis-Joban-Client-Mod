@@ -1,3 +1,24 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-1.4
+
+## Compatible YMTR Version
+YMTR
+
+## Changes
+- **Whole-screen pixelation** — the dot-matrix look packs drawn for a low-resolution screen are
+  imitating. A preset's whole output is drawn into a small offscreen target and magnified with
+  nearest-neighbour filtering, so its text, icons and colour blocks all land on one coarse grid
+  instead of staying smooth. Off by default: a preset pixelates only if it is listed in the
+  client config's `pixelScaleByPreset`, keyed by preset id, so nothing needs to change in any
+  resource pack and every existing preset renders exactly as before. `.js`-side API unchanged.
+
+  Getting there took four rounds, each a different bug: a mirrored offscreen pass culled every
+  quad as a back face; the framebuffer was restored by guesswork and took the held item and the
+  player model with it; the hand-written orthographic matrix was transposed because JOML's
+  `set(...)` is column-major; and finally `RenderType.end` turned out to bind the main framebuffer
+  itself on every single draw, through the output state Minecraft builds for every layer. The port
+  document records all four, since three of them are invisible unless you already know where to
+  look.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.3
 
 ## Compatible YMTR Version
