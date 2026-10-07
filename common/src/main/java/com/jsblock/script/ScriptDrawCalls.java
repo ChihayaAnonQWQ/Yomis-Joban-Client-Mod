@@ -408,6 +408,13 @@ public final class ScriptDrawCalls {
 			}
 			pushTransform(ctx, z);
 
+			/* The marquee's scroll belongs to the transform. Putting it in the string instead
+			   fed it to the fit-to-box measurement, and the text then changed size as it moved. */
+			final double marqueeShift = marqueeShift();
+			if (marqueeShift != 0) {
+				ctx.matrices.translate((float) marqueeShift, 0F, 0F);
+			}
+
 			final IGui.HorizontalAlignment horizontalAlignment;
 			switch (alignment) {
 				case ALIGN_CENTER:
@@ -489,13 +496,29 @@ public final class ScriptDrawCalls {
 		}
 
 		/**
-		 * @return the string to draw, with the marquee scroll applied when that overflow mode
-		 * is active. JCM 2.x scrolls character by character so it can clip against the box;
-		 * here the whole string slides, which reads the same for the short notices PIDS show.
+		 * @return the string to draw. The marquee's scroll is applied as a transform, not by
+		 * padding this with spaces -- see {@link #marqueeShift()}.
 		 */
 		private String renderText(ScriptRenderContext ctx) {
+			return textContent;
+		}
+
+		/**
+		 * How far the marquee has scrolled, in canvas units, applied as a translate.
+		 *
+		 * <p>This used to be implemented by prepending up to {@code w} spaces to the string.
+		 * The padding is part of the string as far as the renderer is concerned, and
+		 * {@code drawStringWithFont} derives its fit-to-box scale from the measured width:
+		 * {@code scaleX = totalWidth / maxWidth}. So the more padding there was, the harder
+		 * the whole run was shrunk, and since the padding drains away as the cycle runs the
+		 * text <em>grew</em> from the moment it appeared.</p>
+		 *
+		 * <p>JCM 2.x scrolls character by character and clips against the box; this slides
+		 * the whole run, which reads the same for the short notices a PIDS shows.</p>
+		 */
+		private double marqueeShift() {
 			if (overflowMode != OVERFLOW_MARQUEE) {
-				return textContent;
+				return 0;
 			}
 			final double cycleTicks = marqueeDurationOverride > 0
 					? marqueeDurationOverride * 20D
@@ -503,14 +526,7 @@ public final class ScriptDrawCalls {
 			final double progress = marqueeProgressOverride >= 0
 					? marqueeProgressOverride
 					: (System.currentTimeMillis() / 50D % cycleTicks) / cycleTicks;
-
-			final int lead = (int) Math.round(w * (1D - progress));
-			final StringBuilder builder = new StringBuilder();
-			for (int i = 0; i < Math.max(0, lead); i++) {
-				builder.append(' ');
-			}
-			builder.append(textContent);
-			return builder.toString();
+			return w * (1D - progress);
 		}
 	}
 }
