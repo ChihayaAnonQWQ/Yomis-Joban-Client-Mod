@@ -47,6 +47,19 @@ public class PIDSPreset {
     public boolean builtin;
 
     /**
+     * Pixel scale this preset asks for, or 1 for none.
+     *
+     * <p>A resource pack declares it in its preset entry as {@code "pixelScale": 2}, which is the
+     * pack's way of saying it was drawn for a screen with visible pixels — the whole panel is then
+     * rendered small and magnified, so its text and icons land on one coarse grid. A player can
+     * override it per preset in the client config's {@code pixelScaleByPreset}, including setting it
+     * back to 1.</p>
+     *
+     * @see com.jsblock.client.ClientConfig#effectivePixelScale
+     */
+    public int pixelScale = 1;
+
+    /**
      * Script files that draw this preset, in load order.
      *
      * <p>JCM 2.x field: a JCM 2.x preset is a JavaScript file rather than a list of
@@ -151,6 +164,19 @@ public class PIDSPreset {
         preset.builtin = presetObject.has("builtin") && presetObject.get("builtin").getAsBoolean();
         preset.scriptFiles = readStringList(presetObject, "scriptFiles");
         preset.blacklist = readStringList(presetObject, "blacklist");
+
+        /* Whole-screen pixelation, declared by the pack. Read here rather than from the script
+           because it is a property of the artwork, not of any one frame: where a pack drew for a
+           dot-matrix screen it says so once in its preset entry and every panel using it follows,
+           with no script API added and nothing to break on older builds that never heard of it. */
+        if (presetObject.has("pixelScale")) {
+            try {
+                preset.pixelScale = presetObject.get("pixelScale").getAsInt();
+            } catch (Exception e) {
+                com.jsblock.Joban.LOGGER.warn("[Joban Client] Preset " + preset.id
+                        + " has a pixelScale that is not a whole number; ignoring it.");
+            }
+        }
 
         return preset;
     }

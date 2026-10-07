@@ -583,6 +583,18 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         matrices.translate(0F, 0F, -SCRIPT_PANEL_OUTWARD);
         matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
 
+        /* Whole-screen pixelation, when this preset's scale says so. The resource pack declares a
+           scale for presets drawn for a low-resolution screen; the client config overrides it,
+           including back to 1. The offscreen pass needs the world transform only for the final
+           magnified quad, so it is tried here, with the chain built; anything it cannot do falls
+           through to the ordinary path below, which is left exactly as it was -- including the
+           lenient-arrivals retry. */
+        final int pixelScale = com.jsblock.client.ClientConfig.effectivePixelScale(preset.id, preset.pixelScale);
+        if (pixelScale > 1 && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelScale)) {
+            matrices.popPose();
+            return;
+        }
+
         final MultiBufferSource.BufferSource immediate = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
         final com.jsblock.script.ScriptRenderContext ctx = new com.jsblock.script.ScriptRenderContext(
                 matrices, vertexConsumers, immediate, facing, MAX_LIGHT_GLOWING,
@@ -632,6 +644,118 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      */
     private static boolean mentionsNull(String error) {
         return error != null && error.toLowerCase(java.util.Locale.ROOT).contains("null");
+    }
+
+    /** Set once a pixelation attempt has failed, so the log gets one line and not one per frame. */
+    private boolean pixelationFailureReported = false;
+
+    /**
+     * Presets whose one-shot pixelation diagnostic has been logged.
+     *
+     * <p>Static, and keyed by preset and scale alone rather than by the whole message: the first
+     * version keyed on the message, which carried the per-frame draw count, so it logged on every
+     * frame and read the target back with it.</p>
+     */
+    private static final java.util.Set<String> pixelationReported = new java.util.HashSet<>();
+
+    /**
+     * Draws this panel by rendering its script into an offscreen target and magnifying that.
+     *
+     * <p>Called with the world transform already built, because the magnified quad is drawn in it.
+     * The script itself is run in the target's own space, so it draws exactly the canvas coordinates
+     * it always does — the only thing that changes is where those coordinates land.</p>
+     *
+     * <p>Deliberately all-or-nothing: if the target cannot be made, or the script throws, this
+     * returns {@code false} and the ordinary path draws the panel instead. That keeps the
+     * lenient-arrivals retry, the fallback background and every other detail of the verified path in
+     * one place, and means a preset set to pixelate on a machine where the pass does not work shows
+     * its panel as it always did rather than not at all.</p>
+     */
+    private boolean drawPixelatedPanel(PIDSPreset preset, com.jsblock.script.PIDSWrapper wrapper,
+                                       com.jsblock.script.ScriptEngine.Program program, Direction facing,
+                                       PoseStack matrices, MultiBufferSource vertexConsumers,
+                                       int canvasWidth, int canvasHeight, int pixelScale) {
+        final PIDSPixelatedPanel panel;
+        try {
+            panel = PIDSPixelatedPanel.of(canvasWidth, canvasHeight, pixelScale);
+        } catch (Throwable t) {
+            reportPixelationFailure("creating the offscreen target for " + preset.id, t);
+            return false;
+        }
+
+        final PIDSPixelatedPanel.OffscreenSource offscreenSource = new PIDSPixelatedPanel.OffscreenSource(panel);
+        boolean drawn = false;
+        com.jsblock.script.ScriptRenderContext ctx = null;
+        try {
+            /* The facing is reversed for the offscreen pass.
+               
+               The pass is mirrored by construction: the script's origin is the panel's top left and
+               its y grows downward, so the orthographic projection is y-down, and a y-down mapping
+               reverses triangle winding. In the world the quads are wound for the panel's facing, so
+               here every one of them lands as a back face and the layers -- which set their own cull
+               state on setup -- throw them all away.
+               
+               Asking MTR's draw helper for the opposite winding cancels the mirror out. */
+            ctx = new com.jsblock.script.ScriptRenderContext(
+                    panel.begin(), offscreenSource, offscreenSource, facing.getOpposite(), MAX_LIGHT_GLOWING,
+                    canvasWidth, canvasHeight, 1F);
+            /* Uploads go through the panel rather than through RenderType.end, which would bind the
+               main framebuffer and drop the whole panel into the world. See PIDSPixelatedPanel.upload. */
+            ctx.setQuadUploader(panel::upload);
+            drawn = program.renderOrFail(ctx, wrapper);
+            offscreenSource.flush();
+
+            if (drawn && pixelationReported.add(preset.id + "@" + pixelScale)) {
+                /* Read the target back once per preset, never again: "drew nothing" and "drew, but
+                   the composite does not sample it" look identical on screen and need opposite
+                   fixes, and a readback stalls the pipeline, so one frame is enough. */
+                final int[] centre = panel.readCentrePixel();
+                com.jsblock.Joban.LOGGER.info("[PIDS pixelation] preset=" + preset.id
+                        + " scale=" + pixelScale
+                        + " target=" + panel.targetWidth() + "x" + panel.targetHeight()
+                        + " drawCalls=" + ctx.drawCallCount()
+                        + " centrePixel=" + centre[0] + "," + centre[1] + "," + centre[2] + "," + centre[3]
+                        + " " + panel.bindingReport());
+            }
+        } catch (Throwable t) {
+            reportPixelationFailure("drawing " + preset.id + " into its offscreen target", t);
+        } finally {
+            try {
+                offscreenSource.flush();
+            } catch (Throwable ignored) {
+                /* Nothing to flush is not a reason to skip restoring the framebuffer. */
+            }
+            try {
+                panel.end();
+            } catch (Throwable t) {
+                reportPixelationFailure("restoring the framebuffer after " + preset.id, t);
+            }
+        }
+
+        if (!drawn) {
+            return false;
+        }
+
+        /* One quad covering the canvas, in canvas units, in the panel's own plane. Nearest
+           filtering turns the target's pixels into the squares the feature is for.
+           
+           v is flipped: the target's texture has v=0 at its bottom, while the orthographic pass
+           puts canvas y=0 at the top. */
+        final VertexConsumer consumer = vertexConsumers.getBuffer(MoreRenderLayers.getLight(panel.location(), false));
+        IDrawing.drawTexture(matrices, consumer,
+                0F, 0F, 0F, panel.canvasWidth(), panel.canvasHeight(), 0F,
+                0F, 1F, 1F, 0F, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
+        return true;
+    }
+
+    /** Reports a pixelation failure once per renderer, then stops mentioning it. */
+    private void reportPixelationFailure(String what, Throwable t) {
+        if (pixelationFailureReported) {
+            return;
+        }
+        pixelationFailureReported = true;
+        com.jsblock.Joban.LOGGER.warn("[PIDS pixelation] Failed while " + what
+                + "; falling back to drawing the panel directly. This is reported once.", t);
     }
 
     /**

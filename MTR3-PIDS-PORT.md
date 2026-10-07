@@ -904,6 +904,46 @@ x 始终是 `-0.21`（沿用普通 RV），倾角始终 `22.5`。
 另外，SIL 的两个档位和普通 RV **不能共用**：内置渲染器给它们传的是
 `(startX 6, startY 11.7, startZ 2.45, rotation 22.5)`，而普通 RV 是 `(6, 8.25, 6, 0)`。
 
+**14. 整屏像素化：四个 bug 叠在一起，最后一个才是真的**
+
+需求是 c10e 那套观感——**整屏画完再像素化**。脚本 API 做不到这件事（`Texture.texture()` 只吃资源包里的
+贴图 ID，画不出内存里合成的图像），但**模组可以**：脚本画的东西本来就经过我们的手。
+
+做法：一个（画布尺寸 × 倍率）的离屏 `RenderTarget`（NEAREST ✓），正交投影把画布坐标映射到目标像素，
+再把目标纹理当普通贴图贴回面板。开关放在**客户端** `jsclient.json` 的 `pixelScaleByPreset`（按**预设 id** ✓），
+所以**不需要任何资源包配合**，默认 1 = 完全不生效 ✓。
+
+**但把它跑起来花了四轮，前三个 bug 一个比一个隐蔽：**
+
+| # | 症状 | 真因 | 怎么找到的 |
+|---|---|---|---|
+| 1 | 面板全黑 | 离屏是**镜像**的（脚本原点在左上、y 向下 → 正交 y 向下 → 绕序反转）→ 所有 quad 成背面被剔除。`RenderSystem.disableCull()` **无效** ✗，因为 `RenderType.setupRenderState` 会按自己的状态**重新打开剔除** | 想清楚镜像必然反转绕序；改成反向 `facing` 抵消 |
+| 2 | **手和玩家模型消失** | `end()` 里**猜**着恢复 framebuffer（绑主目标 + `unbindWrite()`）✗。世界和列车在 BER 阶段**之前**画 ✓ 所以正常，手和第三视角模型在**之后**画 ✗ 所以消失 | 改成 `glGetInteger(GL_FRAMEBUFFER_BINDING)` **读出来按原值恢复** ✓，并还回视口 ✓ |
+| 3 | 仍黑 | 手写的正交矩阵**行/列主序反了**：JOML 的 `Matrix4f.set(...)` 是**列主序** ✗，我按行主序写 → 矩阵转置 → 画布被映射到 NDC 的 (0..2, 0..−2) → **全部顶点被裁** | **在游戏外**用一个小 Java 程序把两种写法各变换一遍角点，只列主序那份把 (0,0)→(−1,1)、(w,h)→(1,−1) ✓ |
+| 4 | **纯红、无内容** | **`RenderType.end(...)` 内部一定执行 `setupRenderState()`，而 MC 给每个层建的输出状态是 `MAIN_TARGET`** → 它自己 `getMainRenderTarget().bindWrite(false)` ✗。所以**每一笔绘制都被抢回主 framebuffer** ✗，无论我之前绑了什么 | 反编译 `RenderType.end` 看到 `setupRenderState → drawWithShader → clearRenderState` 的调用序列 ✓。而**清屏是裸 GL 调用、不经 RenderType** ✓ → 所以只有它进了目标 ✓ = 纯红 ✓ —— **这个「反常的干净」反过来成了最有力的线索** |
+
+**修法**（第 4 条）：把 `end()` 拆开，把重新绑定**插进它中间**：
+
+```java
+final RenderedBuffer rendered = builder.end();
+layer.setupRenderState();                    // ← 它会把主目标绑回来 ✗
+target.bindWrite(true);                      // ← 我们在它之后、绘制之前抢回来 ✓
+BufferUploader.drawWithShader(rendered);     // ← 这时才真正上传 ✓
+layer.clearRenderState();
+```
+
+文字那一路走 `MultiBufferSource.BufferSource.endBatch()` ✗，内部同样是 `RenderType.end` ✗，所以给它一个
+**`BufferSource` 子类**（MTR 的字体接口要求具体类型）：每层自建 builder ✓，由我们用同样的顺序上传 ✓。
+
+**世界路径完全没动**：没有设置 `quadUploader` 时 `endQuad` 仍是 `layer.end(...)` ✓。
+
+**四条方法论**，比代码值钱：
+
+1. **「症状反常地干净」往往是线索**：目标里**只有**清屏色、其他什么都没有 ✗ —— 说明「能进目标的」和「进不去的」之间必有一条机制分界 ✓，顺着它找到了 `RenderType` 的输出状态 ✓。
+2. **能在游戏外验证的，绝不上机验证**：第 3 条那个矩阵，写个 20 行的 Java 程序就能证伪 ✓，而我先上机试了两轮 ✗。
+3. **在别人的渲染管线里做离屏，先问「谁会抢 framebuffer」**：MC 的每一层绘制都会 ✗。
+4. **诊断要能「二分」而不是「描述」**：把清屏色改成**红色** ✓，一次运行就把「没进目标」和「进了目标但合成采不到」分开了 ✓ —— 比截图描述有效得多 ✓。
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。

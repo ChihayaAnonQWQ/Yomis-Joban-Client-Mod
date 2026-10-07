@@ -70,6 +70,11 @@ public class ScriptRenderContext {
 
 	public final PoseStack matrices;
 	public final MultiBufferSource vertexConsumers;
+	/**
+	 * Where the script's text goes. A caller drawing into its own framebuffer supplies a
+	 * {@code BufferSource} subclass whose {@code getBuffer} keeps the text out of the world; the
+	 * font renderer's signature requires this type, so the interface alone will not do.
+	 */
 	public final MultiBufferSource.BufferSource immediate;
 	public final Direction facing;
 	/** Packed light value; a PIDS panel is emissive so callers pass {@code MAX_LIGHT_GLOWING}. */
@@ -206,6 +211,16 @@ public class ScriptRenderContext {
 	}
 
 	/**
+	 * How many draw calls this context has been handed since it was made.
+	 *
+	 * <p>For the pixelation diagnostic: an offscreen pass that reports the right number of calls
+	 * and a still-black target has a sampling problem, while one that reports none never ran.</p>
+	 */
+	public int drawCallCount() {
+		return drawCallIndex;
+	}
+
+	/**
 	 * One quad buffer for the whole script engine, begun and drained per draw call.
 	 *
 	 * <p>Only ever touched on the render thread, and only between a {@link #beginQuad} and its
@@ -256,14 +271,42 @@ public class ScriptRenderContext {
 	}
 
 	/**
-	 * Draws the quad {@link #beginQuad} started, now. {@code RenderType.end} sets the layer's
-	 * state up, uploads and clears it again in one go, exactly as it would when a
-	 * {@code MultiBufferSource} flushed the layer.
+	 * Draws the quad {@link #beginQuad} started, now.
+	 *
+	 * <p>Normally through {@code RenderType.end}, which sets the layer's state up, uploads and clears
+	 * it again in one go. A caller drawing into its own framebuffer supplies an {@link QuadUploader}
+	 * instead, because {@code RenderType}'s state setup ends by binding the layer's <em>output</em>
+	 * target, and for every layer Minecraft builds that is the main one: a quad drawn through
+	 * {@code end} lands in the world no matter which framebuffer was bound beforehand. The uploader
+	 * puts the caller's target back between the two steps, which is the only order that works.</p>
 	 */
 	public void endQuad(RenderType layer) {
-		if (SCRIPT_QUADS != null) {
-			layer.end(SCRIPT_QUADS, RenderSystem.getVertexSorting());
+		if (SCRIPT_QUADS == null) {
+			return;
 		}
+		if (quadUploader != null) {
+			quadUploader.upload(layer, SCRIPT_QUADS);
+			return;
+		}
+		layer.end(SCRIPT_QUADS, RenderSystem.getVertexSorting());
+	}
+
+	/**
+	 * Uploads one finished layer, in the caller's own framebuffer.
+	 *
+	 * <p>Implementations must run the layer's state setup, re-bind the target afterwards — the setup
+	 * binds the main one — and only then upload.</p>
+	 */
+	public interface QuadUploader {
+		void upload(RenderType layer, BufferBuilder builder);
+	}
+
+	/** Set to draw through an {@link QuadUploader} rather than straight into the world. */
+	private QuadUploader quadUploader = null;
+
+	/** @see QuadUploader */
+	public void setQuadUploader(QuadUploader uploader) {
+		this.quadUploader = uploader;
 	}
 
 	/** {@code ctx.draw(call)} — draws a {@code Text}/{@code Texture}/{@code Rectangle}. */
