@@ -110,8 +110,21 @@ public class JobanClient {
         });
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_LCD_TILE_ENTITY.get(), dispatcher -> new RenderLCDPIDS<>(dispatcher, PIDSLCD.TileEntityBlockPIDS4.MAX_ARRIVALS, 5.7F, 9.5F, 6, 11.5F, 21, true, false, false, 0xEFE29E, 0));
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_TILE_ENTITY.get(), dispatcher -> new RenderRVPIDS<>(dispatcher, PIDSRV.TileEntityBlockPIDSRV.MAX_ARRIVALS, 6, 8.25F, 6, 11F, 20, true, false, 0x000000, 0));
-        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_1.get(), dispatcher -> new RenderRVPIDS<>(dispatcher, PIDSRVSIL1.TileEntityBlockPIDSSIL.MAX_ARRIVALS, 6F, 11.7F, 2.45F, 11F, 20.7F, true, false, 0x000000, 22.5F));
-        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_2.get(), dispatcher -> new RenderRVPIDS<>(dispatcher, PIDSRVSIL2.TileEntityBlockPIDSSIL.MAX_ARRIVALS, 6F, 11.7F, 2.45F, 11F, 20.7F, true, false, 0x000000, 22.5F));
+        /* The two SIL shapes are the slanted signs: YJCM's renderer leans them 22.5 degrees about
+           the panel's X axis, and their halves (opposite FACING) come out mirrored into a V. A
+           script panel has to be told both the lean and its own translate -- reusing RV's draws it
+           flat and 0.216 blocks too high. The translate is RV's shifted by the difference in the
+           two shapes' geometry, (startY 11.7 vs 8.25, startZ 2.45 vs 6) in sixteenths. */
+        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_1.get(), dispatcher -> {
+            final RenderRVPIDS<PIDSRVSIL1.TileEntityBlockPIDSSIL> renderer = new RenderRVPIDS<>(dispatcher, PIDSRVSIL1.TileEntityBlockPIDSSIL.MAX_ARRIVALS, 6F, 11.7F, 2.45F, 11F, 20.7F, true, false, 0x000000, 22.5F);
+            renderer.setScriptPanelProfile(-0.21F, -0.410F, -0.520F, 136, 76).setScriptPanelRotation(22.5F);
+            return renderer;
+        });
+        RegistryClient.registerTileEntityRenderer(BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_2.get(), dispatcher -> {
+            final RenderRVPIDS<PIDSRVSIL2.TileEntityBlockPIDSSIL> renderer = new RenderRVPIDS<>(dispatcher, PIDSRVSIL2.TileEntityBlockPIDSSIL.MAX_ARRIVALS, 6F, 11.7F, 2.45F, 11F, 20.7F, true, false, 0x000000, 22.5F);
+            renderer.setScriptPanelProfile(-0.21F, -0.410F, -0.520F, 136, 76).setScriptPanelRotation(22.5F);
+            return renderer;
+        });
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.SIGNAL_LIGHT_RED_ENTITY_1.get(), dispatcher -> new RenderConstantSignalLight<>(dispatcher, true, 0xFFFF0000, false));
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.SIGNAL_LIGHT_RED_ENTITY_2.get(), dispatcher -> new RenderConstantSignalLight<>(dispatcher, true, 0xFFFF0000, true));
         RegistryClient.registerTileEntityRenderer(BlockEntityTypes.SIGNAL_LIGHT_BLUE_ENTITY.get(), dispatcher -> new RenderConstantSignalLight<>(dispatcher, true, 0xFF0000FF, true));

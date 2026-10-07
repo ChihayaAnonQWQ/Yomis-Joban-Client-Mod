@@ -12,6 +12,7 @@ import com.jsblock.pids.PIDSGraphics;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.math.Axis;
 import mtr.MTRClient;
 import mtr.block.IBlock;
 import mtr.client.ClientData;
@@ -387,6 +388,17 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     private int canvasHeight = 76;
 
     /**
+     * Lean of the panel about the local X axis, in degrees, applied before the translate.
+     *
+     * <p>YJCM's own RV renderer carries the same term — {@code mulPose(XP.rotationDegrees(
+     * rotation))}, straight after the two facing rotations and before the panel translate —
+     * and it is what puts a panel on the slanted signs. The two SIL shapes are a V: their
+     * halves face opposite ways, so one 22.5 degree lean comes out mirrored and forms it. A
+     * panel drawn flat is simply wrong on those blocks.</p>
+     */
+    private float panelRotateXDegrees = 0F;
+
+    /**
      * Adopts another PIDS shape's JCM 2.x panel transform and canvas.
      *
      * <p>JCM 2.x gives each renderer its own literals -- RVPIDSRenderer
@@ -403,6 +415,20 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         this.canvasHeight = canvasH;
         return this;
     }
+
+    /**
+     * Adopts a shape's lean as well; see {@link #panelRotateXDegrees}.
+     *
+     * <p>Derive it from the same constructor argument YJCM's renderer passes as {@code rotation}
+     * (22.5 for both SIL shapes, 0 for everything else), and derive that shape's translate from
+     * its own {@code (startX, startY, startZ)} rather than reusing RV's — the SIL pair sits
+     * 0.216 blocks lower and 0.222 further out than the plain board.</p>
+     */
+    public RenderPIDSBase<T> setScriptPanelRotation(float degreesX) {
+        this.panelRotateXDegrees = degreesX;
+        return this;
+    }
+
     protected float scriptPanelTranslateX() {
         return panelTranslateX;
     }
@@ -549,6 +575,10 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         matrices.translate(0.5, 0.5, 0.5);
         UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
         UtilitiesClient.rotateZDegrees(matrices, 180);
+        /* YJCM's renderer leans the panel here, after the facing rotations and before the
+           translate, so the translate runs in the leaning frame. The SIL shapes need it; see
+           panelRotateXDegrees. */
+        matrices.mulPose(Axis.XP.rotationDegrees(panelRotateXDegrees));
         matrices.translate(scriptPanelTranslateX(), scriptPanelTranslateY(), scriptPanelTranslateZ());
         matrices.translate(0F, 0F, -SCRIPT_PANEL_OUTWARD);
         matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
