@@ -272,6 +272,23 @@ JSON 组件那条路本来是对的（`PIDSAlign.color` 把 6 位色变成 `0xFF
 > 线路，函数返回「非载客」——于是打出「不載客列車」，而它的 ETA 永远显示「1 min」：
 > 占位对象报的到站时间是**当下**，`Math.ceil(0 / 60)` 进位成 1 分钟，而这句话每 60 tick
 > 在中英之间切换一次，就是它旁边那个「闪烁」。
+>
+> **不判空的预设由引擎兜底，不用改资源包。** 返回 `null` 会让不判空的预设抛异常——这正是
+> JCM 2.x 里会发生的事（重庆轨道交通包的 `crt_pids_1.js` 第 20、22 行就是这种写法，站台
+> 只有 1 班车时必抛）。资源包不归我们改，所以引擎改成：`render()` 抛出的异常里**提到 null**
+> 时，把那块面板换成「越界给占位对象」的语义重试一帧，成功就把这个选择固定下来（只重试一次，
+> 不是每帧）。重试前会先把每调用深度计数归零，让重发的那批调用落在**第一次尝试用过的深度**上，
+> 而不是在它后面再叠一层。
+>
+> 两种结果分开告知，因为它们不是一回事：
+>
+> | 结果 | 日志 | 聊天栏 |
+> |---|---|---|
+> | 重试画出来了 | 保留那条 ERROR（给预设作者看）+ 一条「已用占位班次绘制」的 WARN | 只有一条黄字说明 |
+> | 重试也没画出来（那个 null 根本不是班次） | 保留 ERROR | 只有那条红字，**不会**谎称已救回 |
+>
+> 实机两种情况都碰到了：CRT 面板在 0 班次站台上正常出图；`sound_transit.js` 死在
+> `pids.station()` 为空（与班次无关），照实报红字并退回预设背景图。
 
 ### 4.5 画布尺寸与面板字面量
 
@@ -588,6 +605,26 @@ Rhino 拒绝二次安装时抛的是 **`SecurityException`**（不是它自己�
 | 「1min / 1分钟」是两块面板的绘制调用落在同一个 z 上打架 | 一帧里每个调用的 z 都不同（0、−0.1、−0.2 …，步长 0.1 脚本单位），没有重合；文本的切换与 `(gameTick / 60) % 2` **逐点吻合**，即 `TextUtil.cycleString`，而它的默认 60 tick 正是 JCM 2.x 的 `SWITCH_LANG_DURATION`。它是预设自己每 3 秒轮换一次中英文，不是移植缺陷。幽灵行那半边之所以看着像「一直闪」，是因为它每帧都重新算成 1 分钟，于是也每 3 秒切一次 |
 | 「路线图是脚本没走到那段」 | 走到了，见上 |
 
+**4. 资源包不能改，所以兜底放在模组里**
+
+`arrivals().get(i)` 恢复成返回 `null` 之后，不判空的预设（重庆轨道交通包的
+`crt_pids_1.js`）在班次不足时必抛，面板从「有一行不对」变成「什么都没有」。资源包不归
+这个分支改，于是引擎加了重试兜底，见 §4.4。实机日志：
+
+```
+[ERROR] PIDS script "CRT PIDS (Style 1)@nanbin_crt_pids_1#…" threw in render():
+        TypeError: Cannot call method "arrivalTime" of null (nanbin:pids/script/crt_pids_1.js#20)
+[WARN ] PIDS preset "CRT PIDS (Style 1)@…" reads arrivals().get(i) past the end of the list
+        without checking for null, which is what JCM 2.x returns there. It is now drawn with a
+        placeholder arrival, so its empty rows may show wording meant for an empty train.
+[CHAT ] [Joban Client] CRT PIDS (Style 1) asks for more trains than the platform has and does
+        not check for it. Showing it with placeholder rows.
+```
+
+同一次实机里还抓到 `sound_transit.js` 也抛（`getName of null`，是 `pids.station()` 为空，
+不是班次）。它的回退重试**同样失败**，于是聊天栏只有那条红字，没有黄字——这就是「两种结果
+分开告知」的意义：面板真的坏了就直说，救回来了就不吓人。
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。
@@ -626,8 +663,9 @@ public float panelLeft() { return startX - panelWidth / 2F; }   // 错的
   画面上的 GUI 只有 §4.6 那四件（沙箱开关、限制警告、失败提示、调试浮层）。
 - 脚本的 GPU 绘制路径只有实机才能验证；无头检查覆盖不到像素结果。
 - 第三方预设若不判空就索引 `pids.arrivals().get(i)`，越界时会抛——这与 JCM 2.x 完全一致
-  （它自己也这么做），引擎会报一次并退回预设背景图。重庆轨道交通包的 `crt_pids_1.js`
-  正是这种写法（第 20、22 行），`yjcm-recon\pids-fixed\` 下那份副本已经补上判空。
+  （它自己也这么做）。引擎会**用占位班次重试一帧**把它救回来（见 §4.4），救不回来才退回
+  预设背景图并报红字。重庆轨道交通包的 `crt_pids_1.js` 属于前者；`yjcm-recon\pids-fixed\`
+  下那份副本补上了判空，是「改预设」这条路的样子，但**不需要**它也能显示。
 - 一处已知的世界观差异：`pids.getCustomMessage(i)` 越界给的是空串，JCM 2.x 给 `null`。
   范围内的行为两者一致（都是块实体里那条消息，没设过就是空串），而空串对预设更友好。
 
