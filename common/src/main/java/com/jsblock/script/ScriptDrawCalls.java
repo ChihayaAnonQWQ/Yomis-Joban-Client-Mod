@@ -189,8 +189,14 @@ public final class ScriptDrawCalls {
 			pushTransform(ctx, z);
 			/* Script paths are relative to assets/<namespace>/, not assets/<namespace>/textures/;
 			   see ScriptTextures for why the render layer alone would miss. */
+			/* translucent = true. The second argument of MoreRenderLayers.getLight is the alpha
+			   switch, and a script texture is routinely mostly transparent -- JCM 2.x's weather
+			   icons are 64x64 with roughly ninety percent of their pixels at alpha 0. Drawn
+			   through the opaque layer that transparent area comes out as a solid white square,
+			   which is what the weather icon looked like in game. JCM 2.x defaults a Texture to
+			   QueuedRenderLayer.LIGHT_2 for the same reason. */
 			final VertexConsumer vertexConsumer = ctx.vertexConsumers.getBuffer(
-					MoreRenderLayers.getLight(ScriptTextures.resolve(textureId), false));
+					MoreRenderLayers.getLight(ScriptTextures.resolve(textureId), true));
 			IDrawing.drawTexture(ctx.matrices, vertexConsumer,
 					0, 0, 0, (float) w, (float) h, 0,
 					u1, v1, u2, v2, ctx.facing,
@@ -448,22 +454,17 @@ public final class ScriptDrawCalls {
 			}
 
 			final int textLight = naturalLight ? ctx.light : IGui.MAX_LIGHT_GLOWING;
-			/* sameSize = false, matching what the built-in renderers use.
+			/* sameSize = true: no doubling, which is what the presets are written against.
 			 *
-			 * IDrawingJoban reserves twice the line height and width for a CJK run whichever
-			 * way this is set, and only the *drawing* reads the flag:
+			 * A JCM 2.x preset is laid out for MTR 4, where the text it draws did not carry an
+			 * extra CJK multiplier. Turning the multiplier on here made the unboxed runs --
+			 * HKR's "本班車將會停靠於" and friends, which set no size(...) -- come out at twice
+			 * the width their author wrote, straight off the panel.
 			 *
-			 *     totalHeight += IGui.LINE_HEIGHT * (isCJK ? 2 : 1);
-			 *     final int extraScale = isCJK && !sameSize ? 2 : 1;
-			 *
-			 * So passing true reserves room for a double-size run and then draws it single
-			 * size: Chinese comes out at half the size it was laid out for, while Latin is
-			 * untouched because isCJK is false for it. That is exactly "the English is fine,
-			 * the Chinese is much smaller", seen in game.
-			 *
-			 * An earlier revision passed true to stop a five-glyph label overflowing its box,
-			 * but the box is what constrains it -- presets that care set size(...),
-			 * stretchXY() or scaleXY(), and drawStringWithFont scales the run to fit. */
+			 * The flag also has to agree with IDrawingJoban's layout, which is where the other
+			 * half of the problem lived: it reserved 2x for CJK regardless, so boxed runs were
+			 * measured for a doubled string and then drawn single size, landing at half the
+			 * size of their own box. That is now tied to the same flag. */
 			IDrawingJoban.drawStringWithFont(
 					ctx.matrices,
 					Minecraft.getInstance().font,
@@ -480,7 +481,7 @@ public final class ScriptDrawCalls {
 					shadow,
 					textLight,
 					fontId == null ? DEFAULT_FONT : fontId,
-					false,
+					true,
 					null
 			);
 
