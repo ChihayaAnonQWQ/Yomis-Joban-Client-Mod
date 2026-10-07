@@ -6,6 +6,7 @@ import mtr.client.IDrawing;
 import mtr.data.IGui;
 import mtr.render.MoreRenderLayers;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
 
 /**
@@ -202,13 +203,16 @@ public final class ScriptDrawCalls {
 			   through the opaque layer that transparent area comes out as a solid white square,
 			   which is what the weather icon looked like in game. JCM 2.x defaults a Texture to
 			   QueuedRenderLayer.LIGHT_2 for the same reason. */
-			final VertexConsumer vertexConsumer = ctx.vertexConsumers.getBuffer(
-					MoreRenderLayers.getLight(ScriptTextures.resolve(textureId), true));
+			final RenderType layer = MoreRenderLayers.getLight(ScriptTextures.resolve(textureId), true);
+			final VertexConsumer vertexConsumer = ctx.vertexConsumers.getBuffer(layer);
 			IDrawing.drawTexture(ctx.matrices, vertexConsumer,
 					0, 0, 0, (float) w, (float) h, 0,
 					u1, v1, u2, v2, ctx.facing,
 					color, naturalLight ? ctx.light : IGui.MAX_LIGHT_GLOWING);
 			popTransform(ctx);
+			/* End the batch here, so this quad cannot be reordered behind one the script drew
+			   before it; see ScriptRenderContext.flushLayer. */
+			ctx.flushLayer(layer);
 		}
 	}
 

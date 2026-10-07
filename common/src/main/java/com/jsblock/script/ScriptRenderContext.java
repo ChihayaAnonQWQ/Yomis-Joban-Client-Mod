@@ -2,6 +2,7 @@ package com.jsblock.script;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.Direction;
 
 import java.util.ArrayList;
@@ -182,6 +183,43 @@ public class ScriptRenderContext {
 		drawCallIndex = 0;
 		if (traceCalls != null) {
 			traceCalls.clear();
+		}
+	}
+
+	/**
+	 * Draws whatever is already queued in {@code layer}, now.
+	 *
+	 * <h2>Why a script has to do this</h2>
+	 * <p>Script quads go through MTR's light layer, which is
+	 * {@code RenderType.beaconBeam(texture, true)}. That layer is built with
+	 * {@code sortOnUpload = true} and a {@code COLOR_WRITE} write-mask — it sorts the quads it
+	 * is given by distance from the camera and then draws them without writing depth. So which
+	 * quad ends up on top is decided by <em>where its centre is</em>, not by the order the
+	 * script drew it in.</p>
+	 *
+	 * <p>That is fine for a panel whose pieces are the same size, and wrong for one that is a
+	 * full-size background plus small overlays: the badge at the left edge of a 136-unit panel
+	 * is up to 0.7 blocks off the panel's centre, which is a far bigger term in that distance
+	 * than the 0.001-block depth step between two calls. Stand to one side and the badge's
+	 * centre is the farther of the two, so the background is drawn last and paints over it —
+	 * the badge is then only visible where it sticks out past the panel's silhouette. Walk to
+	 * the other side and it comes back.</p>
+	 *
+	 * <p>JCM 2.x has none of this because it queues its draws and replays them in order. Until
+	 * this port has a queue of its own, ending the batch after every quad reproduces the same
+	 * thing: a batch holding one quad cannot be reordered, so the paint order is the call
+	 * order again.</p>
+	 *
+	 * @param layer the render layer the caller just drew into, or {@code null} for none
+	 */
+	public void flushLayer(RenderType layer) {
+		if (layer == null) {
+			return;
+		}
+		if (vertexConsumers instanceof MultiBufferSource.BufferSource) {
+			((MultiBufferSource.BufferSource) vertexConsumers).endBatch(layer);
+		} else if (immediate != null) {
+			immediate.endBatch(layer);
 		}
 	}
 
