@@ -54,8 +54,36 @@ public final class PIDSData {
 		return ClientData.DATA_CACHE.platformIdMap.get(platformId);
 	}
 
+	/** Set once the cache sizes have been reported, so the log is not flooded per frame. */
+	private static boolean reportedCache;
+
+	/**
+	 * Reports the sizes of the client data caches a PIDS draws from, once.
+	 *
+	 * <p>Station names, destinations and route maps all resolve through
+	 * {@code ClientData.DATA_CACHE}. When every one of them comes back empty at the same
+	 * time, the question is whether the lookup keys are wrong or the cache itself never
+	 * filled, and a screenshot cannot tell those apart. This prints the counts so it can.</p>
+	 */
+	public static void reportCacheOnce() {
+		if (reportedCache) {
+			return;
+		}
+		reportedCache = true;
+		try {
+			com.jsblock.Joban.LOGGER.info("[Joban Client] [PIDS] client data: routes={} platforms={} stations={} platformIdToStation={}",
+					ClientData.DATA_CACHE.routeIdMap.size(),
+					ClientData.DATA_CACHE.platformIdMap.size(),
+					ClientData.STATIONS.size(),
+					ClientData.DATA_CACHE.platformIdToStation.size());
+		} catch (Throwable t) {
+			com.jsblock.Joban.LOGGER.warn("[Joban Client] [PIDS] could not read the client data caches: {}", t.toString());
+		}
+	}
+
 	/** @return the station the platform belongs to, or {@code null}. */
 	public static Station stationOf(long platformId) {
+		reportCacheOnce();
 		return ClientData.DATA_CACHE.platformIdToStation.get(platformId);
 	}
 
