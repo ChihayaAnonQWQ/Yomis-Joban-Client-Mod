@@ -227,6 +227,28 @@ Rectangle.create("Bar").color(0xFF0000).pos(0, 0).size(100, 4).draw(ctx);
 `Texture` 支持 `texture` / `uv` / `color` / `naturalLight` / `renderType`。
 三条链都支持 `pos(x, y)`、`size(w, h)`、`zOrder(n)`。
 
+#### `.color()` 写的是 RGB，透明度由引擎补
+
+预设里写的永远是 6 位十六进制（`0xFFFFFF`、`0x874936`），**没有 alpha 通道**，而
+MTR 3 的 `IDrawing.drawTexture` 的 alpha 直接取 `color >> 24`。所以 `.color()` 一律按
+JCM 2.x 的做法补成不透明（JCM 2.x 写 `ARGB_BLACK + color`，这里用 `|`，对任何
+小于 `0x01000000` 的值等价，且不会把默认的 `ARGB_WHITE` 加到 `0xFFFFFFFE`）。
+
+不补会怎样，是这一轮实机才看清的：
+
+| 现象 | 原因 |
+|---|---|
+| 车厢数/路号徽章只有白字，没有底色 | `white.png` 的 tint alpha 为 0 → 整块透明 |
+| 站台圆圈只剩里面的数字 | 同上，`plat_circle.png` 的 tint 同样透明 |
+| 路线图有站名和箭头，唯独**没有那条线和站点圆点** | 线和圆点也是带 tint 的贴图 |
+
+**文字为什么看起来没事**：原版字体渲染器自己会补 alpha
+（`if ((color & 0xFC000000) == 0) color |= 0xFF000000`），贴图这条路没人补。
+这个不对称正是它容易被误判成「颜色值不对」而不是「根本没画出来」的原因。
+
+JSON 组件那条路本来是对的（`PIDSAlign.color` 把 6 位色变成 `0xFF000000 | value`），
+脚本这条路此前漏了。
+
 ### 4.4 脚本能读到的数据（`pids`）
 
 | 成员 | 说明 |
@@ -235,6 +257,7 @@ Rectangle.create("Bar").color(0xFF0000).pos(0, 0).size(100, 4).draw(ctx);
 | `pids.type` / `pids.name` / `pids.id` | 面板类型与预设标识 |
 | `pids.blockPos()` / `pids.targetPlatformIds()` | 方块坐标与绑定的站台 |
 | `pids.getCustomMessage(i)` / `pids.isRowHidden(i)` | 自定义文本与行隐藏标记 |
+| `pids.isKeyBlock()` / `pids.isPlatformNumberHidden()` | 本块是不是面板的「主块」；平台号显示是否被关掉 |
 | `pids.station()` | `name()` / `getName()` / `id()` / `zone()` / `stationName()` |
 | `pids.arrivals()` | `get(i)`（越界返回 `null`，与 JCM 2.x 一致）、`size()`、`mixedCarLength()`、`toArray()`、`platforms()` |
 | `arrival.*` | `arrivalTime()` / `departureTime()` / `arrived()` / `departed()` / `destination()` / `carCount()` / `routeNumber()` / `routeName()` / `routeColor()` / `circularState()` / `platformName()` / `currentStationIndex()` / `deviation()` / `realtime()` / `cars()` / `terminating()` / `platform()` / `route()` |
@@ -242,6 +265,13 @@ Rectangle.create("Bar").color(0xFF0000).pos(0, 0).size(100, 4).draw(ctx);
 
 > `pids.arrivals().get(i)` **越界返回 `null`**，这是 JCM 2.x 的正式契约（它自己的
 > `pids_1a.js` 就是这么守的）。没有任何班次时脚本必须自己判空。
+>
+> 这一条**必须是 `null`，不能是「占位对象」**。曾经为了让不判空的预设不抛异常而返回过
+> 占位对象，代价是预设那侧完全看不出来：`if (train)` 恒为真，于是所有**写了**判空的预设
+> 都会把空行画出来。在 HKR 的面板上，那个幽灵班次走到 `isNonPassenger`——占位对象没有
+> 线路，函数返回「非载客」——于是打出「不載客列車」，而它的 ETA 永远显示「1 min」：
+> 占位对象报的到站时间是**当下**，`Math.ceil(0 / 60)` 进位成 1 分钟，而这句话每 60 tick
+> 在中英之间切换一次，就是它旁边那个「闪烁」。
 
 ### 4.5 画布尺寸与面板字面量
 
@@ -257,6 +287,38 @@ Rectangle.create("Bar").color(0xFF0000).pos(0, 0).size(100, 4).draw(ctx);
 Z 值另外按实机观感微调过（面板要离开方块表面，否则会与方块模型争深度）：
 RV 与 LCD 见 `RenderPIDSBase` / `RenderLCDPIDS`，1A 为 `-0.112`（在 JCM 2.x 的
 `-0.130` 基础上向方块内侧收回 0.018）。
+
+### 双格面板：两半各画一面
+
+一个「双格」PIDS 其实是**两个方块背靠背**：`BlockPIDSBaseHorizontal.setPlacedBy` 把第二块
+放在 `pos.relative(FACING)`，并给它**相反的 FACING**。于是：
+
+| | 朝向 | 角色（JCM 2.x 的叫法） |
+|---|---|---|
+| 主块 | `NORTH` / `EAST` | key block，`pids.isKeyBlock()` == `true` |
+| 另一块 | `SOUTH` / `WEST` | `pids.isKeyBlock()` == `false` |
+
+**两半都要渲染**，各自在自己那一面画一整块面板——JCM 2.x 的 `PIDSRenderer.renderCurated`
+里**没有**任何 key-block 判断，它就是「谁被调到就从谁那里、以谁为原点画」；MTR 3 自带的
+`RenderPIDS` 同理。曾经有一版把非主块 `return` 掉，结果每块双格面板**只剩一面有画面**。
+
+哪一半真的出图由**预设自己**决定，工具是 `pids.isKeyBlock()`。1A 型的
+`st_ql.js`（琼岭车站展示系统）就是这么写的：
+
+```js
+if (pids.isPlatformNumberHidden()) {
+    if (!pids.isKeyBlock()) { show(pids, ctx); }   // 平台号隐藏 → 画在非主块那面
+} else {
+    if ( pids.isKeyBlock()) { show(pids, ctx); }   // 平台号可见 → 画在主块那面
+}
+```
+
+所以 `isKeyBlock()` / `isPlatformNumberHidden()` 一度被硬编码成 `true` / `false` 时，
+这块面板在「平台号可见」时两半都画（日志里同一块面板出现两次 `running script`），
+在「平台号隐藏」时**一面都不画**。
+
+两半共用一份编译好的脚本程序（按主块位置做 key），因此预设里的计数器、音效状态每块面板
+只有一份，两半不会各自跑一套。`pids.getCustomMessage(i)` 与 JCM 2.x 一样，越界给空串。
 
 ### 4.6 脚本沙箱与可见性（JCM 2.x 真有的那部分 GUI）
 
@@ -411,8 +473,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 | `PIDSPresetCheck` | ✅ **ALL CHECKS PASSED** | 本次运行 |
 | `ScriptShutterCheck`（24 条规则断言 + 4 个真实作用域探针） | ✅ **SHUTTER OK** —— 四个被禁类在**使用**时全部被拒 | 本次运行 |
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
+| 「每个 Texture/Rectangle 的最终颜色必须不透明」新断言 | ✅ 全部通过（2/3/4/6 个调用随班次数变化） | 本次运行 |
+| 「`arrivals().get(i)` 越界必须是 `null`」新断言 | ✅ 通过（越界 4 个下标 + 有效下标 1 个） | 本次运行 |
 | 脚本沙箱（ClassShutter）开启后仍能跑通全部 16 个用例 | ✅ 通过（首轮 16/16 失败，见 §4.6，修好后全绿） | 本次运行 |
-| **实机运行**（本次会话，`Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） | ✅ 脚本管线跑通，4 个不同资源包预设同屏渲染，聊天栏无报错 | 见 §7.8 |
+| **实机运行**（`Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） | ✅ 脚本管线跑通，多个资源包预设同屏渲染，聊天栏无报错 | 见 §7.8、§7.9 |
 
 ### 7.8 实机验证记录（本次会话）
 
@@ -478,6 +542,52 @@ Rhino 拒绝二次安装时抛的是 **`SecurityException`**（不是它自己�
 > 立刻抓出 3 个真 bug——`departureTime()` 未守空、缺 `worldIsRaining` / `worldIsThundering`、
 > 缺 `route()`。1A 的面板偏移问题同样属于「换个型号就暴露」的类型。
 
+### 7.9 第二轮实机：颜色、路线图、双格面板、空行
+
+第二轮进游戏，看的仍然是同一批面板（`HKR_PIDS` / `HKR_PIDS_PL` / `nanbin_crt_pids_1` /
+`pids_qlst`，站台两班车）。这一轮报上来的四个现象，三个根因：
+
+**1. 徽章没有底色、站台圆圈只剩数字、路线图没有那条线和圆点**
+
+一个原因，见 §4.3：`.color()` 写的是 6 位 RGB，MTR 3 的纹理绘制需要 alpha。
+绘制调用追踪里一眼可见，同一块面板同一个调用：
+
+```
+修前：Texture(pos=80.0,11.5 size=12.0x12.0 texture=.../plat_circle.png color=00000000)
+修后：Texture(pos=80.0,11.5 size=12.0x12.0 texture=.../plat_circle.png color=FF874936)
+```
+
+`FF874936` 就是这条线路的颜色。**路线图那一段脚本一直是走到的**——追踪里有整帧以
+`jsblock:textures/pids/3.png` 为背景、随后是 93×4 的横条、箭头、三个圆点和三个站名，
+所以它不是「没走到那段」，是「走了但画不出来」。
+
+**2. 只显示一面**
+
+见 §4.5 末尾：双格面板的两半各画自己那一面，跳掉任何一半都会让一面空着。修好之后日志里
+每块面板两半各出现一行：
+
+```
+[PIDS] panel block at -13, -59, 3 facing east (key half): companion -12, -59, 3
+[PIDS] panel block at -12, -59, 3 facing west (other half): companion -13, -59, 3
+```
+
+**3. 车次没排满时多出「不載客列車」，并且它旁边的时间一直在闪**
+
+同一个原因，见 §4.4：`arrivals().get(i)` 越界返回的是占位对象而不是 `null`，
+于是预设里**写了**的 `if (train)` 判空失效。修好之后 1 班车只画 1 行：
+
+```
+[PIDS trace] HKR PIDS@HKR_PIDS#... cards=1 calls=7      ← 修后（1 班车 7 个调用）
+[PIDS trace] HKR PIDS@HKR_PIDS#... cards=0 calls=19     ← 修前（0 班车反而画满 4 行）
+```
+
+**顺带证伪的两个猜测**
+
+| 猜测 | 实际 |
+|---|---|
+| 「1min / 1分钟」是两块面板的绘制调用落在同一个 z 上打架 | 一帧里每个调用的 z 都不同（0、−0.1、−0.2 …，步长 0.1 脚本单位），没有重合；文本的切换与 `(gameTick / 60) % 2` **逐点吻合**，即 `TextUtil.cycleString`，而它的默认 60 tick 正是 JCM 2.x 的 `SWITCH_LANG_DURATION`。它是预设自己每 3 秒轮换一次中英文，不是移植缺陷。幽灵行那半边之所以看着像「一直闪」，是因为它每帧都重新算成 1 分钟，于是也每 3 秒切一次 |
+| 「路线图是脚本没走到那段」 | 走到了，见上 |
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。
@@ -515,6 +625,11 @@ public float panelLeft() { return startX - panelWidth / 2F; }   // 错的
 - JCM 2.x 没有 PIDS 脚本文本编辑器，本分支也没有：改预设仍然是编辑资源包里的 `.js`。
   画面上的 GUI 只有 §4.6 那四件（沙箱开关、限制警告、失败提示、调试浮层）。
 - 脚本的 GPU 绘制路径只有实机才能验证；无头检查覆盖不到像素结果。
+- 第三方预设若不判空就索引 `pids.arrivals().get(i)`，越界时会抛——这与 JCM 2.x 完全一致
+  （它自己也这么做），引擎会报一次并退回预设背景图。重庆轨道交通包的 `crt_pids_1.js`
+  正是这种写法（第 20、22 行），`yjcm-recon\pids-fixed\` 下那份副本已经补上判空。
+- 一处已知的世界观差异：`pids.getCustomMessage(i)` 越界给的是空串，JCM 2.x 给 `null`。
+  范围内的行为两者一致（都是块实体里那条消息，没设过就是空串），而空串对预设更友好。
 
 ### 7.7 沙箱检查暴露的一件事：光提名字不等于够得着
 
