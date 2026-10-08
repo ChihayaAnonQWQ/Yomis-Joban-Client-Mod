@@ -100,6 +100,37 @@ public final class ScriptEngine {
 			final Scriptable scope = newScope(cx);
 
 			boolean anyLoaded = false;
+
+			/* JCM 2.x hands a preset's own JSON to its scripts as SCRIPT_INPUT. It is always
+			   defined -- empty when the preset declares none -- so a script reading a field of it
+			   gets undefined rather than a ReferenceError. Evaluated as a JS literal, because JSON
+			   is one, which keeps nested objects and arrays exactly as the pack wrote them. */
+			Object scriptInput = null;
+			if (preset.scriptInput != null) {
+				try {
+					scriptInput = cx.evaluateString(scope, "(" + preset.scriptInput + ")", "<scriptInput>", 1, null);
+				} catch (Exception e) {
+					Joban.LOGGER.warn("[Joban Client] PIDS preset \"" + preset.id
+							+ "\" has a scriptInput that is not valid JSON; scripts see an empty object: " + e);
+				}
+			}
+			if (scriptInput == null) {
+				scriptInput = cx.newObject(scope);
+			}
+			scope.put("SCRIPT_INPUT", scope, scriptInput);
+
+			/* JCM 2.x runs scriptTexts before scriptFiles, and a preset may consist of nothing else. */
+			for (int textIndex = 0; textIndex < preset.scriptTexts.size(); textIndex++) {
+				try {
+					cx.evaluateString(scope, preset.scriptTexts.get(textIndex),
+							"<scriptTexts[" + textIndex + "]>", 1, null);
+					anyLoaded = true;
+				} catch (Exception e) {
+					Joban.LOGGER.error("[Joban Client] PIDS preset \"" + preset.id + "\" scriptTexts["
+							+ textIndex + "] failed: " + e);
+				}
+			}
+
 			for (String scriptFile : preset.scriptFiles) {
 				if (evaluateResource(cx, scope, scriptFile)) {
 					anyLoaded = true;
@@ -204,6 +235,16 @@ public final class ScriptEngine {
 	// Globals
 	// ==================================================================
 
+	/**
+	 * Puts the class shutter on a context.
+	 *
+	 * <p>Public because a background worker enters its own context on its own thread and must
+	 * be under the same restrictions as the render thread.</p>
+	 */
+	static void installShutter(Context cx) {
+		ScriptClassShutter.install(cx, SHUTTER);
+	}
+
 	private static void registerGlobals(Context cx, Scriptable scope) {
 		ScriptableObject.putProperty(scope, "Resources", new NativeJavaClass(scope, Resources.class));
 		ScriptableObject.putProperty(scope, "TextUtil", new NativeJavaClass(scope, TextUtil.class));
@@ -213,6 +254,23 @@ public final class ScriptEngine {
 		ScriptableObject.putProperty(scope, "Text", new NativeJavaClass(scope, ScriptDrawCalls.Text.class));
 		ScriptableObject.putProperty(scope, "Texture", new NativeJavaClass(scope, ScriptDrawCalls.Texture.class));
 		ScriptableObject.putProperty(scope, "Rectangle", new NativeJavaClass(scope, ScriptDrawCalls.Rectangle.class));
+		/* Math objects, documented under Common APIs and available to every script type. A pack that
+		   builds a transformation stack reaches for Matrices without checking whether it exists. */
+		ScriptableObject.putProperty(scope, "Matrices", new NativeJavaClass(scope, ScriptMath.Matrices.class));
+		ScriptableObject.putProperty(scope, "Vector3f", new NativeJavaClass(scope, ScriptMath.Vector3f.class));
+		/* Common-API utilities. Independently of one another: a preset may use a clock and never a
+		   tracker, or the other way round. */
+		ScriptableObject.putProperty(scope, "Timing", new NativeJavaClass(scope, ScriptTrackers.Timing.class));
+		ScriptableObject.putProperty(scope, "StateTracker", new NativeJavaClass(scope, ScriptTrackers.StateTracker.class));
+		ScriptableObject.putProperty(scope, "CycleTracker", new NativeJavaClass(scope, ScriptTrackers.CycleTracker.class));
+		/* The two that let a preset do slow work without stalling a frame. 琼岭's pack calls
+		   BackgroundWorker.submit at load time, so its absence is a black panel, not a slow one. */
+		ScriptableObject.putProperty(scope, "BackgroundWorker", new NativeJavaClass(scope, ScriptNetwork.BackgroundWorker.class));
+		ScriptableObject.putProperty(scope, "TickableSoundInstance", new NativeJavaClass(scope, ScriptSound.TickableSoundInstance.class));
+		ScriptableObject.putProperty(scope, "Networking", new NativeJavaClass(scope, ScriptNetwork.Networking.class));
+		/* Packs log through console.debug/warn/error, and the calls sit in catch blocks -- so a
+		   missing console turns one failure into two and hides the first. */
+		ScriptableObject.putProperty(scope, "console", new NativeJavaClass(scope, Console.class));
 
 		ScriptableObject.putProperty(scope, "print", new BaseFunction() {
 			@Override
@@ -259,9 +317,51 @@ public final class ScriptEngine {
 			}
 			return new ResourceLocation(namespacePath.substring(0, colon), namespacePath.substring(colon + 1));
 		}
+
+		/** {@code Resources.getMTRVersion()} -- the MTR version, as a string. */
+		public static String getMTRVersion() {
+			return com.jsblock.Joban.getMTRVersion();
+		}
+
+		/**
+		 * {@code Resources.getAddonVersion(name)} -- the version of an addon, by mod id.
+		 *
+		 * <p>Only this mod answers: the packs that ask are checking whether JCM is new enough for
+		 * something, and an empty string is the honest answer for anything else.</p>
+		 */
+		public static String getAddonVersion(String modId) {
+			return modId != null && (modId.equalsIgnoreCase("jcm") || modId.equalsIgnoreCase("jsblock"))
+					? com.jsblock.Joban.getVersion() : "";
+		}
 	}
 
 	/** {@code TextUtil.cycleString("a|b")} — alternates the parts as the game ticks. */
+	/** {@code console.log} and friends -- a pack's own logging, sent to the game log. */
+	public static final class Console {
+		private Console() {
+		}
+
+		public static void log(Object message) {
+			com.jsblock.Joban.LOGGER.info("[PIDS script] {}", message);
+		}
+
+		public static void debug(Object message) {
+			log(message);
+		}
+	
+		public static void info(Object message) {
+			log(message);
+		}
+	
+		public static void warn(Object message) {
+			com.jsblock.Joban.LOGGER.warn("[PIDS script] {}", message);
+		}
+	
+		public static void error(Object message) {
+			com.jsblock.Joban.LOGGER.error("[PIDS script] {}", message);
+		}
+	}
+
 	public static final class TextUtil {
 		/** Ticks each variant is shown for when a script does not say. */
 		public static final int DEFAULT_SWITCH_TICKS = 60;
@@ -436,6 +536,123 @@ public final class ScriptEngine {
 			final Minecraft minecraft = Minecraft.getInstance();
 			return minecraft != null && minecraft.level != null && minecraft.level.isThundering();
 		}
+
+		/**
+		 * {@code MinecraftClient.localPlayer()} -- the player, as a {@link PlayerInfo}.
+		 *
+		 * <p>Null on a dedicated server or before a world is joined, which is what the docs'
+		 * nullable return means.</p>
+		 */
+		public static PlayerInfo localPlayer() {
+			final Minecraft minecraft = Minecraft.getInstance();
+			return minecraft == null || minecraft.player == null ? null : new PlayerInfo(minecraft.player);
+		}
+
+		/** {@code MinecraftClient.displayMessage(message, actionBar)}. */
+		public static void displayMessage(Object message, boolean actionBar) {
+			final Minecraft minecraft = Minecraft.getInstance();
+			if (minecraft == null || minecraft.gui == null || message == null) {
+				return;
+			}
+			final net.minecraft.network.chat.Component text =
+					net.minecraft.network.chat.Component.literal(org.mozilla.javascript.Context.toString(message));
+			if (actionBar) {
+				minecraft.gui.setOverlayMessage(text, false);
+			} else {
+				minecraft.gui.getChat().addMessage(text);
+			}
+		}
+
+		/** {@code MinecraftClient.narrate(message)} -- spoken by the narrator when one is on. */
+		public static void narrate(Object message) {
+			final Minecraft minecraft = Minecraft.getInstance();
+			if (minecraft == null || message == null) {
+				return;
+			}
+			try {
+				minecraft.getNarrator().sayNow(
+						net.minecraft.network.chat.Component.literal(org.mozilla.javascript.Context.toString(message)));
+			} catch (Throwable t) {
+				com.jsblock.Joban.LOGGER.info("[PIDS script] narrate: {}", message);
+			}
+		}
+		
+		/** {@code MinecraftClient.renderDistance()}. */
+		public static int renderDistance() {
+			final Minecraft minecraft = Minecraft.getInstance();
+			return minecraft == null || minecraft.options == null ? 0 : minecraft.options.renderDistance().get();
+		}
+		
+		/** {@code MinecraftClient.gamePaused()}. */
+		public static boolean gamePaused() {
+			final Minecraft minecraft = Minecraft.getInstance();
+			return minecraft != null && minecraft.isPaused();
+		}
+
+		/** {@code MinecraftClient.worldIsRainingAt(pos)}. */
+		public static boolean worldIsRainingAt(Object pos) {
+			final Minecraft minecraft = Minecraft.getInstance();
+			if (minecraft == null || minecraft.level == null || !(pos instanceof ScriptMath.Vector3f)) {
+				return false;
+			}
+			return minecraft.level.isRainingAt(((ScriptMath.Vector3f) pos).rawBlockPos());
+		}
+		
+		/** {@code MinecraftClient.lightLevelAt(pos)}. */
+		public static int lightLevelAt(Object pos) {
+			final Minecraft minecraft = Minecraft.getInstance();
+			if (minecraft == null || minecraft.level == null || !(pos instanceof ScriptMath.Vector3f)) {
+				return 0;
+			}
+			return minecraft.level.getMaxLocalRawBrightness(((ScriptMath.Vector3f) pos).rawBlockPos());
+		}
+		
+		/**
+		 * {@code PlayerEntity} -- what {@code localPlayer()} hands back.
+		 *
+		 * <p>Positions are returned as {@link ScriptMath.Vector3f}, the same type
+		 * {@code pids.blockPos()} and {@code stop} coordinates use, so a script can measure between
+		 * them with the vector's own {@code distance} -- which is exactly how the 琼岭 pack decides
+		 * whether anyone is near enough to make the panel worth drawing.</p>
+		 */
+		public static final class PlayerInfo {
+			private final net.minecraft.world.entity.player.Player player;
+		
+			PlayerInfo(net.minecraft.world.entity.player.Player player) {
+				this.player = player;
+			}
+		
+			public String uuid() {
+				return player.getUUID().toString();
+			}
+		
+			public String name() {
+				return player.getName().getString();
+			}
+		
+			public ScriptMath.Vector3f pos() {
+				return new ScriptMath.Vector3f(player.getX(), player.getY(), player.getZ());
+			}
+		
+			public ScriptMath.Vector3f blockPos() {
+				final net.minecraft.core.BlockPos pos = player.blockPosition();
+				return new ScriptMath.Vector3f(pos.getX(), pos.getY(), pos.getZ());
+			}
+		
+			/** The eye position, which is what a 'smooth' position means here. */
+			public ScriptMath.Vector3f smoothPos() {
+				return new ScriptMath.Vector3f(player.getX(), player.getEyeY(), player.getZ());
+			}
+		
+			public ScriptMath.Vector3f velocity() {
+				return new ScriptMath.Vector3f(player.getDeltaMovement().x, player.getDeltaMovement().y,
+						player.getDeltaMovement().z);
+			}
+		
+			public boolean hasPermissionLevel(int level) {
+				return player.hasPermissions(level);
+			}
+		}
 	}
 
 	// ==================================================================
@@ -541,6 +758,17 @@ public final class ScriptEngine {
 		}
 
 		/** @return the last failure message, or {@code null} when the last call succeeded. */
+		/**
+		 * The program's script scope.
+		 *
+		 * <p>Needed by anything that hands a JavaScript array back to a script: Rhino only
+		 * gives an array its prototype when the array is made through a scope, and without it
+		 * {@code .map()} on that array fails.</p>
+		 */
+		public Scriptable getScope() {
+			return scope;
+		}
+
 		public String getLastError() {
 			return lastError;
 		}
@@ -578,7 +806,15 @@ public final class ScriptEngine {
 				/* Always three arguments, so a script that ignores ctx (as create/dispose
 				   usually do) still receives its state and pids in the right positions. */
 				final Object[] args = new Object[]{ctx, state, pids};
-				final Object result = ((org.mozilla.javascript.Function) fn).call(cx, scope, scope, args);
+				/* Arrays the wrapper hands back are built through this scope, and Rhino only
+				   gives an array its prototype when it is created that way. */
+				PIDSWrapper.enterScriptScope(scope);
+				final Object result;
+				try {
+					result = ((org.mozilla.javascript.Function) fn).call(cx, scope, scope, args);
+				} finally {
+					PIDSWrapper.exitScriptScope();
+				}
 				lastExecutionMs = (System.nanoTime() - started) / 1_000_000.0;
 				lastError = null;
 				return returnSuccess ? Boolean.TRUE : result;
@@ -592,6 +828,16 @@ public final class ScriptEngine {
 				lastError = function + "(): " + e.getMessage();
 				if (reportedErrors.add(signature)) {
 					Joban.LOGGER.error("[Joban Client] PIDS script \"{}\" threw in {}(): {}", key, function, e.toString());
+					/* Where in the script, and by which call. The message alone names the line the
+					   statement starts on, which is not the same as the expression that failed --
+					   a map() callback on the end of a long chained statement reports the statement's
+					   first line, not the callback's. */
+					if (e instanceof org.mozilla.javascript.RhinoException) {
+						final String stack = ((org.mozilla.javascript.RhinoException) e).getScriptStackTrace();
+						if (stack != null && !stack.isEmpty()) {
+							Joban.LOGGER.error("[Joban Client]   JS stack: {}", stack.replace('\n', ' '));
+						}
+					}
 					if (pids != null) {
 						Joban.LOGGER.error("[Joban Client]   arrivals available: {}, rows: {}, preset: {}"
 										+ " -- a script that indexes past the end gets null, and anything after the"

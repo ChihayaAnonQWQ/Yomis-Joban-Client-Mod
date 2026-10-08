@@ -152,5 +152,7 @@
   "gui.jsblock.pids_projector.preset": "Display format",
   "gui.jsblock.pids_projector.offset": "Position offset (blocks)",
   "gui.jsblock.pids_projector.rotate": "Rotation (degrees)",
-  "gui.jsblock.pids_projector.scale": "Scale"
+  "gui.jsblock.pids_projector.scale": "Scale",
+  "block.jsblock.fire_alarm": "Fire Alarm",
+  "lore.jsblock.fire_alarm": "A wall-mounted fire alarm. Press it to ring, and it signals redstone for a second."
 }

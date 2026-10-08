@@ -1,3 +1,76 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.0
+
+## Compatible MTR Version
+MTR
+
+## Why the version jumps to 2.0
+
+1.5 could draw every preset we had. What it could not do was run a preset written against the
+scripting documentation rather than against the presets we happened to test. This release closes
+that gap: the scripting surface is now the documented Common APIs, and two real packs that failed
+on it -- a 65-preset European pack and a Chinese one -- now render.
+
+It also adds a block, and the two together are more than a patch release's worth.
+
+## New: Fire Alarm
+
+Ported from JCM 2.x's `FireAlarmWallBlock`. A wall-mounted bell: press it and it rings and puts out
+a redstone signal of 15 for one second, which is how a station's alarm circuit hears about it. The
+state is named `unpowered`, exactly as JCM 2.x names it, so a pack written against their block still
+lines up. It crafts from iron, redstone and paper, two at a time, as theirs does.
+
+One deliberate difference: JCM 2.x's version is silent, and a bell that cannot be heard is not much
+of a bell, so this one rings.
+
+## New: the scripting API a pack actually expects
+
+Everything below was found by running real presets, not by reading the docs and guessing. Each one
+was, until this release, a script that stopped dead or a panel that stayed black.
+
+| Added | What it fixes |
+|---|---|
+| `Matrices` | `new Matrices()` was a ReferenceError; a clock hand could not be rotated |
+| `Vector3f` | `pids.blockPos()` had to return one, with `x()`/`y()`/`z()` as methods |
+| `Timing` | `Timing.currentTimeMillis()` and friends |
+| `StateTracker`, `CycleTracker` | the documented way to notice a change once rather than every frame |
+| `BackgroundWorker` | its absence failed a whole script *at load*, which is a black panel |
+| `Networking` | `fetch`, `fetchString`, `fetchImage` -- what that worker was fetching |
+| `console` | packs log through it, and the calls sit in catch blocks, so its absence turned one failure into two |
+| `SoundManager` (`ctx.getSoundManager()`) | announcements; without it the pack stops at the first render |
+| `TickableSoundInstance` | a sound a script holds and adjusts while it plays |
+| `MinecraftClient.localPlayer()` and `PlayerEntity` | deciding whether to draw at all, by player distance |
+| `MinecraftClient.displayMessage/narrate/renderDistance/gamePaused/lightLevelAt/worldIsRainingAt` | the rest of that page, a few lines each |
+| `Resources.getMTRVersion()`, `Resources.getAddonVersion()` | packs branch on which mod versions they are running under |
+| `scriptTexts` | JavaScript written inline in the preset entry, run before `scriptFiles` |
+| `SCRIPT_INPUT` | the preset's own JSON, handed to its scripts |
+| `Station.getColor/getColorHex/getId/getHexId` | RUHR reads the station colour; without it, `ruhr` failed every frame |
+
+## Fixed
+
+Each of these was a bug on this side, not a missing feature, and two of them had been quietly wrong
+for a while:
+
+- **`pids.type` reported the preset id instead of the block type.** A script branching on
+  `pids.type == "pids_projector"` never took that branch, and a preset's `blacklist` -- a list of
+  *type* names -- could never match anything.
+- **`pids.blockPos()` returned an `int[]`.** Packs write `pids.blockPos().x()`, which is a method
+  call, so those scripts ended on the spot.
+- **Arrays handed to scripts had no prototype.** `new NativeArray(...)` built from Java has neither
+  prototype nor parent scope, so `.map()`, `.slice()` and `.findIndex()` -- which is exactly what
+  packs call on the result -- are unreachable, and Rhino reports it as *"Cannot find default value
+  for object"*, an error that names nothing useful. Arrays are now built through the script's scope.
+- **Route stops had no `stationName`.** Thirty-three scripts in one pack read
+  `getPlatforms().toArray().map(platform => platform.stationName)`.
+- **`getPlatforms()` had no `toArray()`** at all.
+
+## Known issues
+
+- The PIDS Projector's number fields still need a click before they show their value. Unchanged from
+  1.5; the values themselves are correct.
+- `Networking` requests do not use a proxy unless the JVM is told about one. On a machine that
+  reaches the internet through a local proxy, a pack's weather lookup will time out; the pack
+  handles that itself and keeps drawing.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-1.5
 
 ## Compatible MTR Version

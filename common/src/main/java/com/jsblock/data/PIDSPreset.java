@@ -69,6 +69,24 @@ public class PIDSPreset {
     public List<String> scriptFiles = Collections.emptyList();
 
     /**
+     * JavaScript written directly in the preset entry, run before {@link #scriptFiles}.
+     *
+     * <p>JCM 2.x's {@code scriptTexts}. A pack that keeps a few lines of setup inline rather than
+     * in a file needs it, and a preset carrying only {@code scriptTexts} is scripted just as much
+     * as one carrying files -- which is why {@link #isScripted()} counts both.</p>
+     */
+    public List<String> scriptTexts = Collections.emptyList();
+
+    /**
+     * Arbitrary JSON the preset wants its scripts to see, exposed to them as {@code SCRIPT_INPUT}.
+     *
+     * <p>JCM 2.x's {@code scriptInput}: one script can then serve several boards by being told what
+     * to announce, which station to name, and so on.</p>
+     */
+    public com.google.gson.JsonElement scriptInput = null;
+
+
+    /**
      * PIDS block types this preset refuses to run on, by type name.
      *
      * <p>JCM 2.x field. JCM 2.x also keeps a global per-type blacklist in the preset name
@@ -89,7 +107,7 @@ public class PIDSPreset {
 
     /** @return {@code true} when this preset is drawn by JavaScript rather than by JSON. */
     public boolean isScripted() {
-        return scriptFiles != null && !scriptFiles.isEmpty();
+        return (scriptFiles != null && !scriptFiles.isEmpty()) || (scriptTexts != null && !scriptTexts.isEmpty());
     }
 
     /** @return {@code true} when the preset may be used on the given PIDS type. */
@@ -163,6 +181,10 @@ public class PIDSPreset {
         }
         preset.builtin = presetObject.has("builtin") && presetObject.get("builtin").getAsBoolean();
         preset.scriptFiles = readStringList(presetObject, "scriptFiles");
+        preset.scriptTexts = readStringList(presetObject, "scriptTexts");
+        if (presetObject.has("scriptInput")) {
+        	preset.scriptInput = presetObject.get("scriptInput");
+        }
         preset.blacklist = readStringList(presetObject, "blacklist");
 
         /* Whole-screen pixelation, declared by the pack. Read here rather than from the script

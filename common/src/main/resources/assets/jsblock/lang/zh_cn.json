@@ -152,5 +152,7 @@
   "gui.jsblock.pids_projector.preset": "显示格式",
   "gui.jsblock.pids_projector.offset": "位置偏移 (格)",
   "gui.jsblock.pids_projector.rotate": "旋转 (度)",
-  "gui.jsblock.pids_projector.scale": "大小"
+  "gui.jsblock.pids_projector.scale": "大小",
+  "block.jsblock.fire_alarm": "火警铃",
+  "lore.jsblock.fire_alarm": "壁挂式火警铃。按一下会响，并输出一秒的红石信号。"
 }

@@ -1008,6 +1008,80 @@ Internal Exception: java.lang.IndexOutOfBoundsException:
 （保存和应用都正常 ✓），只是**文字没画出来** ✓。用的是 MTR 自己的 `WidgetBetterTextField` ✓，
 两条常规解法（构造器给初值 ✓、`init()` 里 `setValue` ✓）都试过无效 ✗。留待单独排查 ✓。
 
+**脚本 API 里有一部分是 MTR 4 专有的，移植不过来，也不该假装移植**
+
+官方脚本文档的 API 参考分三块 ✓：渲染相关 ✓、PIDS 对象相关 ✓、以及
+
+> #### Transport Simulation Core Related
+> Transport Simulation Core (TSC) is the backend serving MTR 4.
+
+—— **文档自己就写明了 TSC 服务于 MTR 4** ✓。这一块下面的东西（`CarDetails.getVehicleId()` ✓ 等）
+描述的是 **MTR 4 的动态编组**：逐节车厢各自指定车型 ✓。**MTR 3 没有这个概念** ✓：
+编组挂在车型上 ✓（一种车型就是固定的一列车 ✓），排班中的一趟车更是连实体都还没有 ✓。
+
+所以本分支对 `Arrival.cars()` **返回空列表** ✓，而不是编一组看起来像那么回事的假数据 ✗ ——
+**假数据会让预设静默地画错** ✗，空列表会让它至少走「没有逐节信息」的分支 ✓。
+（真正需要判断的是**有几节车厢** ✓，那是 `carCount()` ✓ 与 `mixedCarLength()` ✓，两者都已实现 ✓。）
+
+**结论**：遇到「某个 API 没实现」时先问**它在 MTR 3 里对应什么** ✓ ——
+有对应概念就实现 ✓，没有就**明确返回空值并写清原因** ✓，不要造替代语义 ✗。
+
+**16. Rhino 里从 Java 造出来的 JS 数组没有 prototype，`.map()` 会报一个毫不相干的错**
+
+欧洲那个 PIDS 包里 **33 个脚本**都写同一句：
+
+```js
+let stops = arrival.route().getPlatforms().toArray().map(platform => platform.stationName);
+```
+
+而报错是：
+
+```
+TypeError: Cannot find default value for object. (jsblock:scripts/dutch_bus.js#76)
+```
+
+**这句话指向的方向完全是错的** ✗。它跟 `stationName` 无关 ✓、跟 null 无关 ✓、跟 `.map()` 的回调也无关 ✓。
+真正的顺序是这样的 ✓：
+
+| 阶段 | 现象 |
+|---|---|
+| `RouteStopList` 本来没有 `toArray()` | `Cannot find function toArray` ✓ —— 这条是对的 ✓，加上就好 ✓ |
+| 加上后改用 `new NativeArray(Object[])` | 变成 `Cannot find default value for object` ✗ |
+| 怀疑元素是裸 Java 对象 ✓，改成 `NativeObject` ✓ | **还是同一个错** ✗ |
+| 怀疑 `stationName` 为 null ✓，全线加空值保护 ✓ | **还是同一个错** ✗ |
+| 加一次性插桩 ✓ + Rhino 的 `getScriptStackTrace()` ✓ | Java 侧**全部跑通** ✓（size=3、元素是 `NativeObject` ✓），错误发生在**交给 JS 之后** ✓ |
+| **在游戏外复现** ✓ | 一次就定位 ✓ |
+
+那个离线探针（`work\probe\rhino-probe\RhinoProbe.java` ✓，用 gradle 缓存里的 `rhino-1.7.15.jar` 直接跑 ✓）
+把五种造法放在同一段 JS 下对比 ✓：
+
+| 造法 | 结果 |
+|---|---|
+| `new NativeArray(裸 Java 对象)` | 失败 ✗ `Cannot find default value for object` |
+| `new NativeArray(NativeObject)` | **失败 ✗ 一模一样** |
+| **`cx.newArray(scope, elements)`** | **成功 ✓** |
+| 造完再手工 `setPrototype` | 失败 ✗ `undefined is not a function` |
+| 其它 | 失败 ✗ |
+
+**结论**：从 Java 直接 `new NativeArray(...)` 出来的数组**既没有 prototype 也没有 parent scope** ✗ →
+脚本接着要用的 `.map()` / `.slice()` / `.findIndex()` 是 **Array 原型**上的方法 ✓ → 在这种数组上找不到 ✗ →
+而 Rhino 报的偏偏是 `default value` ✓（**一个和原因毫无关系的词** ✗）。
+只有 `cx.newArray(scope, ...)` 造出来的才是正常 JS 数组 ✓。
+
+**修法**：把 `scope` 送到数组构造处 ✓ —— `ScriptEngine` 在调用 `create/render/dispose` 期间把它发布到
+**线程局部** ✓（脚本本来就跑在自己的执行线程上 ✓，`try/finally` 里撤销 ✓），`PIDSWrapper` 的两个
+`toArray()` 都走 `cx.newArray(scope, ...)` ✓。头显检查没有 scope ✓，保留一条降级路径 ✓。
+
+**教训**：Rhino 的错误信息**不能当作线索** ✗ —— 它会把你带到三个完全错误的方向 ✓。
+真正管用的是这三样 ✓：**一次性插桩** ✓（确认自己的代码跑通没有 ✓）、
+**`getScriptStackTrace()`** ✓（确认错误在 JS 的哪一层 ✓）、
+以及**拿到游戏外面复现** ✓ —— 这一条最省时间 ✓。
+
+在 TSC 文档这一页（`/v2.2/dev/scripting/tsc/` ✓）能找到 `Station` 的完整定义 ✓：
+`getId` / `getName` / `getColor` / `getColorHex` / `getHexId` / 三个 zone / 包围盒 / `inArea` / `getExits` ✓。
+其中**只依赖站名、id、颜色**的那几个已实现 ✓；zone 与包围盒需要保留车站几何 ✓，
+本包装配里没有 ✓，也没有预设用到 ✓，暂不实现 ✓。
+
 ### 7.4 编译通过证明不了的事
 
 `.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。

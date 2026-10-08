@@ -411,7 +411,37 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      */
     private boolean projectorMode = false;
 
+    /**
+     * The block type this renderer draws, as the scripting docs name it -- {@code rv_pids},
+     * {@code rv_pids_sil_1}, {@code rv_pids_sil_2}, {@code lcd_pids}, {@code pids_projector},
+     * {@code pids_1a}.
+     *
+     * <p>This is what {@code pids.type} reports. It used to report the preset id, so a script
+     * branching on {@code pids.type == "pids_projector"} never took that branch, and a preset's
+     * {@code blacklist} -- a list of type names -- never matched anything.</p>
+     */
+    private String scriptType;
+
+
     /** @see #projectorMode */
+    /** Sets the block type a script sees as {@code pids.type}. */
+    public RenderPIDSBase<T> setScriptType(String scriptType) {
+    	this.scriptType = scriptType;
+    	return this;
+    }
+
+    /**
+     * @return the configured type, or one derived from the renderer when it did not name it.
+     * The two SIL shapes share a tile entity class, so those renderers must say which one they
+     * are; everything else is unambiguous.
+     */
+    private String scriptType() {
+    	if (scriptType != null) {
+    		return scriptType;
+    	}
+    	return projectorMode ? "pids_projector" : "rv_pids";
+    }
+
     public RenderPIDSBase<T> setProjectorMode(boolean projector) {
         this.projectorMode = projector;
         return this;
@@ -579,7 +609,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 + " rows=" + (hideArrivals == null ? 0 : hideArrivals.length));
 
         final com.jsblock.script.PIDSWrapper wrapper = new com.jsblock.script.PIDSWrapper(
-                preset.id, hideArrivals == null ? 0 : hideArrivals.length,
+                scriptType(), hideArrivals == null ? 0 : hideArrivals.length,
                 canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList,
                 isKeyFacing(facing), hidePlatforms);
 

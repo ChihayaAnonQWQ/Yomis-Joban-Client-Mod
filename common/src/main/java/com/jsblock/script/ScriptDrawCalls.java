@@ -172,6 +172,14 @@ public final class ScriptDrawCalls {
 			return this;
 		}
 
+		/** Applies a {@code Matrices} to this element; see the scripting docs' Common APIs. */
+		public Texture matrices(Object matrices) {
+			if (matrices instanceof ScriptMath.Matrices) {
+				scriptMatrices = (ScriptMath.Matrices) matrices;
+			}
+			return this;
+		}
+
 		public Texture naturalLight() {
 			this.naturalLight = true;
 			return this;
@@ -386,6 +394,14 @@ public final class ScriptDrawCalls {
 
 		public Text color(int color) {
 			this.color = color;
+			return this;
+		}
+
+		/** Applies a {@code Matrices} to this element; see the scripting docs' Common APIs. */
+		public Text matrices(Object matrices) {
+			if (matrices instanceof ScriptMath.Matrices) {
+				scriptMatrices = (ScriptMath.Matrices) matrices;
+			}
 			return this;
 		}
 

@@ -19,6 +19,12 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 	protected static final int ARGB_BLACK = 0xFF000000;
 
 	/**
+	 * A {@code Matrices} handed in through {@code .matrices(m)}, applied on top of this element's own
+	 * transform. Null unless a script asked for one.
+	 */
+	ScriptMath.Matrices scriptMatrices;
+
+	/**
 	 * Makes a draw call's colour opaque, which is what every JCM 2.x wrapper does to it.
 	 *
 	 * <p>A preset writes a plain RGB literal — {@code .color(0xFFFFFF)} for white,
@@ -117,6 +123,13 @@ public abstract class ScriptDrawCall<T extends ScriptDrawCall<?>> {
 		ctx.matrices.pushPose();
 		ctx.matrices.scale(ctx.scriptScale, ctx.scriptScale, ctx.scriptScale);
 		ctx.matrices.translate((float) x, (float) y, z);
+		/* A Matrices set through .matrices(...) applies here, in the element's own space, which is
+		   what a script rotating something about its own centre wants (a clock hand, say).
+		   Multiplied into the live matrix directly: mulPose takes a quaternion, and a script may
+		   well have built a translation or a scale as well as a rotation. */
+		if (scriptMatrices != null) {
+			ctx.matrices.last().pose().mul(scriptMatrices.last());
+		}
 	}
 
 	final void popTransform(ScriptRenderContext ctx) {

@@ -84,9 +84,50 @@ public class PIDSWrapper {
 	 * that threw when it indexed past the end. See
 	 * {@link ScriptEngine.Program#adoptLenientArrivals()}.</p>
 	 */
+	/**
+	 * The scope the current script call runs in, published by the engine for its duration.
+	 *
+	 * <p>Thread-local because scripts run on their own execution threads, and the value is only
+	 * meaningful inside a create/render/dispose call.</p>
+	 */
+	private static final ThreadLocal<org.mozilla.javascript.Scriptable> CURRENT_SCOPE = new ThreadLocal<>();
+
+	/** Publishes the scope for the call the engine is about to make. */
+	public static void enterScriptScope(org.mozilla.javascript.Scriptable scope) {
+		CURRENT_SCOPE.set(scope);
+	}
+
+	/** Takes it back down again, whether the call succeeded or threw. */
+	public static void exitScriptScope() {
+		CURRENT_SCOPE.remove();
+	}
+
+	/**
+	 * A JavaScript array holding the given elements.
+	 *
+	 * <p>{@code cx.newArray} is the only construction Rhino gives a prototype to. An array built
+	 * here with {@code new NativeArray(...)} has neither prototype nor parent scope, so
+	 * {@code .map()}, {@code .slice()} and {@code .findIndex()} -- which is exactly what the packs
+	 * call on the result -- are not reachable, and Rhino reports that as "Cannot find default value
+	 * for object", an error that names nothing useful. Reproduced offline in work/probe/rhino-probe.</p>
+	 */
+	static org.mozilla.javascript.NativeArray scriptArray(java.util.List<Object> elements) {
+		final Object[] array = elements.toArray();
+		final org.mozilla.javascript.Scriptable scope = CURRENT_SCOPE.get();
+		final org.mozilla.javascript.Context cx = org.mozilla.javascript.Context.getCurrentContext();
+		if (scope != null && cx != null) {
+			final Object created = cx.newArray(scope, array);
+			if (created instanceof org.mozilla.javascript.NativeArray) {
+				return (org.mozilla.javascript.NativeArray) created;
+			}
+		}
+		return new org.mozilla.javascript.NativeArray(array);
+	}
+
 	public PIDSWrapper withLenientArrivals() {
-		return new PIDSWrapper(type, rows, width, height, blockPos, platformIds, customMessages,
+		final PIDSWrapper copy = new PIDSWrapper(type, rows, width, height, blockPos, platformIds, customMessages,
 				rowHidden, scheduleList, keyBlock, platformNumberHidden, true);
+		return copy;
 	}
 
 	/** @return whether {@code arrivals().get(i)} hands out a placeholder past the end. */
@@ -112,12 +153,32 @@ public class PIDSWrapper {
 		return i >= 0 && i < rowHidden.length && rowHidden[i];
 	}
 
-	/** @return the block position as {@code [x, y, z]}. */
-	public int[] blockPos() {
-		return new int[]{blockPos.getX(), blockPos.getY(), blockPos.getZ()};
+	/**
+	 * @return the block's position as a {@code Vector3f}.
+	 *
+	 * <p>JCM 2.x returns a vector whose coordinates are read as methods -- {@code pids.blockPos().x()}
+	 * is what packs actually write -- so returning an int array here made every such script die with
+	 * {@code x is not a function}. The docs call the type {@code Vector3f} and list the same
+	 * accessors, so the vector is the shape to match.</p>
+	 */
+	public ScriptMath.Vector3f blockPos() {
+		return new ScriptMath.Vector3f(blockPos.getX(), blockPos.getY(), blockPos.getZ());
 	}
 
 	/** @return the platform ids this PIDS is filtered to; empty means "nearest". */
+	/**
+	 * JCM 2.x's name for the same thing.
+	 *
+	 * <p>Their wrapper calls it {@code getTargetPlatformIds()} and hands back a
+	 * {@code LongImmutableList}; this returns the plain array the rest of the port passes around.
+	 * No preset in the corpus calls it under either name -- a panel's platforms are read through the
+	 * arrivals -- but a pack written against their API can reach for it, and reaching for a method
+	 * that is not there ends the script.</p>
+	 */
+	public long[] getTargetPlatformIds() {
+		return targetPlatformIds();
+	}
+
 	public long[] targetPlatformIds() {
 		final long[] result = new long[platformIds.size()];
 		for (int i = 0; i < result.length; i++) {
@@ -184,16 +245,44 @@ public class PIDSWrapper {
 		public final long id;
 		/** {@code station.zone}. */
 		public final int zone;
+		/**
+		 * {@code station.color} -- the station area's RGB colour.
+		 *
+		 * <p>MTR 4 spells it as a field and offers {@code getColor()} beside it; packs use the
+		 * method and feed the result straight to {@code .color(...)}.</p>
+		 */
+		public final int color;
 
 		StationInfo(Station station) {
 			this.name = station.name == null ? "" : station.name;
 			this.id = station.id;
 			this.zone = station.zone;
+			this.color = station.color;
 		}
 
 		/** MTR 4 spells this {@code getName()}; both work here. */
 		public String getName() {
 			return name;
+		}
+
+		/** {@code Station.getColor()} -- the station colour as an RGB int. */
+		public int getColor() {
+			return color;
+		}
+
+		/** {@code Station.getColorHex()} -- the same colour as {@code RRGGBB}. */
+		public String getColorHex() {
+			return String.format("%06X", color & 0xFFFFFF);
+		}
+
+		/** {@code Station.getId()}. */
+		public long getId() {
+			return id;
+		}
+
+		/** {@code Station.getHexId()} -- the id in hexadecimal, as signage prints it. */
+		public String getHexId() {
+			return Long.toHexString(id);
 		}
 	}
 
@@ -303,9 +392,20 @@ public class PIDSWrapper {
 			return false;
 		}
 
-		/** Convenience for scripts that want to iterate without index bookkeeping. */
-		public Arrival[] toArray() {
-			return arrivals.toArray(new Arrival[0]);
+		/**
+		 * Convenience for scripts that want to iterate without index bookkeeping.
+		 *
+		 * <p>A JavaScript array, not an {@code Arrival[]}: a pack will follow this with
+		 * {@code .map()} or the like, and Rhino's wrapper around a Java array has indexing but none
+		 * of the Array prototype's methods.</p>
+		 */
+		public org.mozilla.javascript.NativeArray toArray() {
+			final Arrival[] source = arrivals.toArray(new Arrival[0]);
+			final java.util.List<Object> wrapped = new java.util.ArrayList<>(source.length);
+			for (Arrival value : source) {
+				wrapped.add(toScriptObject(value));
+			}
+			return scriptArray(wrapped);
 		}
 
 		/** @return the distinct platforms the listed arrivals call at, in arrival order. */
@@ -569,6 +669,24 @@ public class PIDSWrapper {
 			}
 			return new RouteStopInfo(route.platformIds.get(i).platformId, route);
 		}
+
+		/**
+		 * @return every stop as a JavaScript array.
+		 *
+		 * <p>A real one, not a {@code RouteStopInfo[]}. Two presets in one pack fail on this line --
+		 * {@code db_big.js#111} and {@code sydney.js#67} -- and the Sydney one carries on with
+		 * {@code .map()}, {@code .slice()} and {@code .findIndex()}, none of which exist on the
+		 * array Rhino builds around a Java array.</p>
+		 */
+		public org.mozilla.javascript.NativeArray toArray() {
+			final int count = size();
+			final java.util.List<Object> stops = new java.util.ArrayList<>(count);
+			for (int i = 0; i < count; i++) {
+				stops.add(toScriptObject(get(i)));
+			}
+			final org.mozilla.javascript.NativeArray array = scriptArray(stops);
+			return array;
+		}
 	}
 
 	/** One stop of a route, as read by {@code getPlatforms().get(i)}. */
@@ -585,11 +703,24 @@ public class PIDSWrapper {
 		/** {@code stop.route.name} — MTR 4's field again; read by the same packs. */
 		public final RouteInfo route;
 
+		/**
+		 * {@code stop.stationName} -- a String field, not the {@link #getStationName()} method.
+		 *
+		 * <p>Thirty-three scripts in one European pack write
+		 * {@code getPlatforms().toArray().map(platform => platform.stationName)} and then treat the
+		 * result as a string: {@code .normalize("NFC")}, {@code .replace(...)}, {@code .trim()}.
+		 * Reading a property that exists only as a method does not yield undefined here -- Rhino
+		 * fails the whole render with "Cannot find default value for object". A field is the spelling
+		 * that works, the same reason {@link #station} and {@link #route} are fields.</p>
+		 */
+		public final String stationName;
+
 		RouteStopInfo(long platformId, Route routeRef) {
 			this.platformId = platformId;
 			final Station resolved = PIDSData.stationOf(platformId);
 			this.station = resolved == null ? null : new StationInfo(resolved);
 			this.route = routeRef == null ? null : new RouteInfo(routeRef);
+			this.stationName = this.station == null || this.station.name == null ? "" : this.station.name;
 		}
 
 		/** {@code getStationName()} — MTR 4's spelling; this is what HKR prints. */
@@ -599,6 +730,18 @@ public class PIDSWrapper {
 
 		public long getPlatformId() {
 			return platformId;
+		}
+
+		/**
+		 * The class's default value, as far as Rhino is concerned.
+		 *
+		 * <p>{@code Cannot find default value for object} is what a script gets when the engine needs
+		 * a primitive out of a Java object and cannot find one. A stop is a station name as far as
+		 * any preset is concerned, so that is what it reduces to.</p>
+		 */
+		@Override
+		public String toString() {
+			return stationName;
 		}
 	}
 
@@ -623,4 +766,65 @@ public class PIDSWrapper {
 			return platform.id;
 		}
 	}
+
+	/**
+	 * A route stop as a plain JavaScript object.
+	 *
+	 * <p>Building the array out of raw Java objects is what produces {@code Cannot find default
+	 * value for object}: the script-visible array tries to reduce each element to something it can
+	 * hold, and a {@code RouteStopInfo} is not one of those things. A NativeObject has exactly the
+	 * properties it was given, so {@code platform.stationName} resolves the way thirty-three scripts
+	 * in one pack expect, and so do the two other spellings packs use.</p>
+	 */
+	private static org.mozilla.javascript.NativeObject toScriptObject(RouteStopInfo stop) {
+		final org.mozilla.javascript.NativeObject object = new org.mozilla.javascript.NativeObject();
+		object.defineProperty("stationName", safeString(stop.stationName), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("platformId", stop.getPlatformId(), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("stationNameRaw", safeString(stop.getStationName()), org.mozilla.javascript.ScriptableObject.READONLY);
+		if (stop.station != null) {
+			final org.mozilla.javascript.NativeObject station = new org.mozilla.javascript.NativeObject();
+			station.defineProperty("name", safeString(stop.station.name), org.mozilla.javascript.ScriptableObject.READONLY);
+			station.defineProperty("id", stop.station.id, org.mozilla.javascript.ScriptableObject.READONLY);
+			object.defineProperty("station", station, org.mozilla.javascript.ScriptableObject.READONLY);
+		}
+		if (stop.route != null) {
+			final org.mozilla.javascript.NativeObject route = new org.mozilla.javascript.NativeObject();
+			route.defineProperty("name", safeString(stop.route.getName()), org.mozilla.javascript.ScriptableObject.READONLY);
+			object.defineProperty("route", route, org.mozilla.javascript.ScriptableObject.READONLY);
+		}
+		return object;
+	}
+
+	/**
+	 * An arrival as a plain JavaScript object, carrying the accessors the packs call.
+	 *
+	 * <p>Only the handful a preset script actually reaches for; anything absent reads as
+	 * undefined rather than aborting the render, which is the failure mode this exists to stop.</p>
+	 */
+	private static org.mozilla.javascript.NativeObject toScriptObject(Arrival arrival) {
+		final org.mozilla.javascript.NativeObject object = new org.mozilla.javascript.NativeObject();
+		object.defineProperty("destination", safeString(arrival.destination()), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("platformName", safeString(arrival.platformName()), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("routeName", safeString(arrival.routeName()), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("routeNumber", safeString(arrival.routeNumber()), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("routeColor", arrival.routeColor(), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("carCount", arrival.carCount(), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("arrivalTime", arrival.arrivalTime(), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("departureTime", arrival.departureTime(), org.mozilla.javascript.ScriptableObject.READONLY);
+		return object;
+	}
+
+
+	/**
+	 * Never hands a null to the script.
+	 *
+	 * <p>{@code defineProperty} with a null value is what "Cannot find default value for object"
+	 * turned out to be: a station on a route can exist with an unset name, and the property is then
+	 * null, which Rhino cannot reduce to anything. An empty string says the same thing and draws.</p>
+	 */
+	private static String safeString(String value) {
+		return value == null ? "" : value;
+	}
+
+
 }

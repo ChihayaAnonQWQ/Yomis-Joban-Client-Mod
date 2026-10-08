@@ -86,6 +86,9 @@ public class ScriptRenderContext {
 	/** Multiplier converting script units into the caller's local drawing units. */
 	public final float scriptScale;
 
+	/** The sound manager handed to scripts by getSoundManager(). */
+	private final ScriptSound.SoundManager soundManager = new ScriptSound.SoundManager();
+
 	/** Index of the next draw call, used to derive its depth offset. */
 	private int drawCallIndex = 0;
 	/** Set from {@code ctx.setAutoZOrdering(false)}; draw calls then share one depth. */
@@ -191,6 +194,15 @@ public class ScriptRenderContext {
 	}
 
 	/** {@code ctx.setZOrderStep(f)} — change the depth step between draw calls. */
+	/**
+	 * {@code PIDSScriptContext.getSoundManager()} -- plays sounds for this script.
+	 *
+	 * <p>One per context, as the docs describe; the caller does not have to hold on to it.</p>
+	 */
+	public ScriptSound.SoundManager getSoundManager() {
+		return soundManager;
+	}
+
 	public void setZOrderStep(double distance) {
 		this.zOrderStep = distance;
 	}
