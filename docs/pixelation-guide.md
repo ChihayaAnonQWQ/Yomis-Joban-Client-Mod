@@ -189,6 +189,10 @@ is nearly all of them — a `Texture.create("Background").size(pids.width, pids.
 fine; one that leaves part of its canvas empty gets a speckled black grid there. Use `"square"` for
 those, or paint a background.
 
+**Not every board can be given its own text.** Some of JCM 2.x's own PIDS screens do not offer the
+fields, on MTR 4 as well as here — it is the screen's own design rather than something this port left
+out. If a board's config screen has no message boxes, that is why.
+
 **Older versions of the mod ignore all of it.** Unknown keys in `joban_custom_resources.json` are
 skipped, so a pack that declares pixelation still loads on a build that has never heard of it. That is
 deliberate: this is a picture setting, not a script API, and it must not fail a pack on an older jar.
