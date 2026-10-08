@@ -190,13 +190,17 @@ inherited members included), and the two are diffed.
 | Declarative components | `ctx.parseComponent(json)` -> `render(ctx)` / `canRender()` / `x()` / `y()` / `width()` / `height()` / `type()`, or `ctx.draw(component)` |
 | Runtime canvas | `GraphicsTexture(w, h)`: `graphics` / `bufferedImage` / `identifier`, `upload()`, `close()`, `clear` / `fillRect` / `drawText` / `measureText` / `drawTexture` |
 | Slow work | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
+| Persistent state | `Files`: `read` / `readData` / `saveData` / `deleteData` / `hasData` — v2's `FilesUtil`, same names, same signatures, same two roots (`<game dir>` and `<game dir>/data/mtrscripting`) |
 | Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | Misc | `console` `print` `include` `SCRIPT_INPUT` |
 | The panel | `pids.*`, `arrivals().*`, `arrival.*`, `pids.station()`, `route().getPlatforms()`, `ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
 | Fork-only | `arrival.routeType` and `arrival.isLightRailRoute` (MTR 3's `Route.routeType`: `NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`). MTR 4 has no route type, and **neither version has express versus local as a flag** — the packs that care put the service type in the route's **number** and keyword-match it (see HKR's `getColorByKeyword`). On MTR 3 a route's number is gated behind the checkbox MTR labels *Has Route Number*, so that checkbox is what makes those colours appear here |
 
-**Still missing, by group.** Roughly 154 entries, none of which a PIDS preset is known to call;
-they are listed here so a pack author can tell at a glance rather than by experiment.
+**Still missing, by group.** Roughly 149 entries, none of which a PIDS preset is known to call;
+they are listed here so a pack author can tell at a glance rather than by experiment. The count and
+this list were re-measured against the real packs: every `Resources.read*` call site in the library
+is in `assets/mtr/**` — MTR's own map and LCD scripting host, not PIDS — so the PIDS-side gap is
+zero. See `V2-API-覆盖表.md`.
 
 *Classes that exist, with methods not yet added (81 entries):*
 
@@ -214,16 +218,17 @@ they are listed here so a pack author can tell at a glance rather than by experi
 | `SimplifiedRoutePlatform` | `getDestination` `getStationId` |
 | `PIDSScriptContext` | `getRenderManager()` (3D model rendering), `setDebugInfo()` |
 
-*Classes not implemented at all (73 entries):*
+*Classes not implemented at all (68 entries):*
 
 | Class | Entries | Note |
 |---|---|---|
 | `VanillaText` | 11 | rich text for `displayMessage(VanillaText, ...)` |
 | `Siding` `PathData` `Vector` `Position` `Rail` | 43 | TSC data, reached from *vehicle* scripting in practice |
-| `Files` | 5 | reading and saving data files |
 | `VoxelShape` `ItemStack` `TransportMode` `UtilitiesClient` | 11 | odds and ends |
 | `StationExit` | 2 | station exits |
 | `CarDetails` | 1 | `getVehicleId()` -- MTR 3 does not stream per-car data to the client, so `cars()` returns an empty list on purpose |
+
+(`Files` used to be listed here; it is implemented now, as the persistent-state row above.)
 
 *Out of scope: a different script type (18 classes, ~162 entries).* `VehicleWrapper`,
 `VehicleScriptContext`, `VehicleExtraData`, `EyecandyWrapper`, `EyecandyScriptContext`,

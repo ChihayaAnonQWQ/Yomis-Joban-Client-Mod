@@ -104,7 +104,10 @@ $checkSources = @(
     'tools\checks\com\jsblock\script\ScriptApiCheck.java',
     'tools\checks\com\jsblock\script\ScriptShutterCheck.java',
     'tools\checks\com\jsblock\script\ScriptPathCheck.java',
-    'tools\checks\com\jsblock\script\ScriptCanvasCheck.java'
+    'tools\checks\com\jsblock\script\ScriptCanvasCheck.java',
+    'tools\checks\com\jsblock\script\FilesCheck.java',
+    'tools\checks\com\jsblock\script\FilesCheckSupport.java',
+    'tools\checks\com\jsblock\script\ScriptCaseCheck.java'
 )
 foreach ($source in $checkSources) {
     if (-not (Test-Path $source)) { throw "check source missing: $source" }
@@ -166,6 +169,30 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptCanvasCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "ScriptCanvasCheck (exit $NativeExitCode)" }
+
+# The Files global: the one part of the scripting surface that writes to the disk. A value saved
+# has to be the value read back, a missing file has to answer null, and every shape of path escape
+# has to be refused -- a PIDS preset arrives inside a resource pack, and a pack arrives with a
+# server or a modpack.
+Write-Host ''
+Write-Host '== script file storage (FilesCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.FilesCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "FilesCheck (exit $NativeExitCode)" }
+
+# Script reference spelling. Resource names are lower case in Minecraft and ResourceLocation
+# refuses a capital outright, so a pack that names a file Digital_Rail.js -- met transit ships that
+# name -- used to fail before any file was read. The tolerance lives here, next to the assertions
+# that a capital is not a way to walk out of a pack.
+Write-Host ''
+Write-Host '== script reference spelling (ScriptCaseCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptCaseCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptCaseCheck (exit $NativeExitCode)" }
 
 # The built-in pids_1a.js is the script the mod ships, so it is the one that must never
 # regress. Anything passed through -Script is run in addition to it.

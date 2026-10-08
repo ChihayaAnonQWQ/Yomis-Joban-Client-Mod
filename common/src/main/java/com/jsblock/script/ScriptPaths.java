@@ -126,6 +126,50 @@ public final class ScriptPaths {
 		return new ResourceLocation(checkReference(reference));
 	}
 
+	/**
+	 * Builds the location for a script reference, or {@code null} when the reference is not
+	 * spelled the way a resource location may be.
+	 *
+	 * <p>This is the tolerant half of {@link #resource(String)}. A resource location is lower
+	 * case by definition, so a pack whose files are named {@code scripts/Digital_Rail.js} — met
+	 * transit has exactly that file — describes them with capitals that the vanilla constructor
+	 * rejects outright. The path rules still run first and still refuse a {@code ..} or an
+	 * absolute path, so tolerance here cannot become an escape; it only decides whether the
+	 * reference is usable as written.</p>
+	 *
+	 * <p>{@link #foldToResourceLocation(String)} is what a caller tries next, and the two
+	 * together are why {@code include()} of a capitalised script works at all. Note that this is
+	 * a kindness to packs and <b>not</b> Minecraft's rule: the game's own resource manager is
+	 * case sensitive, and a pack that spells a name two ways will still only have one of them
+	 * resolve anywhere else.</p>
+	 *
+	 * @return the location, or {@code null} when it cannot be built as written
+	 * @throws RejectedPathException when the reference could resolve outside its own pack
+	 */
+	public static ResourceLocation resourceOrNull(String reference) {
+		checkReference(reference);
+		try {
+			return new ResourceLocation(reference);
+		} catch (RuntimeException notALocation) {
+			return null;
+		}
+	}
+
+	/**
+	 * Lower-cases a reference so the vanilla constructor accepts it.
+	 *
+	 * <p>The fallback for {@link #resourceOrNull(String)} returning {@code null}: the reference
+	 * was refused only for its spelling, so it is read as the lower-case name a resource location
+	 * requires. A pack whose file genuinely carries capitals is found through the resource
+	 * manager's own lower-case index, which is what makes this work for a folder pack and a zip
+	 * pack alike — see {@link ScriptEngine#caseFoldedCandidates}.</p>
+	 *
+	 * @throws RejectedPathException when the lowercase form is still not a usable reference
+	 */
+	public static ResourceLocation foldToResourceLocation(String reference) {
+		return new ResourceLocation(checkReference(reference).toLowerCase(java.util.Locale.ROOT));
+	}
+
 	private static void checkPath(String reference, String path) {
 		if (path.isEmpty()) {
 			throw new RejectedPathException(reference, "it names no file");

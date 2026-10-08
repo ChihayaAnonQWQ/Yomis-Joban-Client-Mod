@@ -174,13 +174,16 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 | 声明式组件 | `ctx.parseComponent(json)` → `render(ctx)` / `canRender()` / `x()` / `y()` / `width()` / `height()` / `type()`；也可以 `ctx.draw(component)` |
 | 运行时画布 | `GraphicsTexture(w, h)`：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`clear` / `fillRect` / `drawText` / `measureText` / `drawTexture` |
 | 耗时操作 | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
+| 持久化 | `Files`：`read` / `readData` / `saveData` / `deleteData` / `hasData` —— 即 v2 的 `FilesUtil`，同名、同签名、同两个根目录（`<游戏目录>` 与 `<游戏目录>/data/mtrscripting`） |
 | 声音 | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | 杂项 | `console` `print` `include` `SCRIPT_INPUT` |
 | 面板本身 | `pids.*`、`arrivals().*`、`arrival.*`、`pids.station()`、`route().getPlatforms()`、`ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
 | 本分支独有 | `arrival.routeType` 与 `arrival.isLightRailRoute`（MTR 3 的 `Route.routeType`：`NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`）。MTR 4 没有线路制式，而**两个版本都没有「快慢车」这个标志位**——在意的包是把种别写进线路的**线路号**里再做关键字匹配（见 HKR 的 `getColorByKeyword`）。MTR 3 的线路号藏在界面文案为 **Has Route Number** 的那个勾选框后面，勾上它，那些颜色才会在这里出现 |
 
-**还缺的，按组列出。** 约 154 条，已知没有任何 PIDS 预设会调它们；列在这里是为了让写包的人一眼看清，
-而不是靠试。*（译注：分组标题中的英文类名与官方文档一致，便于对照。）*
+**还缺的，按组列出。** 约 149 条，已知没有任何 PIDS 预设会调它们；列在这里是为了让写包的人一眼看清，
+而不是靠试。这个条数与下面的清单都按真实资源包重新核过：**全库里每一处 `Resources.read*` 调用都在
+`assets/mtr/**`**——那是 MTR 自己的地图 / LCD 脚本宿主，不是 PIDS——所以 **PIDS 侧的缺口是零**。
+完整对照见工作区根目录的 `V2-API-覆盖表.md`。*（译注：分组标题中的英文类名与官方文档一致，便于对照。）*
 
 *类在、方法还没加的（81 条）：*
 
@@ -198,16 +201,17 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 | `SimplifiedRoutePlatform` | `getDestination` `getStationId` |
 | `PIDSScriptContext` | `getRenderManager()`（3D 模型渲染）、`setDebugInfo()` |
 
-*整个类都还没有的（73 条）：*
+*整个类都还没有的（68 条）：*
 
 | 类 | 条数 | 说明 |
 |---|---|---|
 | `VanillaText` | 11 | 配合 `displayMessage(VanillaText, ...)` 的富文本 |
 | `Siding` `PathData` `Vector` `Position` `Rail` | 43 | TSC 数据类，实际是**车辆脚本**在用 |
-| `Files` | 5 | 读写数据文件 |
 | `VoxelShape` `ItemStack` `TransportMode` `UtilitiesClient` | 11 | 边角料 |
 | `StationExit` | 2 | 车站出口 |
 | `CarDetails` | 1 | `getVehicleId()` —— MTR 3 不向客户端下发逐节车厢数据，所以 `cars()` 是**故意**返回空列表 |
+
+（`Files` 原本列在这里；现在已实现，见上面的「持久化」一行。）
 
 *范围之外：那是另一种脚本类型（18 个类、约 162 条）。* `VehicleWrapper`、`VehicleScriptContext`、
 `VehicleExtraData`、`EyecandyWrapper`、`EyecandyScriptContext`、`RenderManager`、`ModelManager`、

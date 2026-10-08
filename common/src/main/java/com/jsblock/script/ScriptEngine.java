@@ -183,10 +183,106 @@ public final class ScriptEngine {
 		return scope;
 	}
 
+	// ==================================================================
+	// Reference spelling
+	// ==================================================================
+
+	/**
+	 * The resource locations worth trying for one script reference, best first.
+	 *
+	 * <h2>Why this is not just {@code new ResourceLocation(reference)}</h2>
+	 * <p>Minecraft resource paths are lower case: {@code ResourceLocation} refuses a capital
+	 * letter outright, and its constructor throws rather than answering {@code null}. Resource
+	 * packs are written by hand, though, and a pack that names its files
+	 * {@code scripts/Digital_Rail.js} — met transit ships exactly that name — spells them with
+	 * capitals when it lists {@code scriptFiles}. In v2 on MTR 4 that preset loads because the
+	 * whole path is lower-cased before the read; here it used to fail at the constructor and the
+	 * preset drew nothing.</p>
+	 *
+	 * <p>The candidates are therefore:</p>
+	 * <ol>
+	 *   <li>the reference as written, which is what a well-formed pack gets and the only
+	 *       candidate that is tried for one;</li>
+	 *   <li>its lower-case form, which is what the game's own resource manager is indexed by, so
+	 *       {@code Digital_Rail.js} resolves against a pack that stored it lower case;</li>
+	 *   <li>every resource in that namespace's {@code scripts/} directory whose lower-case path
+	 *       matches — the fall-back for a pack that stored the file with capitals, where the
+	 *       resource manager's index has no lower-case entry to find.</li>
+	 * </ol>
+	 *
+	 * <p>The third step is the one that needs the resource manager to enumerate rather than look
+	 * up, so it is done with a single filtered walk and only when the first two miss. It is
+	 * bounded by the number of scripts the installed packs ship.</p>
+	 *
+	 * <p><b>This is tolerance for packs, not Minecraft's rule.</b> The game, the resource manager
+	 * and every other reader in it remain case sensitive; a pack that relies on this is relying
+	 * on something only its own scripts do. The warning says so at the point of use, so an author
+	 * who sees it knows the name is the problem.</p>
+	 *
+	 * @param reference the {@code namespace:path} a script wrote
+	 * @return the locations to try, in order; never empty
+	 * @throws ScriptPaths.RejectedPathException when the reference could leave its own pack
+	 */
+	static java.util.List<ResourceLocation> caseFoldedCandidates(String reference) {
+		final java.util.List<ResourceLocation> candidates = new java.util.ArrayList<>(3);
+
+		final ResourceLocation exact = ScriptPaths.resourceOrNull(reference);
+		if (exact != null) {
+			candidates.add(exact);
+			return candidates;
+		}
+
+		/* The reference is refused only for its spelling, so the path rules have already run and
+		   the lower-case form is safe to build. */
+		final ResourceLocation folded = ScriptPaths.foldToResourceLocation(reference);
+		candidates.add(folded);
+		candidates.addAll(caseInsensitiveScripts(folded));
+		return candidates;
+	}
+
+	/**
+	 * Walks the {@code scripts/} directory of a namespace for a file whose lower-case path is the
+	 * one asked for.
+	 *
+	 * <p>Only reached for a reference that has capitals in it, so the walk costs a resource
+	 * enumeration on a handful of presets rather than on every script. A pack that stored the file
+	 * with capitals is the case this exists for, and it is also the case where the returned
+	 * location — built from a path the resource manager itself reported — is the one that reads
+	 * back successfully, capitals and all.</p>
+	 *
+	 * @return matching locations, most specific first; empty when there are none
+	 */
+	private static java.util.List<ResourceLocation> caseInsensitiveScripts(ResourceLocation wanted) {
+		final java.util.List<ResourceLocation> found = new java.util.ArrayList<>();
+		final Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft == null) {
+			return found;
+		}
+		try {
+			/* "scripts" rather than the full path: the resource manager matches a directory prefix,
+			   so one walk covers every script in the namespace regardless of how deeply a pack
+			   nests them. It answers a map keyed by location, so the keys are what is wanted. */
+			for (ResourceLocation path : minecraft.getResourceManager()
+					.listResources("scripts", path -> path.getNamespace().equals(wanted.getNamespace()))
+					.keySet()) {
+				if (path.getPath().equalsIgnoreCase(wanted.getPath())) {
+					found.add(path);
+				}
+			}
+		} catch (Exception e) {
+			Joban.LOGGER.debug("[Joban Client] Could not enumerate scripts under {}: {}",
+					wanted.getNamespace(), e.toString());
+		}
+		/* A pack may ship the same script twice with different capitals. Shortest first, so the
+		   plainest spelling wins and the choice is at least deterministic. */
+		found.sort(java.util.Comparator.comparingInt(location -> location.getPath().length()));
+		return found;
+	}
+
 	/**
 	 * Reads and evaluates a script from the client resource manager.
 	 *
-	 * @param location a resource location without the {@code .js} extension, e.g.
+	 * @param location a resource location as the script wrote it, e.g.
 	 *                 {@code jsblock:scripts/pids_util.js}
 	 * @return {@code true} when the script existed and evaluated
 	 */
@@ -199,14 +295,51 @@ public final class ScriptEngine {
 			   reference goes through the same validation the texture path uses, so
 			   include("jsblock:../../../../x") is refused here rather than handed to a resource
 			   manager that would resolve it against the pack's directory. See ScriptPaths. */
-			final ResourceLocation id = ScriptPaths.resource(location);
-			final String source = readResource(id);
-			if (source == null || source.trim().isEmpty()) {
-				Joban.LOGGER.warn("[Joban Client] PIDS script {}:{} is missing or empty.",
-						id.getNamespace(), id.getPath());
+			final java.util.List<ResourceLocation> candidates = caseFoldedCandidates(location);
+			String source = null;
+			ResourceLocation used = null;
+			String usedAssetPath = null;
+			for (ResourceLocation candidate : candidates) {
+				source = readResource(candidate);
+				if (source != null && !source.trim().isEmpty()) {
+					used = candidate;
+					break;
+				}
+				source = null;
+			}
+			if (used == null) {
+				/* The resource manager has nothing under any spelling of the name. That is the
+				   expected outcome for a file stored with capitals: it is indexed under a
+				   lower-cased name that is not its own, so no location can reach it. The packs
+				   themselves are asked next, and they can still answer -- see ScriptPackFiles. */
+				final String[] assetPath = new String[1];
+				source = ScriptPackFiles.read(locationNamespace(location), locationAfterColon(location),
+						resolved -> assetPath[0] = resolved);
+				if (source != null && source.trim().isEmpty()) {
+					source = null;
+				} else {
+					usedAssetPath = assetPath[0];
+				}
+			}
+			if (source == null) {
+				final boolean capitalised = !locationAfterColon(location)
+						.equals(locationAfterColon(location).toLowerCase(java.util.Locale.ROOT));
+				Joban.LOGGER.warn("[Joban Client] PIDS script {} is missing or empty"
+						+ (capitalised ? " (searched the packs too, because the name has capitals in it)"
+								: ""), location);
 				return false;
 			}
-			cx.evaluateString(scope, source, id.toString(), 1, null);
+			/* The name the script is compiled under. A pack may spell the path differently from the
+			   reference, and the name that reaches a stack trace should be the one on disk. */
+			final String resolved = used != null ? used.toString()
+					: usedAssetPath != null ? locationNamespace(location) + ":" + usedAssetPath : location;
+			if (used != null && (!used.getPath().equals(locationAfterColon(location))
+					|| !used.getNamespace().equals(locationNamespace(location)))) {
+				Joban.LOGGER.warn("[Joban Client] PIDS script \"{}\" resolved as {}; a resource name"
+						+ " with capitals in it is tolerated here but is not Minecraft's rule.",
+						location, used);
+			}
+			cx.evaluateString(scope, source, resolved, 1, null);
 			return true;
 		} catch (ScriptPaths.RejectedPathException refused) {
 			/* A refusal is not a broken pack: the script asked for something it may not have, so
@@ -222,6 +355,18 @@ public final class ScriptEngine {
 		}
 	}
 
+	/** The path half of a {@code namespace:path} reference, as written. */
+	private static String locationAfterColon(String reference) {
+		final int colon = reference.indexOf(':');
+		return colon < 0 ? reference : reference.substring(colon + 1);
+	}
+
+	/** The namespace half of a {@code namespace:path} reference, defaulting as Resources.id does. */
+	private static String locationNamespace(String reference) {
+		final int colon = reference.indexOf(':');
+		return colon < 0 ? "minecraft" : reference.substring(0, colon);
+	}
+
 	/**
 	 * Reads a script's text from the client resource manager.
 	 *
@@ -233,8 +378,7 @@ public final class ScriptEngine {
 		if (minecraft == null) {
 			return null;
 		}
-		final ResourceLocation full = new ResourceLocation(id.getNamespace(), id.getPath());
-		try (InputStream stream = minecraft.getResourceManager().getResource(full).orElseThrow().open()) {
+		try (InputStream stream = minecraft.getResourceManager().getResource(id).orElseThrow().open()) {
 			final StringBuilder builder = new StringBuilder();
 			try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
 				String line;
@@ -299,6 +443,11 @@ public final class ScriptEngine {
 		ScriptableObject.putProperty(scope, "BackgroundWorker", new NativeJavaClass(scope, ScriptNetwork.BackgroundWorker.class));
 		ScriptableObject.putProperty(scope, "TickableSoundInstance", new NativeJavaClass(scope, ScriptSound.TickableSoundInstance.class));
 		ScriptableObject.putProperty(scope, "Networking", new NativeJavaClass(scope, ScriptNetwork.Networking.class));
+		/* Persistent state between sessions. met transit's running board is the preset that
+		   needs it: it logs which services have already departed and writes the log back, and
+		   without the global its first line throws. Same four methods and the same two
+		   directories as v2's FilesUtil; see FilesUtil for the path guard. */
+		ScriptableObject.putProperty(scope, "Files", new NativeJavaClass(scope, FilesUtil.class));
 		/* Packs log through console.debug/warn/error, and the calls sit in catch blocks -- so a
 		   missing console turns one failure into two and hides the first. */
 		ScriptableObject.putProperty(scope, "console", new NativeJavaClass(scope, Console.class));

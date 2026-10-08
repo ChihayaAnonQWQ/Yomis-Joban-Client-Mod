@@ -1,3 +1,120 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.4（未发布）
+
+## Compatible MTR Version
+MTR
+
+## Completing the v2 script API surface, and unblocking two more of met transit's presets
+
+Two things a JCM 2.x script can do were still impossible here, and both of them are load-bearing for
+a pack that is actually in the library — not for a hypothetical one. Everything below was found by
+running the packs' own scripts, not by reading the docs: 112 `.js` files from nine resource packs,
+108 of them now pass (`V2-API-覆盖表.md` has the per-script table).
+
+### `Files` — persistent state between frames
+
+Ported from `com.lx862.mtrscripting.util.FilesUtil`, registered as the global `Files` exactly as
+`ParsedScript` does it (`javap -p -c`: `ldc String Files` → `ldc class .../FilesUtil`).
+
+A PIDS panel is redrawn from scratch every frame, so a preset's own variables survive nothing. The
+one preset in the library that needs to remember something is met transit's running board, and it is
+the whole reason this exists:
+
+```js
+if (Files.hasData("met_running_board", fileName)) {
+    let savedData = JSON.parse(Files.readData("met_running_board", fileName));
+}
+Files.saveData(JSON.stringify(saveData), "met_running_board", fileName);
+```
+
+Without the global that preset's first line is a `ReferenceError` and the panel never draws. With
+it, the check prints the three lines that prove it reached the disk:
+
+```
+[PIDS script] [MET Running Board] Station ID: 0_64_0
+[PIDS script] [MET Running Board] Loading from: met_running_board/0_64_0_departed.json
+[PIDS script] [MET Running Board] No saved data found
+```
+
+All five of v2's methods are here — `read`, `readData`, `saveData`, `deleteData`, `hasData` — with
+v2's signatures and v2's two roots (`<game dir>` for `read`, `<game dir>/data/mtrscripting` for the
+rest), so a pack that kept data in JCM 2.x finds its own files. Each path element is joined and then
+checked against its root, which is v2's own `resolvePathSafe` / `ensurePathNotEscaped`, and the
+refusal keeps v2's wording (`Path must be within the "…" directory!`). Seven shapes of escape are
+refused in `FilesCheck`, across all four methods.
+
+Two deliberate differences from v2, both explained in `FilesUtil`'s own comments: the roots are
+resolved lazily rather than in a static initialiser (v2's cannot load without a client, and this
+port has a headless check that has to put the global on a scope), and the test-only root override is
+package-private — because Rhino exposes *every* `public static` member of a global's class to a
+script, so a public setter there would let a preset choose where its own files are written.
+
+### A script whose file name has capitals in it now loads
+
+`met transit` ships `assets/jsblock/scripts/Digital_Rail.js` and `Cyberpunk_Transit.js` — those
+names, byte for byte, in the archive — and lists both in its `scriptFiles`. Neither could be read,
+for two independent reasons:
+
+1. `ResourceLocation` refuses a capital outright. Measured, not assumed:
+   `ResourceLocationException: Non [a-z0-9/._-] character in path of location: jsblock:scripts/Digital_Rail.js`.
+2. The lower-case spelling does not help either, because Minecraft's pack loader lower-cases the
+   **first letter of every path segment** while indexing a pack — `Digital_Rail.js` is indexed as
+   `igital_Rail.js`, which is not its name.
+
+So a third of that pack's presets never compiled. `ScriptPackFiles` closes it by asking the packs
+themselves, after the resource manager has already failed: the pack list comes from
+`Minecraft.getResourcePackRepository().openAllSelected()`, a directory pack is walked with a
+case-insensitive comparison at each level, and a zip pack is opened and its entries matched. Nothing
+on that path builds a `ResourceLocation`, so nothing on it is subject to the spelling rule.
+
+Reads that do go through the resource manager are folded first, which is the other half of the same
+tolerance and what makes `include()` of a capitalised name work.
+
+**This is a kindness to packs, and not Minecraft's rule.** Every log line and every comment says so,
+and `ScriptCaseCheck` pins the part that matters: `..`, an absolute path and a backslash are still
+refused on both paths. A capital is not a way out of a pack.
+
+### Checks
+
+| Check | What it pins |
+|---|---|
+| `FilesCheck` | The storage global: save/read round-trip, `null` for a file that was never written, UTF-8 and multi-line values, `saveData` creating its directories, `deleteData` being idempotent, seven escape shapes × all four methods refused with v2's wording, the whole API driven from inside a real script (Rhino, real scope, real sandbox), and the test-only root override being unreachable from one |
+| `ScriptCaseCheck` | Reference spelling: an exact reference is **not** folded, a capital folds into a usable location, six escape shapes stay refused on both paths, the candidate order, and the disk lookup against a temporary pack tree — including that the answer carries the on-disk spelling rather than the requested one, which is the thing a case-insensitive filesystem would otherwise hide |
+| `ScriptApiCheck` | Unchanged assertions; it now accepts several resource roots so a real pack can be run, and its `include` gained the same case tolerance the engine has |
+
+### Real packs, for the record
+
+| Pack | Scripts | Passed |
+|---|---|---|
+| `met transit` | 14 | 14 |
+| `GURIGRUI_PIDS_JCM2.2.1_MTR4.0.5` | 1 | 1 |
+| `World_PIDS-Pack-200` | 66 | 66 |
+| `US PIDS Pack v4.2` | 21 | 20 |
+| `琼岭追加包26.8.3` | 4 | 2 |
+| `HKR PIDS` | 2 | 2 |
+| `上海地铁-PIDS` | 2 | 1 |
+| `Japan_Style_PIDS日式PIDSv1.0.6` | 1 | 1 |
+| `Japanese_PIDS v1.5` | 1 | 1 |
+| **total** | **112** | **108** |
+
+None of the four failures is a missing API. Two are `PIDSUtil` helper modules that are `include`d
+rather than run as presets and have no `render()` by design; two are presets that dereference
+something a headless JVM has not got (`pids.station()` with no world, `MinecraftClient.localPlayer()`
+with no player) without a null check. All four are recorded with their line numbers and the reason
+in `V2-API-覆盖表.md`, and the two environmental ones are marked **not applicable** rather than
+worked around.
+
+### What is still missing, and why it stays that way
+
+`Resources.read` / `readString` / `readFont` / `idr` / `getNTEVersion*` came up in the scan, and
+every one of those call sites is in `assets/mtr/**` — a different scripting host's files (MTR's map
+and LCD scripts, Java2D, vehicle data, an NTE version check), not PIDS presets. Those seven files
+belong to a script surface this branch does not implement, and adding the API would not make a single
+PIDS preset run. `VanillaText`, the TSC data classes and `getRenderManager()` are in the same
+position: zero call sites in any PIDS script.
+
+**The whole table, including the bytecode evidence for each row and the list of what was inferred
+rather than measured, is `V2-API-覆盖表.md` at the workspace root.**
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.3
 
 ## Compatible MTR Version

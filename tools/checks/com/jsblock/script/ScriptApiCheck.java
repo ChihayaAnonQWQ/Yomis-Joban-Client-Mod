@@ -580,21 +580,23 @@ public final class ScriptApiCheck {
 				final String path = colon < 0 ? reference : reference.substring(colon + 1);
 
 				for (Path root : RESOURCE_ROOTS) {
+					final Path base = root.resolve("assets").resolve(namespace);
 					final Path candidate;
 					try {
 						/* Resolved under assets/<namespace>/ and checked against it, so a ".."
 						   that survived the reference rules cannot leave the root either. */
-						candidate = ScriptPaths.resolveWithin(
-								root.resolve("assets").resolve(namespace), path.split("/"));
+						candidate = ScriptPaths.resolveWithin(base, path.split("/"));
 					} catch (Exception refused) {
 						System.out.println("     include refused (outside " + root + "): " + reference);
 						continue;
 					}
-					if (Files.isRegularFile(candidate)) {
+					final Path actual = Files.isRegularFile(candidate) ? candidate : caseInsensitiveFile(base, path);
+					if (actual != null) {
 						try {
-							final String text = new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8);
-							context.evaluateString(s, text, candidate.toString(), 1, null);
-							System.out.println("     included " + reference + " -> " + candidate.getFileName());
+							final String text = new String(Files.readAllBytes(actual), StandardCharsets.UTF_8);
+							context.evaluateString(s, text, actual.toString(), 1, null);
+							System.out.println("     included " + reference + " -> " + actual.getFileName()
+									+ (actual.equals(candidate) ? "" : " (case-insensitive fallback)"));
 							return Undefined.instance;
 						} catch (Exception e) {
 							System.out.println("FAIL include " + reference + " threw: " + e);
@@ -606,6 +608,71 @@ public final class ScriptApiCheck {
 				return Undefined.instance;
 			}
 		});
+	}
+
+	/**
+	 * Finds a file whose name differs from {@code relative} only in case, under {@code base}.
+	 *
+	 * <p>The headless half of the tolerance the engine applies in game. Minecraft's resource
+	 * manager is indexed by lower case, so a pack that stored {@code Digital_Rail.js} is found
+	 * there through the folded name; off the disk there is no index, so the directory is listed
+	 * instead.</p>
+	 *
+	 * <p><b>Every result comes out of a directory listing</b>, including an exact one. That is
+	 * not redundancy: on a case-insensitive filesystem — this project's own Windows volume, and
+	 * the default on macOS — a {@link Path} built from {@code digital_rail.js} compares equal to
+	 * itself and reports the name it was asked for, while the file on disk is
+	 * {@code Digital_Rail.js}. Returning the value as constructed would hand the engine a
+	 * location whose spelling matches nothing in the pack. Listing the directory is what makes
+	 * the answer the on-disk name.</p>
+	 *
+	 * <p>Only the last segment is matched loosely; the directories above it must match as
+	 * written. Every result stays inside {@code base}, because each step descends into a child of
+	 * the directory it is already in.</p>
+	 *
+	 * @return the file, or {@code null} when no spelling of it exists
+	 */
+	static Path caseInsensitiveFile(Path base, String relative) {
+		final String[] segments = relative.split("/");
+		Path current = base;
+		for (int i = 0; i < segments.length; i++) {
+			final String segment = segments[i];
+			if ("..".equals(segment)) {
+				/* The caller has already refused a reference that walks out; refusing it again here
+				   is what keeps that true if the call order ever changes. */
+				return null;
+			}
+			final boolean last = i == segments.length - 1;
+			/* Every candidate is an entry of a real directory listing, which is the point: a Path
+			   built from a name the pack did not use reports the name it was asked for on a
+			   case-insensitive filesystem, so the listing is the only source of the real spelling.
+			   The listing also supplies the exact entry, and deduplicating by name keeps one entry
+			   per file however the filesystem compares them. */
+			final java.util.Map<String, Path> candidates = new java.util.LinkedHashMap<>();
+			try (java.util.stream.Stream<Path> children = Files.list(current)) {
+				children.filter(child -> child.getFileName().toString().equalsIgnoreCase(segment))
+						.filter(child -> last ? Files.isRegularFile(child) : Files.isDirectory(child))
+						.forEach(child -> candidates.putIfAbsent(child.getFileName().toString(), child));
+			} catch (Exception e) {
+				return null;
+			}
+			if (candidates.isEmpty()) {
+				return null;
+			}
+			/* Deterministic when a pack ships two spellings, and "as written" wins when one of them
+			   is exact -- so a reference that was already correct never resolves elsewhere. */
+			final java.util.List<String> names = new java.util.ArrayList<>(candidates.keySet());
+			names.sort(java.util.Comparator
+					.comparing((String name) -> !name.equals(segment))
+					.thenComparing(java.util.Comparator.naturalOrder()));
+			final Path chosen = candidates.get(names.get(0));
+			if (!last) {
+				current = chosen;
+			} else {
+				return chosen;
+			}
+		}
+		return null;
 	}
 
 	/** Resolves a resource root from the command line, tolerating a trailing separator. */

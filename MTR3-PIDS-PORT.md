@@ -539,6 +539,102 @@ const platforms = MTRClientData.PLATFORMS;
 实际能交出去的 5 个类：`mtr.client.ClientData`、`mtr.client.ClientCache`、`mtr.data.Station`、
 `mtr.data.Platform`、`mtr.data.Route`、`mtr.data.ScheduleEntry`。
 
+### 4.11 补齐 v2 的脚本 API 面：`Files` 全局（本次新增）
+
+> 需求来源是**反向**的：不是从 v2 文档推「应该有什么」，而是把 11 个真实资源包里的
+> 121 个 `.js` 全扫一遍，统计出它们**实际用到**的每一个全局名、对象方法、属性，再和
+> `javap` 挖出来的 v2 注册表对差。完整频率表见工作区根目录的 `V2-API-覆盖表.md`。
+
+**v2 的作用域一共注册 18 个全局**（依据：`javap -p -c` 里 `ParsedScript` 构造器的
+`ldc String` / `ldc class` 序列给出 12 个通用全局，`JCMScripting` 的 PIDS 分支再给 4 个，
+另有 `console` 与我们的 `Rectangle`/`Vector3f` 扩展）。逐条核对后**只有 `Files` 是真缺的**：
+
+```
+// javap -p -c com.lx862.mtrscripting.core.ParsedScript
+  ldc  #136   // String Files
+  ldc  #138   // class com/lx862/mtrscripting/util/FilesUtil
+```
+
+`Files` 在真实包里**只有 `met transit` 一个包用**（`met_running_board.js` 三处调用），
+但缺了它那个预设第一行就 `ReferenceError`——属于「用得少、一缺整包废」。
+
+#### `FilesUtil` 逐方法对照
+
+| v2（`javap -p`） | 我们 | 说明 |
+|---|---|---|
+| `static String read(String...) throws IOException` | ✅ | 根 = `Minecraft.gameDirectory`（v2 的 `rootMinecraftPath`） |
+| `static String readData(String...) throws IOException` | ✅ | 根 = `<gameDir>/data/mtrscripting`（v2 的 `dataPath`） |
+| `static void saveData(String, String...) throws IOException` | ✅ | 额外 `createDirectories(parent)`：v2 靠 `FileUtils.writeStringToFile` 隐含做这件事，不补的话第一次 `saveData` 就抛 |
+| `static void deleteData(String...) throws IOException` | ✅ | v2 用 `Files.deleteIfExists`，文件不存在不报错 |
+| `static boolean hasData(String, String) throws IOException` | ✅ | v2 是**固定两参**，不是可变参数；真实包写的正是两参形式 |
+| `private static Path resolvePathSafe(Path, String...)` | ✅ 同逻辑 | 逐段 `resolve` 后交给防护 |
+| `private static void ensurePathNotEscaped(Path, Path)` | ✅ 在 `ScriptPaths.ensureWithin` | 从规范化路径向上走父目录，走到根之前耗尽即拒绝；**错误文案逐字沿用 v2**：`Path must be within the "%s" directory!` |
+
+**一处实测发现（写检查时才撞上）**：Rhino 对 `NativeJavaClass` 会暴露**全部 `public static` 成员**
+给脚本——`typeof Files.someStatic` 不会得到 `"undefined"`，而是**抛**
+`EvaluatorException: Java class "..." has no public instance field or method named "..."`。
+所以测试用的根目录 setter 必须是**包私有**的，否则一个预设就能自己决定文件写到哪里。
+`FilesCheck` 里有一条断言专门盯住它。
+
+**一处刻意的实现差异**：v2 的 `FilesUtil.<clinit>` 直接读 `Minecraft.getInstance().gameDirectory`，
+**没有客户端时这个类根本加载不了**。我们改成惰性解析（无客户端时退回进程工作目录），
+否则无头检查没办法把 `Files` 放上作用域去验证防护。有客户端时两者得到同一个目录。
+
+无头检查真的跑到了磁盘上：
+
+```
+[Joban Client] [PIDS script] [MET Running Board] Station ID: 0_64_0
+[Joban Client] [PIDS script] [MET Running Board] Loading from: met_running_board/0_64_0_departed.json
+[Joban Client] [PIDS script] [MET Running Board] No saved data found
+```
+
+### 4.12 大写脚本文件名：绕过资源管理器直接问包（本次新增）
+
+**现象**：`met transit.zip` 的条目表里真的是
+
+```
+assets/jsblock/scripts/Cyberpunk_Transit.js
+assets/jsblock/scripts/Digital_Rail.js
+```
+
+（`zipfile.namelist()` 的原始条目名），而它的 `joban_custom_resources.json` 也原样引用。
+该包 14 个预设里有 **2 个此前永远编译不出来**。
+
+**两条独立的原因**（缺一不可，都实测过）：
+
+1. **`ResourceLocation` 拒绝大写**：
+
+   ```
+   REFUSED jsblock:scripts/Digital_Rail.js
+     -> ResourceLocationException: Non [a-z0-9/._-] character in path of location: jsblock:scripts/Digital_Rail.js
+   ```
+
+   所以连 `new ResourceLocation(...)` 都构造不出来，根本到不了读文件那一步。
+   注意 `jsblock:scripts/met_running_board.js` 是 **OK** 的——该包其余 12 个脚本名全小写，
+   所以「大小写」只影响那 2 个。
+
+2. **折叠成小写也不管用**：Minecraft 的包加载器**索引**时把每个路径段的**首字母**小写化
+   （`Digital_Rail.js` → `igital_Rail.js`、`Cyberpunk_Transit.js` → `yberpunk_Transit.js`），
+   索引里既没有原名、也没有全小写名。
+
+**修复**：新增 `ScriptPackFiles`，在资源管理器两条路都失败**之后**才直接问包本身：
+
+- 包列表来自 `Minecraft.getResourcePackRepository().openAllSelected()`（公开 API，MTR 3 上是
+  `forge-1.20-46.0.14-minecraft-merged` 的 1.20.1 映射，已 javap 确认存在）；
+- **目录包**：走 `PathPackResources.root` 字段，逐段做忽略大小写的目录列举；
+- **zip 包**：走 `FilePackResources.file` 字段，`ZipFile` 先做一次精确条目查找，再退回忽略大小写扫描；
+- 全程 `try/catch(Throwable)`：**任何反射失败都只是「这个包搜不了」**（并只报一次日志），
+  **永远不会把渲染器带崩**。
+
+**写检查时发现的第二个坑**：在**大小写不敏感**的文件系统上（本项目自己的 Windows 卷就是这样），
+`Files.isRegularFile("scripts/digital_rail.js")` 对 `Scripts/Digital_Rail.js` 返回 **true**，
+而那个 `Path` 会把文件名回显成**我们请求的拼写**。所以查找函数的返回值必须取自
+**目录列举的真实拼写**，不能取自构造出来的 `Path`——否则交给引擎的是一个包里根本不存在的名字。
+`ScriptCaseCheck` 里有一条断言专门盯这件事。
+
+**这是「对包的宽容」，不是 MC 规范**：日志与注释都写明了；`ScriptCaseCheck` 另有 6 种逃逸形态
+（`..`、绝对路径、反斜杠……）断言在**两条路径上都仍然被拒**——大写不是逃出资源包的办法。
+
 ---
 
 ## 5. 顺带修复的三个上游缺陷
@@ -629,6 +725,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
 | `ScriptPathCheck` | 脚本的**文件**可达范围：资源根**之外**放一个诱饵文件，脚本用 `include("jsblock:../../../secret.js")` 去读，断言的是「它设的那个全局不存在」而不是「防护抛了异常」；另有规则表、真实目录树上的物理防护、以及 `Texture.texture()` 的同一拒绝 |
 | `ScriptCanvasCheck` | 运行时画布：画上去的像素**读回来比对**、无客户端时 `upload()` 降级不抛、`close()` 释放、第 65 张未释放画布被拒、资源重载释放遗留画布 |
 | `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画。另外断言 `MTRClientData` 指向 `mtr.client.ClientData` 且可读，以及脚本里的 `ctx.parseComponent` 全路径（clock 组件、矩形、`canRender`、`render`、`ctx.draw(component)`、五种拒绝） |
+| `FilesCheck`（2.4 新增） | `Files` 全局——**唯一写盘的那一个**：存档/读回一致、缺文件返回 `null` 不抛、UTF-8 多行往返、`saveData` 自动建目录、`deleteData` 幂等、**7 种逃逸形态 × 4 个方法**全部拒绝且文案为 v2 原文；再从**脚本侧**（Rhino + 真作用域 + 真沙箱）跑一遍 `hasData`/`readData`/`saveData`（含 `met_running_board` 的真实调用形状）；最后断言包私有的根目录 setter 对脚本不可达 |
+| `ScriptCaseCheck`（2.4 新增） | 引用拼写的宽容：精确引用**不被折叠**、大写折叠成可用 `ResourceLocation`、命名空间大小写也折叠、**6 种逃逸形态在两条路径上都仍被拒绝**、候选顺序；以及基于真实临时目录树的磁盘查找（小写引用找到大写文件、精确拼写优先、多文件互不串味、拒绝爬出根），其中包含「返回值必须带磁盘上的真实拼写」这条 |
 
 沙箱检查排在脚本检查**之前**：白名单若写错，下面每个脚本要么被拦住、要么毫无防护，
 先看到沙箱那一块就能直接定位，不必从 16 个脚本失败里反推。
@@ -649,9 +747,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 
 ### 7.3 最近一次验证结果
 
-> **2.3 那一轮（本次）**：`PIDSPresetCheck` / `PixelationCheck` / `ScriptShutterCheck` /
-> `ScriptPathCheck` / `ScriptCanvasCheck` / `ScriptApiCheck`（4 个班次数）全部通过，
-> 汇总行 `RESULT: ALL CHECKS PASSED`。下表是 2.2 那一轮的记录，保留作对照。
+> **2.4 那一轮（本次）**：`PIDSPresetCheck` / `PixelationCheck` / `ScriptShutterCheck` /
+> `ScriptPathCheck` / `ScriptCanvasCheck` / `FilesCheck` / `ScriptCaseCheck` /
+> `ScriptApiCheck`（4 个班次数）全部通过，汇总行 `RESULT: ALL CHECKS PASSED`。
+> 另外把 **9 个真实资源包、112 个 `.js`** 全部过了一遍 `ScriptApiCheck`：
+> **108 通过**，4 个失败里 2 个是 `include` 用的工具模块（本来就没有 `render()`）、
+> 2 个是无头环境没有世界/玩家数据。逐脚本表与失败行号见 `V2-API-覆盖表.md`。
+> 下表是 2.2 那一轮的记录，保留作对照。
+
+#### 2.4 真实资源包通过率
+
+| 包 | 脚本数 | 通过 | 失败 |
+|---|---|---|---|
+| `met transit` | 14 | **14** | 0 |
+| `GURIGRUI_PIDS_JCM2.2.1_MTR4.0.5` | 1 | **1** | 0 |
+| `World_PIDS-Pack-200` | 66 | 66 | 0 |
+| `US PIDS Pack v4.2` | 21 | 20 | 1（无头无世界：`pids.station()` 为 null） |
+| `琼岭追加包26.8.3` | 4 | 2 | 2（1 无头无玩家 + 1 工具模块） |
+| `HKR PIDS` | 2 | 2 | 0 |
+| `上海地铁-PIDS` | 2 | 1 | 1（工具模块） |
+| `Japan_Style_PIDS日式PIDSv1.0.6` | 1 | 1 | 0 |
+| `Japanese_PIDS v1.5` | 1 | 1 | 0 |
+| **合计** | **112** | **108** | **4** |
+
+**换算口径**：扣掉 2 个不可执行的工具模块，**110 个预设脚本通过 108 个**；
+剩下 2 个记为「不适用（无头环境）」，**不是缺陷**。
 
 | 项目 | 状态 | 证据 |
 |---|---|---|
