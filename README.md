@@ -52,9 +52,32 @@ Full write-up, in Chinese, with the decompiled evidence and the in-game logs:
 | Checks | `tools/run-pids-check.ps1` — three headless checks that run real presets through the real engine |
 | Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text |
 | Docs | `MTR3-PIDS-PORT.md` |
+| PIDS Projector | `jsblock:pids_projector` — JCM 2.x's projector: the panel hangs in the air, with its own format, offset, rotation, scale, per-row text and hide-platform switch |
 
 A preset that declares neither `components` nor `scriptFiles` keeps the old hard-coded
 render path, unchanged.
+
+### PIDS Projector
+
+JCM 2.x's PIDS Projector is ported: `jsblock:pids_projector` throws a passenger information panel into
+the air, wherever you point it.
+
+| | |
+|---|---|
+| Placement | Offset, rotation and scale — one projector places a panel several blocks away, tilted, at any size |
+| Content | A display format (preset), MTR's platform filter, per-row custom text, per-row hide, hide platform numbers |
+| Presets | Every kind: a JCM 2.x `.js` preset, a JSON `components` layout, and the traditional texture-only packs |
+| Aiming | Hold the brush and the panel is outlined; while the projector is unrotated, JCM 2.x's four red projection lines show the area it will cover |
+| Screen | Right-click with the brush. It opens showing what the panel currently displays, so the fields are never blank |
+
+The panel is not a block and has no collision — the projector block is what you aim at.
+
+The panel's text is what a scripted preset reads back through `pids.getCustomMessage(i)`, and the hidden
+rows through `pids.isRowHidden(i)`.
+
+**A traditional pack's panel is drawn at the built-in size**, which is not the scripted canvas: the two
+were sized by different parts of JCM 2.x. Scripted and components presets fill the canvas the projector's
+scale is applied to; the built-in artwork follows the same offset, rotation and scale.
 
 ### Upstream defects fixed — the fork does not build without these
 
