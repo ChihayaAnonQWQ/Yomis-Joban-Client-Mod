@@ -110,8 +110,18 @@ public class PIDSProjector extends JobanPIDSBase {
 			if (entity instanceof TileEntityBlockPIDSProjector) {
 				final TileEntityBlockPIDSProjector projector = (TileEntityBlockPIDSProjector) entity;
 				projector.syncData();
+				/* What the screen opens showing: JCM 2.x's PIDSGUIPacket carries the messages, the
+				   hidden rows and the hide-platform flag alongside the preset, so the fields are never
+				   blank on a board that has been configured. */
+				final String[] messages = new String[projector.getMaxArrivals()];
+				final boolean[] rowHidden = new boolean[projector.getMaxArrivals()];
+				for (int i = 0; i < messages.length; i++) {
+					messages[i] = projector.getMessage(i);
+					rowHidden[i] = projector.getHideArrival(i);
+				}
 				com.jsblock.packet.PacketServer.sendPIDSProjectorScreenS2C(
 						(net.minecraft.server.level.ServerPlayer) player, pos, projector.getPresetID(),
+						messages, rowHidden, projector.getHidePlatformNumber(),
 						projector.getPlatformIds(),
 						projector.getOffsetX(), projector.getOffsetY(), projector.getOffsetZ(),
 						projector.getRotateX(), projector.getRotateY(), projector.getRotateZ(),
@@ -147,6 +157,14 @@ public class PIDSProjector extends JobanPIDSBase {
 		private double rotateZ = 0;
 		/** And its size multiplier. */
 		private double scale = 1;
+		/**
+		 * Whether the panel hides its platform numbers.
+		 *
+		 * <p>JCM 2.x keeps this on the PIDS block entity beside the messages and the hidden rows, and
+		 * its projector inherits it; this port's projector had no such field, so a projector could not
+		 * hide them the way the RV and 1A boards can.</p>
+		 */
+		private boolean hidePlatformNumber = false;
 
 		private static final String KEY_OFFSET_X = "offset_x";
 		private static final String KEY_OFFSET_Y = "offset_y";
@@ -155,6 +173,7 @@ public class PIDSProjector extends JobanPIDSBase {
 		private static final String KEY_ROTATE_Y = "rotate_y";
 		private static final String KEY_ROTATE_Z = "rotate_z";
 		private static final String KEY_SCALE = "scale";
+		private static final String KEY_HIDE_PLATFORM_NUMBER = "hide_platform_number";
 
 		public TileEntityBlockPIDSProjector(BlockPos pos, BlockState state) {
 			super(BlockEntityTypes.PIDS_PROJECTOR_TILE_ENTITY.get(), pos, state);
@@ -176,6 +195,7 @@ public class PIDSProjector extends JobanPIDSBase {
 			if (this.scale <= 0) {
 				this.scale = 1;
 			}
+			this.hidePlatformNumber = compoundTag.getBoolean(KEY_HIDE_PLATFORM_NUMBER);
 		}
 
 		@Override
@@ -188,6 +208,7 @@ public class PIDSProjector extends JobanPIDSBase {
 			compoundTag.putDouble(KEY_ROTATE_Y, this.rotateY);
 			compoundTag.putDouble(KEY_ROTATE_Z, this.rotateZ);
 			compoundTag.putDouble(KEY_SCALE, this.scale);
+			compoundTag.putBoolean(KEY_HIDE_PLATFORM_NUMBER, this.hidePlatformNumber);
 		}
 
 		@Override
@@ -221,6 +242,16 @@ public class PIDSProjector extends JobanPIDSBase {
 
 		public double getScale() {
 			return scale;
+		}
+
+		public boolean getHidePlatformNumber() {
+			return hidePlatformNumber;
+		}
+
+		public void setHidePlatformNumber(boolean hidePlatformNumber) {
+			this.hidePlatformNumber = hidePlatformNumber;
+			this.setChanged();
+			this.syncData();
 		}
 
 		public void setProjectorTransform(double offsetX, double offsetY, double offsetZ,

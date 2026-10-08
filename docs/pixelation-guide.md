@@ -212,3 +212,62 @@ log, the log also says why:
 **A script that throws still gets pixelated.** The offscreen pass retries once with placeholder
 arrivals, the same recovery the direct path applies, and says so in the log. If your preset throws on
 its first pass every frame, fix the preset — the retry is a safety net, not a substitute.
+
+## 7. Express and local (快慢车) — where a preset gets it
+
+A preset that wants to announce "this train is a rapid service" has to get that from somewhere, and
+**MTR has no field for it**: neither MTR 3 nor MTR 4 has an express-versus-local flag, and MTR 4 has no
+route type either. What the packs that care actually do is put the service type in the route's
+**number** and match keywords against it. HKR's `hkr_pids_default.js` is the clearest example:
+
+```js
+let rawRoute = train.routeNumber();                                     // the route's number, as text
+let routeNumText = String(rawRoute).trim();
+let blockColor = getColorByKeyword(routeNumText, train.routeColor());   // keyword -> badge colour
+
+function getColorByKeyword(text, defaultColor) {
+    if (text.includes("区間快速") || text.includes("Semi-Rapid"))      return 0x009944;
+    if (text.includes("特急")     || text.includes("Limited Express")) return 0xE60012;
+    if (text.includes("急行")     || text.includes("Express"))         return 0xEE7800;
+    if (text.includes("快速")     || text.includes("Rapid"))           return 0x0067C4;
+    if (text.includes("各停") || text.includes("普通") || text.includes("Local")) return 0x777777;
+    return defaultColor;
+}
+```
+
+The same table appears word for word in `kamino_jp_pids.js` (Japanese_PIDS v1.5), also fed from
+`routeNumber()`. Note the **order**: `区間快速` contains `快速`, and `Limited Express` contains
+`Express`, so the longer phrase has to be tested first. Reorder that table and the colours change.
+
+### What MTR 3 gives you
+
+MTR 3 does have a route number — it is `Route.lightRailRouteNumber`, free text, and it is gated behind
+a checkbox that MTR's own language file labels **"Has Route Number"** (the field behind it is called
+`isLightRailRoute`). It is synchronised to the client, our wrapper reads it, and on a route with no
+number the preset falls back to the car count — which is the "6卡" badge you see on an unconfigured
+line.
+
+So, for a board to show 快慢车:
+
+1. **Give each service its own route** — 快速 and 普通 as two routes, not one route running both.
+2. Tick **Has Route Number** on each, and type the service word in it.
+3. Nothing else: no pack edit, no mod setting.
+
+### The granularity is the route, not the departure
+
+The number belongs to the route, and the PIDS reads it per arrival through that arrival's route id. So:
+
+| How you model it | What the board shows |
+|---|---|
+| One route per service type | ✓ each arrival shows its own label |
+| One route running both | ✗ every train on it shows the same label — a local arriving will say 快速 |
+
+There is no per-departure field in MTR 3 or MTR 4 to say "this particular train is the fast one", so
+this is a modelling rule rather than a mod limitation.
+
+### Changing it later
+
+The number is an ordinary route property: edit it in the route dashboard at any time. The change reaches
+clients on the next tick (`ClientData.ROUTES` is rebuilt every tick), the PIDS looks it up without
+caching, so **the board is right on the next frame** — no relog, no restart. Clearing the number puts
+the badge back to the car count.

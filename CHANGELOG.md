@@ -1,3 +1,45 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.2
+
+## Compatible MTR Version
+MTR
+
+## The PIDS Projector can be told what to display
+
+A scripted preset on a projector read `pids.getCustomMessage(i)` and always got `""`: the projector's
+screen had no fields for the panel's text, its C2S packet carried none, and the S2C packet that opens
+the screen carried none either. Three places, all three written from scratch when this port added the
+projector in 1.5.
+
+**JCM 2.x does it by inheritance**, which is why it never had this problem:
+
+| JCM 2.x | Carries |
+|---|---|
+| `PIDSProjectorScreen extends PIDSScreen` | the message fields, the row-hidden boxes and the hide-platform switch, for free |
+| `PIDSProjectorUpdatePacket extends PIDSUpdatePacket` | `customMessages, rowHidden, filteredPlatforms, hidePlatformNumber, presetId` + the projector's seven doubles |
+| `PIDSProjectorGUIPacket extends PIDSGUIPacket` | the same fields, so the screen opens showing what is already configured |
+
+The port now carries the same fields, in JCM 2.x's own order, on both packets and in both directions:
+
+```
+pos, messages[], rowHidden[], platforms[], hidePlatformNumber, presetID, [7 doubles]
+```
+
+`hidePlatformNumber` needed a home on the projector's block entity, so it has one now (with its NBT key),
+and the renderer reads it for projectors the way it already did for the RV boards.
+
+A check was added to prove the two directions agree field for field before shipping, because a mismatch
+there is a disconnect rather than a wrong label — and this projector has been there once already, with
+its platform set in 1.5.
+
+## Also: how a pack shows express versus local
+
+The pack-author guide gained a section on it, in both languages. The short version: **neither MTR 3 nor
+MTR 4 has an express/local field**, so the packs that care put the service word in the route's **number**
+(HKR's `getColorByKeyword`, and the same table again in Japanese_PIDS) and colour the badge by keyword.
+On MTR 3 that number is gated behind the checkbox MTR labels *Has Route Number*, and it is the route's
+property rather than the departure's — so express and local services need to be separate routes, or every
+train on a mixed route shows the same label.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.1
 
 ## Compatible MTR Version

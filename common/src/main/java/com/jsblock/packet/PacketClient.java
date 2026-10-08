@@ -311,14 +311,24 @@ public class PacketClient {
     }
 
 	/** Saves the projector's settings back to the server. */
-	public static void sendPIDSProjectorC2S(BlockPos pos, String presetID, java.util.Set<Long> platformIds,
+	public static void sendPIDSProjectorC2S(BlockPos pos, String presetID, String[] messages, boolean[] rowHidden,
+											boolean hidePlatformNumber, java.util.Set<Long> platformIds,
 											double offsetX, double offsetY, double offsetZ,
 											double rotateX, double rotateY, double rotateZ, double scale) {
 		final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
 		packet.writeBlockPos(pos);
-		packet.writeUtf(presetID);
+		packet.writeInt(messages.length);
+		for (int i = 0; i < messages.length; i++) {
+			packet.writeUtf(messages[i] == null ? "" : messages[i]);
+		}
+		packet.writeInt(rowHidden.length);
+		for (int i = 0; i < rowHidden.length; i++) {
+			packet.writeBoolean(rowHidden[i]);
+		}
 		packet.writeInt(platformIds.size());
 		platformIds.forEach(packet::writeLong);
+		packet.writeBoolean(hidePlatformNumber);
+		packet.writeUtf(presetID);
 		packet.writeDouble(offsetX);
 		packet.writeDouble(offsetY);
 		packet.writeDouble(offsetZ);
@@ -335,12 +345,23 @@ public class PacketClient {
 			return;
 		}
 		final BlockPos pos = packet.readBlockPos();
-		final String presetID = packet.readUtf();
+		final int messageCount = packet.readInt();
+		final String[] messages = new String[messageCount];
+		for (int i = 0; i < messageCount; i++) {
+			messages[i] = packet.readUtf(32767);
+		}
+		final int rowCount = packet.readInt();
+		final boolean[] rowHidden = new boolean[rowCount];
+		for (int i = 0; i < rowCount; i++) {
+			rowHidden[i] = packet.readBoolean();
+		}
 		final java.util.Set<Long> platformIds = new java.util.HashSet<>();
 		final int platformCount = packet.readInt();
 		for (int i = 0; i < platformCount; i++) {
 			platformIds.add(packet.readLong());
 		}
+		final boolean hidePlatformNumber = packet.readBoolean();
+		final String presetID = packet.readUtf(32767);
 		final double offsetX = packet.readDouble();
 		final double offsetY = packet.readDouble();
 		final double offsetZ = packet.readDouble();
@@ -351,7 +372,7 @@ public class PacketClient {
 		if (minecraft.level.getBlockEntity(pos) instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
 			minecraft.execute(() -> {
 				if (!(minecraft.screen instanceof PIDSProjectorScreen)) {
-					UtilitiesClient.setScreen(minecraft, new PIDSProjectorScreen(pos, presetID, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale));
+					UtilitiesClient.setScreen(minecraft, new PIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale));
 				}
 			});
 		}

@@ -1071,6 +1071,27 @@ Internal Exception: java.lang.IndexOutOfBoundsException:
 **结论**：遇到「某个 API 没实现」时先问**它在 MTR 3 里对应什么** ✓ ——
 有对应概念就实现 ✓，没有就**明确返回空值并写清原因** ✓，不要造替代语义 ✗。
 
+**15 的补记（2.2）：投影仪少了一整套 PIDS 字段 —— 因为上游是"继承"来的，我重写时丢了**
+
+1.5 的投影仪是照着 JCM 2.x 的行为写的，但**界面和两条包都是从头写的**，于是丢掉了一组字段：
+`customMessages`、`rowHidden`、`hidePlatformNumber`。后果是脚本在投影仪上 `pids.getCustomMessage(i)`
+永远是空串——面板没法被告诉要显示什么。
+
+JCM 2.x 不会出这个问题，因为它是**继承**：
+
+| JCM 2.x | 带的东西 |
+|---|---|
+| `PIDSProjectorScreen extends PIDSScreen` | 信息框、隐藏行勾选框、隐藏站台号开关，全是白拿的 |
+| `PIDSProjectorUpdatePacket extends PIDSUpdatePacket` | `customMessages, rowHidden, filteredPlatforms, hidePlatformNumber, presetId` + 投影仪自己的 7 个 double |
+| `PIDSProjectorGUIPacket extends PIDSGUIPacket` | 同一组字段，所以界面打开时显示的是板上已有的内容 |
+
+**教训**：照着一个上游类实现行为时，要把它**继承了谁**一起读。只读"它自己声明了什么"，
+就会把基类提供的一整块能力当成"它没有"——这次丢的是三个字段，而在别的地方（比如
+`PIDSBlockEntity`）继承的东西更多。
+
+**另一条**：这次专门写了个校验，把两条包的**读写字段序列**抽出来逐项对比才敢提交——因为这类不一致
+的表现是**断线**而不是显示错误，而这个投影仪在 1.5 已经因为站台集合栽过一次（四个读写方法只改了两个）。
+
 **16. Rhino 里从 Java 造出来的 JS 数组没有 prototype，`.map()` 会报一个毫不相干的错**
 
 

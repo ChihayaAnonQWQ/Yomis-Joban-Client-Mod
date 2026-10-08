@@ -203,3 +203,57 @@ API，不该让老 jar 加载失败。
 
 **脚本抛错的预设照样会被像素化。** 离屏那一趟会用占位班次重试一次（和直接渲染路径同样的救场），
 并在日志里说明。如果你的预设每帧第一次必定抛错，请修预设——重试是安全网，不是替代品。
+
+## 七、快慢车：预设是从哪里知道的
+
+一个想播报「这班是快车」的预设，总得有地方拿到这个信息——而 **MTR 没有这个字段**：MTR 3 和 MTR 4
+都没有"快车 / 慢车"的标志位，MTR 4 连线路制式都没有。在意的包实际采用的是：**把服务种别写进线路的
+「线路号」**，再做关键字匹配。HKR 的 `hkr_pids_default.js` 是最清楚的例子：
+
+```js
+let rawRoute = train.routeNumber();                                     // 线路号，当文本用
+let routeNumText = String(rawRoute).trim();
+let blockColor = getColorByKeyword(routeNumText, train.routeColor());   // 关键字 → 徽章底色
+
+function getColorByKeyword(text, defaultColor) {
+    if (text.includes("区間快速") || text.includes("Semi-Rapid"))      return 0x009944;
+    if (text.includes("特急")     || text.includes("Limited Express")) return 0xE60012;
+    if (text.includes("急行")     || text.includes("Express"))         return 0xEE7800;
+    if (text.includes("快速")     || text.includes("Rapid"))           return 0x0067C4;
+    if (text.includes("各停") || text.includes("普通") || text.includes("Local")) return 0x777777;
+    return defaultColor;
+}
+```
+
+同一张表逐字出现在 `kamino_jp_pids.js`（Japanese_PIDS v1.5）里，喂的同样是 `routeNumber()`。
+注意**顺序**：`区間快速` 里含 `快速`、`Limited Express` 里含 `Express`，所以长词必须写在前面；
+把顺序改了，颜色就会变。
+
+### MTR 3 能提供什么
+
+MTR 3 **有**线路号：`Route.lightRailRouteNumber`，自由文本，藏在一个内部名叫 `isLightRailRoute`、
+而 MTR 自己的语言文件把它的界面文案写成 **「Has Route Number」** 的勾选框后面。它**会同步到客户端**，
+我们的 wrapper 读得到；线路没号时预设回落到车卡数——也就是未配置线路上看到的那个「6卡」。
+
+所以要让牌子显示快慢车：
+
+1. **每种服务种别建一条线路**——快速、普通各一条，而不是一条线跑两种。
+2. 给线路勾上 **Has Route Number**，在里面写上种别词。
+3. 没有第三步：不用改包，也不用改模组。
+
+### 粒度是"线路"，不是"班次"
+
+号码属于线路，而 PIDS 是**按每条到站记录所属的线路**去查的。于是：
+
+| 你怎么建模 | 牌子显示 |
+|---|---|
+| 每种种别一条线路 | ✓ 每班车显示自己的标签 |
+| 一条线路跑两种 | ✗ 这条线的每一班都是同一个标签——慢车到站也会写着"快速" |
+
+MTR 3 和 MTR 4 都**没有**班次级的字段来表达"这一班是快车"，所以这是一条建模规则，不是模组的限制。
+
+### 之后想改
+
+线路号就是线路的普通属性：随时在**线路编辑界面**改。改动会在**下一个客户端 tick** 到达
+（`ClientData.ROUTES` 每 tick 重建），PIDS 查询**没有缓存**，所以**下一帧牌子就对了**——不用重登、
+不用重启。把号码清空，徽章就回到车卡数。

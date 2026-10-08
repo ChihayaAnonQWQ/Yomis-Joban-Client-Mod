@@ -272,14 +272,24 @@ public class PacketServer {
 	 * verified two-block PIDS configuration flow is not touched at all.</p>
 	 */
 	public static void sendPIDSProjectorScreenS2C(ServerPlayer player, BlockPos pos, String presetID,
+												  String[] messages, boolean[] rowHidden, boolean hidePlatformNumber,
 												  java.util.Set<Long> platformIds,
 												  double offsetX, double offsetY, double offsetZ,
 												  double rotateX, double rotateY, double rotateZ, double scale) {
 		final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
 		packet.writeBlockPos(pos);
-		packet.writeUtf(presetID);
+		packet.writeInt(messages.length);
+		for (int i = 0; i < messages.length; i++) {
+			packet.writeUtf(messages[i] == null ? "" : messages[i]);
+		}
+		packet.writeInt(rowHidden.length);
+		for (int i = 0; i < rowHidden.length; i++) {
+			packet.writeBoolean(rowHidden[i]);
+		}
 		packet.writeInt(platformIds.size());
 		platformIds.forEach(packet::writeLong);
+		packet.writeBoolean(hidePlatformNumber);
+		packet.writeUtf(presetID);
 		packet.writeDouble(offsetX);
 		packet.writeDouble(offsetY);
 		packet.writeDouble(offsetZ);
@@ -293,12 +303,23 @@ public class PacketServer {
 	/** Saves what the projector's screen sent back. */
 	public static void receivePIDSProjectorC2S(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
 		final BlockPos pos = packet.readBlockPos();
-		final String presetID = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		final int messageCount = packet.readInt();
+		final String[] messages = new String[messageCount];
+		for (int i = 0; i < messageCount; i++) {
+			messages[i] = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		}
+		final int rowCount = packet.readInt();
+		final boolean[] rowHidden = new boolean[rowCount];
+		for (int i = 0; i < rowCount; i++) {
+			rowHidden[i] = packet.readBoolean();
+		}
 		final Set<Long> platformIds = new HashSet<>();
 		final int platformCount = packet.readInt();
 		for (int i = 0; i < platformCount; i++) {
 			platformIds.add(packet.readLong());
 		}
+		final boolean hidePlatformNumber = packet.readBoolean();
+		final String presetID = packet.readUtf(PACKET_STRING_READ_LENGTH);
 		final double offsetX = packet.readDouble();
 		final double offsetY = packet.readDouble();
 		final double offsetZ = packet.readDouble();
@@ -312,7 +333,11 @@ public class PacketServer {
 				final com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector projector =
 						(com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) entity;
 				projector.setPresetID(presetID);
-				projector.setPlatformIds(platformIds);
+				projector.setHidePlatformNumber(hidePlatformNumber);
+				/* MTR's own setter for a PIDS panel's text, hidden rows and platforms; the projector
+				   inherits it, and it is what pids.getCustomMessage(i) reads back. JCM 2.x applies the
+				   same set on the same fields, from the same packet. */
+				projector.setData(messages, rowHidden, platformIds, 0);
 				projector.setProjectorTransform(offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale);
 			} else {
 				Joban.LOGGER.warn("[PIDS projector] server could not apply: block entity at " + pos

@@ -156,6 +156,9 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         /* Hide Platform Circles (RV PIDS Only) */
         if (entity instanceof PIDSRVBase.TileEntityBlockRVPIDS) {
             hidePlatforms = ((PIDSRVBase.TileEntityBlockRVPIDS) entity).getHidePlatformNumber();
+        } else if (entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+            /* JCM 2.x's projector inherits the hide-platform setting with the rest of the PIDS data. */
+            hidePlatforms = ((com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) entity).getHidePlatformNumber();
         } else {
             hidePlatforms = false;
         }

@@ -1,6 +1,7 @@
 package com.jsblock.screen;
 
 import com.jsblock.client.JobanCustomResources;
+import net.minecraft.network.chat.Component;
 import com.jsblock.packet.PacketClient;
 import mtr.client.IDrawing;
 import mtr.data.IGui;
@@ -33,6 +34,24 @@ public class PIDSProjectorScreen extends ScreenMapper implements IGui {
 	private final WidgetSuggestionTextField textBoxPreset;
 	/** offset x/y/z, rotation x/y/z, scale — the projector's whole placement. */
 	private final WidgetBetterTextField[] fields = new WidgetBetterTextField[7];
+	/**
+	 * The panel's own text and hidden rows, plus the platform-number switch.
+	 *
+	 * <p>The same fields every other PIDS screen has, and the reason this screen exists in JCM 2.x as
+	 * a subclass of theirs: a script reads the text back through {@code pids.getCustomMessage(i)} and
+	 * the rows through {@code pids.isRowHidden(i)}, and a board that cannot be told what to display is
+	 * only announcing the timetable.</p>
+	 */
+	private final WidgetBetterTextField[] textFieldMessages;
+	private final WidgetBetterCheckbox[] buttonsRowHidden;
+	private final WidgetBetterCheckbox hidePlatformCheckbox;
+	private final boolean[] initialRowHidden;
+	private final String[] initialMessages;
+	private final int maxArrivals;
+	private final Component messageText = Text.translatable("gui.mtr.pids_message");
+	private final Component rowHiddenText = Text.translatable("gui.mtr.hide_arrival");
+	private final Component hidePlatformText = Text.translatable("gui.jsblock.hide_platform_number");
+
 	/** The same pair the ordinary PIDS screen uses: "detect nearby" plus MTR's platform picker. */
 	private final WidgetBetterCheckbox selectAllCheckbox;
 	private final Button filterButton;
@@ -52,6 +71,10 @@ public class PIDSProjectorScreen extends ScreenMapper implements IGui {
 	private final double[] initialValues;
 
 	private static final double[] DEFAULTS = {0, 0, 0, 0, 0, 0, 1};
+	/** JCM 2.x's limit for the same field, so both screens accept the same strings. */
+	private static final int MESSAGE_MAX_LENGTH = 100;
+	/** The row the message fields start on, so render() can label them where they are. */
+	private int messageLabelRow = -1;
 	/** One column of an x/y/z row. */
 	private static final int COLUMN_WIDTH = 58;
 	private static final int COLUMN_GAP = 4;
@@ -59,11 +82,28 @@ public class PIDSProjectorScreen extends ScreenMapper implements IGui {
 	private static final int TEXT_PADDING = 16;
 	private static final int FINAL_TEXT_HEIGHT = TEXT_HEIGHT + TEXT_PADDING;
 
-	public PIDSProjectorScreen(BlockPos pos, String presetID, Set<Long> platformIds,
+	public PIDSProjectorScreen(BlockPos pos, String presetID, String[] messages, boolean[] rowHidden,
+							   boolean hidePlatformNumber, Set<Long> platformIds,
 							   double offsetX, double offsetY, double offsetZ,
 							   double rotateX, double rotateY, double rotateZ, double scale) {
 		super(Text.literal(""));
 		this.pos = pos;
+
+		this.maxArrivals = messages == null || messages.length == 0 ? 4 : messages.length;
+		this.initialMessages = new String[this.maxArrivals];
+		this.initialRowHidden = new boolean[this.maxArrivals];
+		this.textFieldMessages = new WidgetBetterTextField[this.maxArrivals];
+		this.buttonsRowHidden = new WidgetBetterCheckbox[this.maxArrivals];
+		for (int i = 0; i < this.maxArrivals; i++) {
+			this.initialMessages[i] = messages != null && i < messages.length && messages[i] != null ? messages[i] : "";
+			this.initialRowHidden[i] = rowHidden != null && i < rowHidden.length && rowHidden[i];
+			this.textFieldMessages[i] = new WidgetBetterTextField("", MESSAGE_MAX_LENGTH);
+			this.buttonsRowHidden[i] = new WidgetBetterCheckbox(0, 0, 0, SQUARE_SIZE, rowHiddenText, checked -> {
+			});
+		}
+		this.hidePlatformCheckbox = new WidgetBetterCheckbox(0, 0, 0, SQUARE_SIZE, hidePlatformText, checked -> {
+		});
+		this.hidePlatformCheckbox.setChecked(hidePlatformNumber);
 
 		final List<String> presetIds = new ArrayList<>(JobanCustomResources.PIDSPresets.keySet());
 		presetIds.sort(String::compareTo);
@@ -144,6 +184,29 @@ public class PIDSProjectorScreen extends ScreenMapper implements IGui {
 		row++;
 		IDrawing.setPositionAndWidth(filterButton, columnX(0), FINAL_TEXT_HEIGHT * row + SQUARE_SIZE, WIDE_FIELD_WIDTH);
 		addDrawableChild(filterButton);
+
+		/* The PIDS half of the screen: the platform-number switch, then one text field per row with
+		   the hide-row box beside it -- JCM 2.x's order, which it gets by extending the PIDS screen. */
+		row++;
+		IDrawing.setPositionAndWidth(hidePlatformCheckbox, SQUARE_SIZE,
+				FINAL_TEXT_HEIGHT * row + SQUARE_SIZE, WIDE_FIELD_WIDTH);
+		addDrawableChild(hidePlatformCheckbox);
+		row++;
+
+		messageLabelRow = row;
+		final int checkboxWidth = font.width(rowHiddenText) + SQUARE_SIZE + TEXT_PADDING;
+		for (int i = 0; i < maxArrivals; i++) {
+			IDrawing.setPositionAndWidth(textFieldMessages[i], SQUARE_SIZE,
+					FINAL_TEXT_HEIGHT * row + SQUARE_SIZE, width - SQUARE_SIZE * 2 - checkboxWidth);
+			textFieldMessages[i].setValue(initialMessages[i]);
+			addDrawableChild(textFieldMessages[i]);
+
+			IDrawing.setPositionAndWidth(buttonsRowHidden[i], width - SQUARE_SIZE - checkboxWidth + TEXT_PADDING,
+					FINAL_TEXT_HEIGHT * row + SQUARE_SIZE, checkboxWidth);
+			buttonsRowHidden[i].setChecked(initialRowHidden[i]);
+			addDrawableChild(buttonsRowHidden[i]);
+			row++;
+		}
 	}
 
 	@Override
@@ -162,6 +225,11 @@ public class PIDSProjectorScreen extends ScreenMapper implements IGui {
 			   what the count is about, and MTR's own caption already says "filtered platforms".
 			   Only written when it changes, so a screen that is merely being looked at does not
 			   rebuild a Component every frame. */
+			if (messageLabelRow > 0) {
+				guiGraphics.drawString(font, messageText, SQUARE_SIZE,
+						FINAL_TEXT_HEIGHT * messageLabelRow + SQUARE_SIZE, ARGB_WHITE);
+			}
+
 			final int filteredCount = selectAllCheckbox.selected() ? 0 : filterPlatformIds.size();
 			if (filteredCount != lastFilteredCount) {
 				lastFilteredCount = filteredCount;
@@ -190,7 +258,14 @@ public class PIDSProjectorScreen extends ScreenMapper implements IGui {
 		if (selectAllCheckbox.selected()) {
 			filterPlatformIds.clear();
 		}
-		PacketClient.sendPIDSProjectorC2S(pos, textBoxPreset.getValue(), filterPlatformIds,
+		final String[] messages = new String[maxArrivals];
+		final boolean[] rowHidden = new boolean[maxArrivals];
+		for (int i = 0; i < maxArrivals; i++) {
+			messages[i] = textFieldMessages[i].getValue();
+			rowHidden[i] = buttonsRowHidden[i].selected();
+		}
+		PacketClient.sendPIDSProjectorC2S(pos, textBoxPreset.getValue(), messages, rowHidden,
+				hidePlatformCheckbox.selected(), filterPlatformIds,
 				values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
 		super.onClose();
 	}
