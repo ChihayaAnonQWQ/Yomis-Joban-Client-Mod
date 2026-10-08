@@ -60,6 +60,44 @@ public class PIDSPreset {
     public int pixelScale = 1;
 
     /**
+     * Pixel shape this preset asks for, or {@code null} for "whatever the pack or the player says".
+     *
+     * <p>A resource pack declares it as {@code "pixelShape": "circle"} to ask for round dots rather
+     * than square pixels; see {@link PixelShape}. Absent means the pack-level default from
+     * {@link PackPixelation}, and then the player's own choice -- square, which is what 1.4 drew,
+     * being the answer when nobody says anything.</p>
+     *
+     * @see com.jsblock.client.ClientConfig#effectivePixelShape
+     */
+    public PixelShape pixelShape = null;
+
+    /**
+     * The dot grid this preset asks for, as {@code {width, height}} in dots, or {@code null} to
+     * derive one from {@link #pixelScale}.
+     *
+     * <p>A pack declares it as {@code "pixelResolution": 96} (dots across, height worked out from the
+     * canvas), {@code "pixelResolution": [96, 54]}, or {@code {"width": 96, "height": 54}}. It is the
+     * more precise of the two ways to ask: a scale is a divisor and only lands on grids that divide
+     * the canvas, while a resolution names the board the artwork was drawn for.</p>
+     *
+     * <p>The height is recomputed from the width and the canvas whenever the two do not agree in
+     * proportion, so the magnified result is never stretched. See
+     * {@code RenderPIDSBase#pixelTargetSize}.</p>
+     */
+    public int[] pixelResolution = null;
+
+    /**
+     * The lamp grid this preset asks for, as {@code {dotsAcross, dotsDown}}, or {@code null} for one
+     * dot per rendered pixel.
+     *
+     * <p>A board's picture and its lamps are two different things. The picture is however finely the
+     * preset draws; the lamps are what the player sees, and each one carries the average of
+     * everything behind it. A pack that wants a fine picture with visible dots sets both -- for
+     * instance {@code "pixelResolution": [1360, 760]} with {@code "pixelDots": [136, 76]}.</p>
+     */
+    public int[] pixelDots = null;
+
+    /**
      * Script files that draw this preset, in load order.
      *
      * <p>JCM 2.x field: a JCM 2.x preset is a JavaScript file rather than a list of
@@ -197,6 +235,35 @@ public class PIDSPreset {
             } catch (Exception e) {
                 com.jsblock.Joban.LOGGER.warn("[Joban Client] Preset " + preset.id
                         + " has a pixelScale that is not a whole number; ignoring it.");
+            }
+        }
+
+        if (presetObject.has("pixelResolution")) {
+            preset.pixelResolution = PackPixelation.parseResolution(
+                    presetObject.get("pixelResolution"), "preset " + preset.id + "'s pixelResolution");
+        }
+
+        if (presetObject.has("pixelDots")) {
+            preset.pixelDots = PackPixelation.parseResolution(
+                    presetObject.get("pixelDots"), "preset " + preset.id + "'s pixelDots");
+        }
+
+        /* Which of the two kinds of screen the pack is imitating. Same reasoning as the scale
+           above, and equally optional: a name this build does not know is reported and skipped
+           rather than guessed at, so a typo cannot silently change how a panel looks. */
+        if (presetObject.has("pixelShape")) {
+            try {
+                final String declared = presetObject.get("pixelShape").getAsString();
+                final PixelShape parsed = PixelShape.byName(declared);
+                if (parsed == null) {
+                    com.jsblock.Joban.LOGGER.warn("[Joban Client] Preset " + preset.id + " has an unknown"
+                            + " pixelShape \"" + declared + "\"; expected \"square\" or \"circle\". Ignoring it.");
+                } else {
+                    preset.pixelShape = parsed;
+                }
+            } catch (Exception e) {
+                com.jsblock.Joban.LOGGER.warn("[Joban Client] Preset " + preset.id
+                        + " has a pixelShape that is not a string; ignoring it.");
             }
         }
 

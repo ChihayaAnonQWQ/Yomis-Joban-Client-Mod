@@ -40,6 +40,9 @@ public class JobanCustomResources {
         /* The per-block diagnostics say which path draws a panel; they have to be re-armed or
            a panel switched to a new preset would stay silent about it. */
         com.jsblock.render.RenderPIDSBase.forgetReportedPanels();
+        /* A pack's pixelation defaults belong to the packs that are loaded, so they are dropped
+           with them -- otherwise removing a pack would leave its grid size behind. */
+        com.jsblock.data.PackPixelation.reset();
 
         /* Add default preset */
         PIDSPresets.put("door_cls_apg", defaultPreset1);
@@ -49,6 +52,10 @@ public class JobanCustomResources {
         /* Read resource */
         readResource(manager, customResourcePath, jsonConfig -> {
             try {
+                /* The pack-level pixelation block, when this pack has one. Read before the presets
+                   so a preset that declares nothing of its own inherits it. */
+                com.jsblock.data.PackPixelation.read(jsonConfig);
+
                 if(!jsonConfig.has("pids_images") || !jsonConfig.get("pids_images").isJsonArray()) {
                     Joban.LOGGER.warn("[JCM] Invalid joban_custom_resources.json!");
                     Joban.LOGGER.warn("[JCM] \"pids_images\" must be an array");

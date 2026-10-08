@@ -502,6 +502,27 @@ public class PIDSWrapper {
 		}
 
 		/**
+		 * @return MTR 3's route type for this arrival: {@code NORMAL}, {@code LIGHT_RAIL} or
+		 *         {@code HIGH_SPEED}.
+		 *
+		 * <p>Not a JCM 2.x API, and deliberately so: MTR 3 has a route type and MTR 4 does not, and
+		 * neither has an express-versus-local flag at all. A preset that asks for "express" is out
+		 * of luck on both -- but the route type is real data, it reaches the client, and MTR 4
+		 * exposes nothing in its place, so a script written for this fork can use it while a preset
+		 * written for JCM 2.x never looks.</p>
+		 */
+		public String routeType() {
+			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
+			return route == null || route.routeType == null ? "NORMAL" : route.routeType.name();
+		}
+
+		/** @return whether MTR 3 marks this route as light rail. */
+		public boolean isLightRailRoute() {
+			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
+			return route != null && route.isLightRailRoute;
+		}
+
+		/**
 		 * @return the circular state as a string so scripts can compare it directly.
 		 *
 		 * <p>MTR 4 spells the anticlockwise value {@code ANTI_CLOCKWISE} while MTR 3 uses
@@ -808,6 +829,10 @@ public class PIDSWrapper {
 		object.defineProperty("routeName", safeString(arrival.routeName()), org.mozilla.javascript.ScriptableObject.READONLY);
 		object.defineProperty("routeNumber", safeString(arrival.routeNumber()), org.mozilla.javascript.ScriptableObject.READONLY);
 		object.defineProperty("routeColor", arrival.routeColor(), org.mozilla.javascript.ScriptableObject.READONLY);
+		/* MTR 3 only. Documented as such in the port document: MTR 4 has no route type and neither
+		   version has express/local, so a pack cannot be relying on either. */
+		object.defineProperty("routeType", safeString(arrival.routeType()), org.mozilla.javascript.ScriptableObject.READONLY);
+		object.defineProperty("isLightRailRoute", arrival.isLightRailRoute(), org.mozilla.javascript.ScriptableObject.READONLY);
 		object.defineProperty("carCount", arrival.carCount(), org.mozilla.javascript.ScriptableObject.READONLY);
 		object.defineProperty("arrivalTime", arrival.arrivalTime(), org.mozilla.javascript.ScriptableObject.READONLY);
 		object.defineProperty("departureTime", arrival.departureTime(), org.mozilla.javascript.ScriptableObject.READONLY);

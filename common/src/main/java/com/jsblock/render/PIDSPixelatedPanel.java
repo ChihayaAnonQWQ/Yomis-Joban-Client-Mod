@@ -53,12 +53,27 @@ import java.util.Map;
  */
 public final class PIDSPixelatedPanel {
 
-    /** Keyed by canvas width, canvas height and scale. */
+    /** Keyed by canvas size and target size. */
     private static final Map<Long, PIDSPixelatedPanel> CACHE = new HashMap<>();
 
     private final RenderTarget target;
     private final ResourceLocation location;
-    private final int scale;
+    private final int canvasWidth;
+    private final int canvasHeight;
+
+    /**
+     * How many canvas units one target pixel covers, per axis.
+     *
+     * <p>Two of them rather than one because a pack may name a grid that does not divide its canvas
+     * evenly -- 96 dots across a 136-unit canvas is 1.4166 units per dot -- and because the aspect
+     * correction works from the width, so the two can differ in the last decimal. Keeping them apart
+     * means the pass maps the canvas onto the target exactly, whatever the pack asked for.</p>
+     */
+    private final float scaleX;
+    private final float scaleY;
+
+    /** @see #supersampling */
+    private final boolean supersampling;
 
     /** The pose stack the offscreen pass writes through; one canvas unit is one target pixel / scale. */
     private final PoseStack offscreenStack = new PoseStack();
@@ -73,10 +88,18 @@ public final class PIDSPixelatedPanel {
     private boolean modelViewPushed = false;
     private boolean stackPushed = false;
 
-    private PIDSPixelatedPanel(int canvasWidth, int canvasHeight, int scale) {
-        this.scale = scale;
-        final int width = Math.max(1, canvasWidth / scale);
-        final int height = Math.max(1, canvasHeight / scale);
+    private PIDSPixelatedPanel(int canvasWidth, int canvasHeight, int targetWidth, int targetHeight) {
+        this.canvasWidth = canvasWidth;
+        this.canvasHeight = canvasHeight;
+        final int width = Math.max(1, targetWidth);
+        final int height = Math.max(1, targetHeight);
+        this.scaleX = canvasWidth / (float) width;
+        this.scaleY = canvasHeight / (float) height;
+
+        /* Whether this target is finer than the canvas, i.e. whether the composite minifies it.
+           That decides the filter below, and it is the difference between the feature's two uses:
+           a coarse grid wants the target's pixels to stay square, a fine one wants them averaged. */
+        this.supersampling = this.scaleX < 1F || this.scaleY < 1F;
 
         this.target = new TextureTarget(width, height, false, true);
         /* Transparent, so a preset that leaves part of its canvas empty shows the world through it
@@ -84,18 +107,25 @@ public final class PIDSPixelatedPanel {
            "nothing reached the target" from "the target is fine and the composite does not sample
            it" in a single run, which is otherwise indistinguishable on screen. */
         this.target.setClearColor(0F, 0F, 0F, 0F);
-        /* Nearest, not linear: the whole point is that the target's pixels stay square when it is
-           magnified onto the panel. */
-        this.target.setFilterMode(org.lwjgl.opengl.GL11.GL_NEAREST);
+        /* Nearest when the target is magnified -- the whole point there is that its pixels stay
+           square -- and linear when it is minified, where nearest would sample one texel out of every
+           few hundred and alias. Mipmaps are generated after each pass for the same reason; see
+           {@link #end()}. */
+        this.target.setFilterMode(this.supersampling
+                ? org.lwjgl.opengl.GL11.GL_LINEAR
+                : org.lwjgl.opengl.GL11.GL_NEAREST);
 
         this.location = new ResourceLocation("jsblock", "pids_pixelated/" + width + "x" + height);
         Minecraft.getInstance().getTextureManager().register(this.location, new TargetTexture(this.target));
     }
 
-    /** @return the shared panel for this shape and scale, creating it on first use. */
-    public static PIDSPixelatedPanel of(int canvasWidth, int canvasHeight, int scale) {
-        final long key = ((long) canvasWidth << 40) | ((long) canvasHeight << 8) | (scale & 0xFF);
-        return CACHE.computeIfAbsent(key, ignored -> new PIDSPixelatedPanel(canvasWidth, canvasHeight, scale));
+    /** @return the shared panel for this canvas and target size, creating it on first use. */
+    public static PIDSPixelatedPanel of(int canvasWidth, int canvasHeight, int targetWidth, int targetHeight) {
+        final int w = Math.max(1, targetWidth);
+        final int h = Math.max(1, targetHeight);
+        final long key = ((long) canvasWidth << 40) | ((long) canvasHeight << 20)
+                | ((long) w << 10) | (h & 0x3FFL);
+        return CACHE.computeIfAbsent(key, ignored -> new PIDSPixelatedPanel(canvasWidth, canvasHeight, w, h));
     }
 
     public ResourceLocation location() {
@@ -104,7 +134,7 @@ public final class PIDSPixelatedPanel {
 
     /** The target's size in canvas units, which is what the composite quad has to cover. */
     public float canvasWidth() {
-        return target.width * (float) scale;
+        return canvasWidth;
     }
 
     /** The target's size in pixels; logged when the pass first runs. */
@@ -203,7 +233,7 @@ public final class PIDSPixelatedPanel {
 
     /** @see #canvasWidth() */
     public float canvasHeight() {
-        return target.height * (float) scale;
+        return canvasHeight;
     }
 
     /**
@@ -269,7 +299,7 @@ public final class PIDSPixelatedPanel {
 
         this.offscreenStack.pushPose();
         this.stackPushed = true;
-        this.offscreenStack.scale(1F / this.scale, 1F / this.scale, 1F);
+        this.offscreenStack.scale(1F / this.scaleX, 1F / this.scaleY, 1F);
 
         return this.offscreenStack;
     }
@@ -320,6 +350,23 @@ public final class PIDSPixelatedPanel {
         final boolean cullNow = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL11.GL_CULL_FACE) != 0;
         if (cullNow != this.savedCull) {
             reportLeakOnce("back-face culling", this.savedCull ? 1 : 0, cullNow ? 1 : 0);
+        }
+
+        /* Mipmaps, for a target finer than its canvas.
+           
+           The composite shrinks such a target onto the panel, and without a mip chain that sampling
+           reads one texel in a few hundred -- which crawls and sparkles as the camera moves, the
+           artefact this is here to avoid rather than create. Generated once per pass, because the
+           contents change every frame; it is a handful of draws on a texture that is already resident,
+           and only for the presets that asked to supersample.
+           
+           GlStateManager rather than raw GL: it tracks the bound texture, and binding behind its back
+           would leave the next draw sampling this one. */
+        if (this.supersampling) {
+            com.mojang.blaze3d.platform.GlStateManager._bindTexture(this.target.getColorTextureId());
+            org.lwjgl.opengl.GL30.glGenerateMipmap(org.lwjgl.opengl.GL11.GL_TEXTURE_2D);
+            com.mojang.blaze3d.platform.GlStateManager._texParameter(org.lwjgl.opengl.GL11.GL_TEXTURE_2D,
+                    org.lwjgl.opengl.GL11.GL_TEXTURE_MIN_FILTER, org.lwjgl.opengl.GL11.GL_LINEAR_MIPMAP_LINEAR);
         }
     }
 

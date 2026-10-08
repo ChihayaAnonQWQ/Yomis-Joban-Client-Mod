@@ -4,6 +4,8 @@
 #
 # Two checks, both compiled with plain javac against :common's runtime classpath:
 #
+#   PixelationCheck  checks the offscreen target's sizing rules, including the aspect
+#                    correction a pack's dot resolution goes through.
 #   PIDSPresetCheck  parses the shipped JSON presets and verifies the display-row mapping
 #                    against the built-in renderers' advance rule.
 #   ScriptApiCheck   runs real JCM 2.x PIDS scripts through the real wrappers with a
@@ -93,6 +95,7 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $checkSources = @(
     'tools\checks\com\jsblock\pids\PIDSPresetCheck.java',
+    'tools\checks\com\jsblock\pids\PixelationCheck.java',
     'tools\checks\com\jsblock\script\ScriptApiCheck.java',
     'tools\checks\com\jsblock\script\ScriptShutterCheck.java'
 )
@@ -115,6 +118,16 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.pids.PIDSPresetCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "PIDSPresetCheck (exit $NativeExitCode)" }
+
+# The sizing rules, checked without a GPU: the offscreen target's proportions have to be the
+# canvas's, and a pack's resolution is the one input that can break that from a config file.
+Write-Host ''
+Write-Host '== pixelation sizing (PixelationCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.pids.PixelationCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "PixelationCheck (exit $NativeExitCode)" }
 
 # The sandbox is checked before the presets: if the shutter is wrong, every script below is
 # either blocked or unguarded, and the reason should be obvious from this block rather than

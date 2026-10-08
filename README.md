@@ -89,6 +89,42 @@ and the engine recovers the frame by retrying it once with a placeholder, becaus
 resource pack is not something the mod can edit. The throw stays in the log; the player
 gets one line, and gets the red error only when the retry could not save the panel.
 
+### Pixelation
+
+A preset can be drawn small and magnified, so its text and icons land on one coarse grid — the look
+of a dot-matrix or an LCD board. It is off unless somebody asks for it, and there are two people who
+can:
+
+| Who | Where | What |
+|---|---|---|
+| The player | `config/jsclient.json` → `"pixelScaleByPreset": { "preset-id": 3 }` | how coarse, per preset; `1` refuses a pack's request |
+| The player | `"pixelShapeByPreset": { "preset-id": "circle" }`, or `"pixelShapeDefault": "circle"` | which grid, per preset or for all of them |
+| The pack | per preset: `"pixelScale": 3`, `"pixelShape": "circle"` | what it drew for |
+| The pack | per preset or pack-wide: `"pixelResolution": 96` (dots across), `[96, 54]`, or `{"width": 96, "height": 54}` | the board it was drawn for, when a divisor is not accurate enough |
+| The pack | `"pixelDots": [68, 38]` (or `dots` pack-wide) | how many lamps the board has, when the picture should be finer than the dots |
+| The pack | top level of `joban_custom_resources.json` | the same, once for every preset it has |
+
+```json
+"pixelation": { "enabled": true, "scale": 3, "shape": "circle" }
+```
+
+`enabled: false` is a pack saying it wants none of its presets pixelated — which, before 2.1, it had
+no way to say. The player's entry still wins, including when it says `1`.
+
+> **Pack authors: the full guide is [docs/pixelation-guide.md](docs/pixelation-guide.md)** — every key, the exact proportions of the three canvases, and which dot counts look like what.
+
+A resolution is the more precise of the two ways to ask: a scale is a divisor, so it only lands on
+grids that divide the canvas evenly. **The proportions of the grid always come out the canvas's** --
+the width is read as the intent and the height recomputed from it, because the magnified target is
+stretched across the panel and a grid with the wrong ratio is a squashed picture. A `96` on a 136x76
+canvas becomes `96x54`, and one log line says so when that differs from what was asked for.
+
+`square` draws pixels edge to edge and is both the default and what 1.4 drew; `circle` draws round
+dots with a dark gap between them, one mask cell per offscreen pixel, which costs one extra quad per
+panel rather than a second pass. A preset that leaves part of its canvas transparent is the one case
+`circle` does not suit: the gaps are painted wherever the mask is, and there is no per-pixel alpha to
+test against without reading the target back.
+
 ### Script API coverage
 
 Measured against the official scripting docs, <https://jcm.joban.org/v2.2/dev/scripting/>, rather
@@ -111,6 +147,7 @@ inherited members included), and the two are diffed.
 | Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | Misc | `console` `print` `include` `SCRIPT_INPUT` |
 | The panel | `pids.*`, `arrivals().*`, `arrival.*`, `pids.station()`, `route().getPlatforms()`, `ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
+| Fork-only | `arrival.routeType` and `arrival.isLightRailRoute` (MTR 3's `Route.routeType`: `NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`). MTR 4 has no route type and **neither version has express versus local**, so a preset asking for 快慢车 is asking for data that does not exist — match a keyword in the route name instead, as the packs that care already do |
 
 **Still missing, by group.** Roughly 154 entries, none of which a PIDS preset is known to call;
 they are listed here so a pack author can tell at a glance rather than by experiment.

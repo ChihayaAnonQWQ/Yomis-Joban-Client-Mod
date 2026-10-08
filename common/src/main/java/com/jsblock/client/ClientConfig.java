@@ -4,6 +4,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.jsblock.Joban;
+import com.jsblock.data.PixelShape;
 
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -50,6 +51,34 @@ public class ClientConfig {
 
     /** The largest scale accepted, so a hand-edited config cannot ask for a one-pixel canvas. */
     public static final int MAX_PIXEL_SCALE = 8;
+
+    /**
+     * Pixel shape per preset id: {@code "square"} or {@code "circle"}.
+     *
+     * <p>The scale decides how coarse the grid is; this decides what a cell of it looks like. It
+     * lives apart from the scale because the two are chosen by different people: a pack knows what
+     * screen its artwork imitates and declares the resolution, while which of the two looks better
+     * on a given monitor is the player's call, and the player should not have to take the pack's
+     * resolution to get the other shape.</p>
+     */
+    private static final java.util.Map<String, PixelShape> pixelShapeByPreset = new java.util.LinkedHashMap<>();
+
+    /** The player's shape for every preset they have not named; {@code null} when they set none. */
+    private static PixelShape pixelShapeDefault = null;
+
+    /**
+     * A dot grid the player named per preset, as {@code {"preset id": [1360, 760]}} or
+     * {@code {"preset id": 96}}.
+     *
+     * <p>Same idea as {@link #pixelScaleByPreset} but finer, and it is also the way a player asks for
+     * the opposite of pixelation: a resolution above the canvas renders the panel larger and lets the
+     * composite shrink it, so a board comes out smooth instead of blocky. Like the scale, it is the
+     * player's entry that wins -- over the pack, and over their own scale for that preset.</p>
+     */
+    private static final java.util.Map<String, int[]> pixelResolutionByPreset = new java.util.LinkedHashMap<>();
+
+    /** The player's lamp grid per preset, as {@code {"preset id": [136, 76]}}. */
+    private static final java.util.Map<String, int[]> pixelDotsByPreset = new java.util.LinkedHashMap<>();
 
     /**
      * This loads the config file and sets the variable internally
@@ -116,6 +145,44 @@ public class ClientConfig {
                     }
                 }
             }
+
+            /* Shapes are stored the same way, as { "preset id": "circle" }, plus one fallback for
+               every preset the player has not named. An unreadable name is reported and skipped
+               rather than guessed at, for the same reason a pack's typo is. */
+            pixelShapeByPreset.clear();
+            if (jsonConfig.has("pixelShapeByPreset") && jsonConfig.get("pixelShapeByPreset").isJsonObject()) {
+                for (java.util.Map.Entry<String, com.google.gson.JsonElement> entry : jsonConfig.getAsJsonObject("pixelShapeByPreset").entrySet()) {
+                    final PixelShape shape = readShape(entry.getValue(), "preset " + entry.getKey());
+                    if (shape != null) {
+                        pixelShapeByPreset.put(entry.getKey(), shape);
+                    }
+                }
+            }
+            pixelShapeDefault = jsonConfig.has("pixelShapeDefault")
+                    ? readShape(jsonConfig.get("pixelShapeDefault"), "pixelShapeDefault")
+                    : null;
+
+            pixelDotsByPreset.clear();
+            if (jsonConfig.has("pixelDotsByPreset") && jsonConfig.get("pixelDotsByPreset").isJsonObject()) {
+                for (java.util.Map.Entry<String, com.google.gson.JsonElement> entry : jsonConfig.getAsJsonObject("pixelDotsByPreset").entrySet()) {
+                    final int[] dots = com.jsblock.data.PackPixelation.parseResolution(
+                            entry.getValue(), "pixelDotsByPreset." + entry.getKey());
+                    if (dots != null) {
+                        pixelDotsByPreset.put(entry.getKey(), dots);
+                    }
+                }
+            }
+
+            pixelResolutionByPreset.clear();
+            if (jsonConfig.has("pixelResolutionByPreset") && jsonConfig.get("pixelResolutionByPreset").isJsonObject()) {
+                for (java.util.Map.Entry<String, com.google.gson.JsonElement> entry : jsonConfig.getAsJsonObject("pixelResolutionByPreset").entrySet()) {
+                    final int[] resolution = com.jsblock.data.PackPixelation.parseResolution(
+                            entry.getValue(), "pixelResolutionByPreset." + entry.getKey());
+                    if (resolution != null) {
+                        pixelResolutionByPreset.put(entry.getKey(), resolution);
+                    }
+                }
+            }
         } catch (Exception e) {
             e.printStackTrace();
             try {
@@ -145,6 +212,40 @@ public class ClientConfig {
                 pixelScales.addProperty(entry.getKey(), entry.getValue());
             }
             jsonConfig.add("pixelScaleByPreset", pixelScales);
+        }
+
+        if (!pixelShapeByPreset.isEmpty()) {
+            final JsonObject pixelShapes = new JsonObject();
+            for (java.util.Map.Entry<String, PixelShape> entry : pixelShapeByPreset.entrySet()) {
+                pixelShapes.addProperty(entry.getKey(), entry.getValue().configName());
+            }
+            jsonConfig.add("pixelShapeByPreset", pixelShapes);
+        }
+
+        if (pixelShapeDefault != null) {
+            jsonConfig.addProperty("pixelShapeDefault", pixelShapeDefault.configName());
+        }
+
+        if (!pixelDotsByPreset.isEmpty()) {
+            final JsonObject dotsJson = new JsonObject();
+            for (java.util.Map.Entry<String, int[]> entry : pixelDotsByPreset.entrySet()) {
+                final com.google.gson.JsonArray pair = new com.google.gson.JsonArray();
+                pair.add(entry.getValue()[0]);
+                pair.add(entry.getValue()[1]);
+                dotsJson.add(entry.getKey(), pair);
+            }
+            jsonConfig.add("pixelDotsByPreset", dotsJson);
+        }
+
+        if (!pixelResolutionByPreset.isEmpty()) {
+            final JsonObject resolutions = new JsonObject();
+            for (java.util.Map.Entry<String, int[]> entry : pixelResolutionByPreset.entrySet()) {
+                final com.google.gson.JsonArray pair = new com.google.gson.JsonArray();
+                pair.add(entry.getValue()[0]);
+                pair.add(entry.getValue()[1]);
+                resolutions.add(entry.getKey(), pair);
+            }
+            jsonConfig.add("pixelResolutionByPreset", resolutions);
         }
 
         try {
@@ -226,6 +327,16 @@ public class ClientConfig {
     }
 
     /**
+     * @return whether the player has an opinion about this preset's pixelation at all.
+     *
+     * <p>Asked separately from the scale itself because "the player set 1" and "the player said
+     * nothing" have to be told apart: the first also silences a pack that named a resolution.</p>
+     */
+    public static boolean hasPixelScaleEntry(String presetId) {
+        return presetId != null && pixelScaleByPreset.containsKey(presetId);
+    }
+
+    /**
      * The scale a preset should actually be drawn at: the player's entry for it if there is one,
      * otherwise whatever the resource pack declared.
      *
@@ -267,5 +378,125 @@ public class ClientConfig {
     /** A read-only view of the whole map, for reporting which presets are pixelated. */
     public static java.util.Map<String, Integer> getPixelScaleMap() {
         return java.util.Collections.unmodifiableMap(pixelScaleByPreset);
+    }
+
+    /**
+     * The dot grid the player named for this preset, or {@code null} when they named none.
+     *
+     * <p>An entry of any kind suppresses the pack's grid, exactly as an entry in
+     * {@link #pixelScaleByPreset} does: the player is the one looking at the screen.</p>
+     */
+    public static int[] getPixelResolution(String presetId) {
+        return presetId == null ? null : pixelResolutionByPreset.get(presetId);
+    }
+
+    /** Sets (or clears, when {@code resolution} is {@code null}) a preset's grid and writes the config. */
+    public static void setPixelResolution(String presetId, int[] resolution) {
+        if (presetId == null || presetId.isEmpty()) {
+            return;
+        }
+        if (resolution == null) {
+            pixelResolutionByPreset.remove(presetId);
+        } else {
+            pixelResolutionByPreset.put(presetId, resolution);
+        }
+        writeConfig();
+    }
+
+    /** @return whether the player named a grid for this preset. */
+    public static boolean hasPixelResolutionEntry(String presetId) {
+        return presetId != null && pixelResolutionByPreset.containsKey(presetId);
+    }
+
+    /** @return the lamp grid the player named for this preset, or {@code null} when none. */
+    public static int[] getPixelDots(String presetId) {
+        return presetId == null ? null : pixelDotsByPreset.get(presetId);
+    }
+
+    /** Sets (or clears, when {@code dots} is {@code null}) a preset's lamp grid and writes the config. */
+    public static void setPixelDots(String presetId, int[] dots) {
+        if (presetId == null || presetId.isEmpty()) {
+            return;
+        }
+        if (dots == null) {
+            pixelDotsByPreset.remove(presetId);
+        } else {
+            pixelDotsByPreset.put(presetId, dots);
+        }
+        writeConfig();
+    }
+
+    /** @return whether the player named a lamp grid for this preset. */
+    public static boolean hasPixelDotsEntry(String presetId) {
+        return presetId != null && pixelDotsByPreset.containsKey(presetId);
+    }
+
+    /**
+     * The shape a preset should actually be drawn in.
+     *
+     * <p>Same order as the scale: the player's entry for this preset, then the player's fallback,
+     * then what the pack declared, then square. Square last is what keeps this invisible -- it is
+     * what 1.4 drew, so a pack and a player who both say nothing see no change at all.</p>
+     *
+     * @param presetId the preset's id, possibly {@code null}
+     * @param packShape the pack's declaration for it, possibly {@code null}
+     */
+    public static PixelShape effectivePixelShape(String presetId, PixelShape packShape) {
+        if (presetId != null && pixelShapeByPreset.containsKey(presetId)) {
+            return pixelShapeByPreset.get(presetId);
+        }
+        if (pixelShapeDefault != null) {
+            return pixelShapeDefault;
+        }
+        return packShape != null ? packShape : PixelShape.SQUARE;
+    }
+
+    /**
+     * Sets (or clears, when {@code shape} is {@code null}) one preset's shape and writes the config.
+     *
+     * @return the shape now in effect for that preset
+     */
+    public static PixelShape setPixelShape(String presetId, PixelShape shape) {
+        if (presetId == null || presetId.isEmpty()) {
+            return shape != null ? shape : PixelShape.SQUARE;
+        }
+        if (shape == null) {
+            pixelShapeByPreset.remove(presetId);
+        } else {
+            pixelShapeByPreset.put(presetId, shape);
+        }
+        writeConfig();
+        return effectivePixelShape(presetId, null);
+    }
+
+    /** Sets the shape for every preset the player has not named individually; {@code null} clears it. */
+    public static void setPixelShapeDefault(PixelShape shape) {
+        pixelShapeDefault = shape;
+        writeConfig();
+    }
+
+    /** @return the player's fallback shape, or {@code null} when they set none. */
+    public static PixelShape getPixelShapeDefault() {
+        return pixelShapeDefault;
+    }
+
+    /** A read-only view of the whole shape map. */
+    public static java.util.Map<String, PixelShape> getPixelShapeMap() {
+        return java.util.Collections.unmodifiableMap(pixelShapeByPreset);
+    }
+
+    /** Reads one configured shape. Anything unreadable is logged and treated as "not set". */
+    private static PixelShape readShape(com.google.gson.JsonElement element, String what) {
+        if (element == null || !element.isJsonPrimitive()) {
+            Joban.LOGGER.warn("[Joban Client] Ignoring pixel shape for " + what + ": not a string.");
+            return null;
+        }
+        final String name = element.getAsString();
+        final PixelShape shape = PixelShape.byName(name);
+        if (shape == null) {
+            Joban.LOGGER.warn("[Joban Client] Ignoring pixel shape for " + what + ": \"" + name
+                    + "\" is neither \"square\" nor \"circle\".");
+        }
+        return shape;
     }
 }

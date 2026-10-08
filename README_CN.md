@@ -83,6 +83,38 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 现在，越界索引且不判空的预设会像在 JCM 2.x 里一样抛错 —— 而引擎会用占位数据**重试一次**来救回这一帧，
 因为资源包不是模组能改的东西。抛错仍会写进日志；玩家只会看到一行提示，只有重试也救不回来时才变红。
 
+### 像素化
+
+一个预设可以「画小再放大」，让它的文字和图标全部落在同一个粗网格上——也就是点阵屏或 LCD 屏的样子。
+默认关闭，能提要求的人有两个：
+
+| 谁 | 在哪里 | 写什么 |
+|---|---|---|
+| 玩家 | `config/jsclient.json` → `"pixelScaleByPreset": { "预设id": 3 }` | 多粗，按预设；写 `1` 是否决资源包的要求 |
+| 玩家 | `"pixelShapeByPreset": { "预设id": "circle" }`，或 `"pixelShapeDefault": "circle"` | 用哪种网格，按预设或对所有预设 |
+| 资源包 | 预设条目里：`"pixelScale": 3`、`"pixelShape": "circle"` | 它当初是按什么屏画的 |
+| 资源包 | 预设条目里或整包：`"pixelResolution": 96`（横向多少点）、`[96, 54]`、或 `{"width": 96, "height": 54}` | 它照哪块板画的；倍率不够精确时用这个 |
+| 资源包 | `"pixelDots": [68, 38]`（整包写 `dots`）| 板子上有多少颗灯珠；想让画面比点更细时用这个 |
+| 资源包 | `joban_custom_resources.json` 顶层 | 一样的东西，一次管它所有预设 |
+
+```json
+"pixelation": { "enabled": true, "scale": 3, "shape": "circle" }
+```
+
+`enabled: false` 是资源包在说「我的预设都不要像素化」——这在 2.1 之前它没法说。玩家的条目仍然优先，
+包括玩家写 `1` 的时候。
+
+> **资源包作者请直接看完整指南：[docs/pixelation-guide.zh.md](docs/pixelation-guide.zh.md)** —— 每个键的写法、三种画布的精确比例、以及哪组点数看起来像什么。
+
+分辨率比倍率精确：倍率是**除数**，只能落在能整除画布的网格上（136 除以 3 不是整数）。而且
+**网格的比例永远等于画布的比例**——只取宽度作为意图，高度按画布重算。原因很实在：放大后的离屏纹理是
+被拉伸铺满整块面板的，比例不对就是画面被压扁。136×76 的画布上写 `96` 会得到 `96x54`；一旦和包里写的高度
+对不上，日志会说明改成了多少、为什么。
+
+`square` 是像素紧挨着的方块，既是默认值，也是 1.4 一直画的样子；`circle` 是圆点加暗缝，每个离屏像素一格
+遮罩，代价是每块面板多一个 quad，而不是多一趟渲染。**唯一不适合 `circle` 的情况**是预设的画布有透明
+区域：缝隙是照着遮罩画的，不把目标读回 CPU 就拿不到逐像素的 alpha。
+
 ### 脚本 API 覆盖情况
 
 口径是**对着官方脚本文档**（<https://jcm.joban.org/v2.2/dev/scripting/>）比对，而不是"手头这些预设恰好用到什么"。
@@ -103,6 +135,7 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 | 声音 | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | 杂项 | `console` `print` `include` `SCRIPT_INPUT` |
 | 面板本身 | `pids.*`、`arrivals().*`、`arrival.*`、`pids.station()`、`route().getPlatforms()`、`ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
+| 本分支独有 | `arrival.routeType` 与 `arrival.isLightRailRoute`（MTR 3 的 `Route.routeType`：`NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`）。MTR 4 没有线路制式，而且**两个版本都没有快慢车**——所以预设想要「快慢车」是在要一份不存在的数据；要体现它，只能像那些包一样去匹配线路名里的关键字 |
 
 **还缺的，按组列出。** 约 154 条，已知没有任何 PIDS 预设会调它们；列在这里是为了让写包的人一眼看清，
 而不是靠试。*（译注：分组标题中的英文类名与官方文档一致，便于对照。）*

@@ -30,6 +30,7 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 
@@ -633,8 +634,28 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
            magnified quad, so it is tried here, with the chain built; anything it cannot do falls
            through to the ordinary path below, which is left exactly as it was -- including the
            lenient-arrivals retry. */
-        final int pixelScale = com.jsblock.client.ClientConfig.effectivePixelScale(preset.id, preset.pixelScale);
-        if (pixelScale > 1 && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelScale)) {
+        final int pixelScale = com.jsblock.client.ClientConfig.effectivePixelScale(
+                preset.id, com.jsblock.data.PackPixelation.packScaleFor(preset.pixelScale));
+        final com.jsblock.data.PixelShape declaredShape = com.jsblock.client.ClientConfig.effectivePixelShape(
+                preset.id, com.jsblock.data.PackPixelation.packShapeFor(preset.pixelShape));
+        /* A pack may name the grid in dots rather than as a divisor, and the more precise one wins.
+           A player who has named a scale for this preset overrides both -- including when their entry
+           says 1, which is them refusing the pack's grid outright. */
+        final int[] pixelResolution = com.jsblock.client.ClientConfig.hasPixelResolutionEntry(preset.id)
+                ? com.jsblock.client.ClientConfig.getPixelResolution(preset.id)
+                : (com.jsblock.client.ClientConfig.hasPixelScaleEntry(preset.id)
+                ? null
+                : com.jsblock.data.PackPixelation.packResolutionFor(preset.pixelResolution));
+        final int[] pixelTarget = com.jsblock.data.PackPixelation.targetSize(
+                canvasWidth, canvasHeight, pixelScale, pixelResolution);
+        final com.jsblock.data.PixelShape pixelShape = declaredShape;
+        /* The lamps, which are not the same question as how finely the panel is drawn. Left unset
+           there is one lamp per rendered pixel, which is what this feature started as; set, they are
+           what the player actually sees, and each carries the average of everything behind it. */
+        final int[] pixelDots = com.jsblock.client.ClientConfig.hasPixelDotsEntry(preset.id)
+                ? com.jsblock.client.ClientConfig.getPixelDots(preset.id)
+                : com.jsblock.data.PackPixelation.packDotsFor(preset.pixelDots);
+        if (pixelTarget != null && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelTarget, pixelScale, pixelShape, pixelDots)) {
             matrices.popPose();
             return;
         }
@@ -803,6 +824,19 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      */
     private static final java.util.Set<String> pixelationReported = new java.util.HashSet<>();
 
+    /** Presets whose offscreen pass needed the placeholder-arrival retry. See the retry above. */
+    private static final java.util.Set<String> pixelationRecovered = new java.util.HashSet<>();
+
+    /**
+     * The dot-matrix mask: opaque in the gaps between dots, transparent inside them.
+     *
+     * <p>One cell of the texture is one pixel of the offscreen target, so the mask tiles once per
+     * target pixel when it is drawn over the composite. See the circle branch in
+     * {@link #drawPixelatedPanel}.</p>
+     */
+    private static final ResourceLocation PIXEL_DOT_MASK =
+            new ResourceLocation(com.jsblock.Joban.MOD_ID, "textures/pids/pixel_dot.png");
+
     /**
      * Draws this panel by rendering its script into an offscreen target and magnifying that.
      *
@@ -819,14 +853,38 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     private boolean drawPixelatedPanel(PIDSPreset preset, com.jsblock.script.PIDSWrapper wrapper,
                                        com.jsblock.script.ScriptEngine.Program program, Direction facing,
                                        PoseStack matrices, MultiBufferSource vertexConsumers,
-                                       int canvasWidth, int canvasHeight, int pixelScale) {
+                                       int canvasWidth, int canvasHeight, int[] pixelTarget, int pixelScale,
+                                       com.jsblock.data.PixelShape pixelShape, int[] dotGrid) {
         final PIDSPixelatedPanel panel;
         try {
-            panel = PIDSPixelatedPanel.of(canvasWidth, canvasHeight, pixelScale);
+            panel = PIDSPixelatedPanel.of(canvasWidth, canvasHeight, pixelTarget[0], pixelTarget[1]);
         } catch (Throwable t) {
             reportPixelationFailure("creating the offscreen target for " + preset.id, t);
             return false;
         }
+
+        /* How many lamps the board has.
+           
+           Unset means one per rendered pixel, which is this feature's original behaviour. Set, the
+           grid is clamped to the target -- there cannot be more lamps than there are pixels to fill
+           them -- and its proportions are taken from the canvas like the target's, so a lamp is
+           never stretched either. */
+        final int[] dots = dotGrid == null || dotGrid[0] < 1
+                ? pixelTarget
+                : new int[]{
+                Math.min(dotGrid[0], pixelTarget[0]),
+                dotGrid.length >= 2 && dotGrid[1] >= 1
+                        ? Math.min(dotGrid[1], pixelTarget[1])
+                        : Math.max(1, Math.round(Math.min(dotGrid[0], pixelTarget[0])
+                        * (float) pixelTarget[1] / pixelTarget[0]))};
+
+        /* Dots finer than one canvas unit are dots nobody can see: the panel is a couple of blocks
+           wide, so a lamp at a tenth of a unit is a fraction of a screen pixel and the mask averages
+           into a flat tint. Square pixels in that case -- the picture is still whatever resolution
+           was asked for, there is simply no lamp grid to show. */
+        final boolean dotsVisible = dots[0] <= canvasWidth && dots[1] <= canvasHeight;
+        final com.jsblock.data.PixelShape shape =
+                dotsVisible ? pixelShape : com.jsblock.data.PixelShape.SQUARE;
 
         final PIDSPixelatedPanel.OffscreenSource offscreenSource = new PIDSPixelatedPanel.OffscreenSource(panel);
         boolean drawn = false;
@@ -847,16 +905,47 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
             /* Uploads go through the panel rather than through RenderType.end, which would bind the
                main framebuffer and drop the whole panel into the world. See PIDSPixelatedPanel.upload. */
             ctx.setQuadUploader(panel::upload);
-            drawn = program.renderOrFail(ctx, wrapper);
+            drawn = program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper);
             offscreenSource.flush();
 
-            if (drawn && pixelationReported.add(preset.id + "@" + pixelScale)) {
+            if (!drawn) {
+                /* The same second chance the direct path gives, for the same reason and with the
+                   same shape: run it again with placeholder arrivals. Without it a preset whose
+                   script throws once -- which the CRT preset does, on its own null bug -- never
+                   pixelates, because this pass gives up where the direct path recovers, and the
+                   panel then falls back to being drawn smoothly. The target is cleared again by
+                   begin(), so nothing from the failed attempt survives. */
+                try {
+                    offscreenSource.flush();
+                } catch (Throwable ignored) {
+                    /* A partial panel is about to be cleared anyway. */
+                }
+                panel.end();
+                ctx = new com.jsblock.script.ScriptRenderContext(
+                        panel.begin(), offscreenSource, offscreenSource, facing.getOpposite(), MAX_LIGHT_GLOWING,
+                        canvasWidth, canvasHeight, 1F);
+                ctx.setQuadUploader(panel::upload);
+                drawn = program.renderOrFail(ctx, wrapper.withLenientArrivals());
+                offscreenSource.flush();
+                if (drawn && pixelationRecovered.add(preset.id)) {
+                    com.jsblock.Joban.LOGGER.info("[PIDS pixelation] preset=" + preset.id
+                            + " threw on its first pass and was redrawn with placeholder arrivals,"
+                            + " the same recovery the direct path applies. Reported once.");
+                }
+            }
+
+            if (drawn && pixelationReported.add(preset.id + "@" + pixelTarget[0] + "x" + pixelTarget[1] + "@" + shape.configName())) {
                 /* Read the target back once per preset, never again: "drew nothing" and "drew, but
                    the composite does not sample it" look identical on screen and need opposite
                    fixes, and a readback stalls the pipeline, so one frame is enough. */
                 final int[] centre = panel.readCentrePixel();
                 com.jsblock.Joban.LOGGER.info("[PIDS pixelation] preset=" + preset.id
                         + " scale=" + pixelScale
+                        + (pixelTarget[0] * pixelScale == canvasWidth && pixelTarget[1] * pixelScale == canvasHeight
+                        ? "" : " (declared grid " + pixelTarget[0] + "x" + pixelTarget[1] + ")")
+                        + " shape=" + shape.configName()
+                        + (shape == pixelShape ? "" : " (dots off: a lamp would be under a screen pixel)")
+                        + " dots=" + dots[0] + "x" + dots[1]
                         + " target=" + panel.targetWidth() + "x" + panel.targetHeight()
                         + " drawCalls=" + ctx.drawCallCount()
                         + " centrePixel=" + centre[0] + "," + centre[1] + "," + centre[2] + "," + centre[3]
@@ -883,15 +972,52 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
 
         /* One quad covering the canvas, in canvas units, in the panel's own plane. Nearest
            filtering turns the target's pixels into the squares the feature is for.
-           
+
            v is flipped: the target's texture has v=0 at its bottom, while the orthographic pass
-           puts canvas y=0 at the top. */
-        final VertexConsumer consumer = vertexConsumers.getBuffer(MoreRenderLayers.getLight(panel.location(), false));
+           puts canvas y=0 at the top.
+
+           Two immediate sources, flushed one after the other, rather than two quads in one batch.
+           A batch is a map keyed by layer, flushed in that map's order, and the light layer sorts
+           what it holds by distance to the camera when it uploads -- so two quads in one batch are
+           not promised to come out in the order they went in. That is what made the dots flicker:
+           the panel alternated between the image on top and the mask on top.
+
+           Both layers are the translucent variant. The opaque one ignores alpha, which for a mask
+           that is transparent inside its dots means painting its dots black -- the other half of
+           the same flicker. */
+        final MultiBufferSource.BufferSource image = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
+        final VertexConsumer consumer = image.getBuffer(MoreRenderLayers.getLight(panel.location(), true));
         IDrawing.drawTexture(matrices, consumer,
                 0F, 0F, 0F, panel.canvasWidth(), panel.canvasHeight(), 0F,
                 0F, 1F, 1F, 0F, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
+        image.endBatch();
+
+        if (shape == com.jsblock.data.PixelShape.CIRCLE) {
+            /* Round dots instead of square pixels. One mask cell per target pixel, tiled by making
+               the uv range as many units wide as the target has pixels across.
+
+               No depth offset: the two quads are now in separate batches flushed in order, so which
+               one is on top is decided here rather than sorted out later.
+
+               A preset that leaves part of its canvas transparent is the one case this does not
+               suit -- the gaps are painted wherever the mask is, and there is no per-pixel alpha to
+               test against without reading the target back. Every pack this was built against paints
+               a full background. */
+            final MultiBufferSource.BufferSource dotPass = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
+            final VertexConsumer mask = dotPass.getBuffer(MoreRenderLayers.getLight(PIXEL_DOT_MASK, true));
+            /* One mask cell per lamp, so the uv range is the lamp count rather than the pixel count:
+               every lamp then shows the average of the cell behind it, which is what a real board's
+               driver chips do. */
+            IDrawing.drawTexture(matrices, mask,
+                    0F, 0F, 0F, panel.canvasWidth(), panel.canvasHeight(), 0F,
+                    0F, dots[1], dots[0], 0F, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
+            dotPass.endBatch();
+        }
+
         return true;
     }
+
+    /**
 
     /** Reports a pixelation failure once per renderer, then stops mentioning it. */
     private void reportPixelationFailure(String what, Throwable t) {

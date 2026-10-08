@@ -1,3 +1,97 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.1
+
+## Compatible MTR Version
+MTR
+
+## Pixelation grows a second shape, and the pack gets a say
+
+1.4 could pixelate a panel: draw it small, magnify it with nearest filtering, and every element lands
+on one coarse grid. That grid was always squares, because squares are what a magnified image is, and
+the only person who could ask for it was a player editing their own config -- a pack that wanted its
+whole board drawn that way had to repeat itself on every preset, and a pack that did *not* want it had
+no way to say so.
+
+### Choose the shape
+
+`pixelShape` picks what one pixel of that grid is:
+
+| Shape | What it looks like | For |
+|---|---|---|
+| `square` | pixels edge to edge | a blocky LCD -- this is what 1.4 drew, and what happens when nobody says anything |
+| `circle` | round dots with a dark gap between them | a dot-matrix board |
+
+The round dots are one mask cell per offscreen pixel, tiled over the magnified image, so the cost is
+one extra quad per panel rather than a shader or a second pass.
+
+A player sets it per preset in the client config, exactly where the scale already lives:
+
+```json
+"pixelShapeByPreset": { "nanbin_crt_pids_1": "circle" },
+"pixelShapeDefault": "circle"
+```
+
+`pixelShapeDefault` covers every preset they have not named. A pack declares it per preset the same
+way it declares the scale (`"pixelShape": "circle"`).
+
+### The pack gets a say in whether, and how coarse
+
+A pack can now put a `pixelation` block at the top level of its `joban_custom_resources.json`:
+
+```json
+"pixelation": { "enabled": true, "scale": 3, "shape": "circle" }
+```
+
+- `enabled` is the pack saying whether it wants its presets pixelated at all -- the one thing a pack
+  previously could not say, since a preset carrying a `pixelScale` was pixelated whether the pack
+  liked it or not
+- `scale` is the resolution it wants by default, so a pack no longer repeats `"pixelScale": 3` on
+  every entry
+- `shape` is the grid it drew for
+
+Precedence, unchanged in spirit from 1.4: the player's entry for a preset, then the player's default,
+then the preset's own declaration, then the pack's, then off/square. Nothing that worked before
+changes meaning, and a pack that says nothing behaves exactly as it did.
+
+### The pack can name the grid in dots
+
+There is a guide for pack authors now, in both languages:
+**[docs/pixelation-guide.md](docs/pixelation-guide.md)** / **[docs/pixelation-guide.zh.md](docs/pixelation-guide.zh.md)** -- every key, the exact
+proportions of the three canvases, and a table of which dot counts look like what.
+
+`pixelScale` is a divisor, so it only lands on grids that divide the canvas evenly -- 136/3 is not a
+whole number of dots. A pack that knows the board it drew for can now just say so:
+
+```json
+"pixelResolution": 96                                  // 96 dots across; height from the canvas
+"pixelResolution": [96, 54]                            // or both, explicitly
+"pixelResolution": { "width": 96, "height": 54 }
+```
+
+It works per preset, and in the pack-level `pixelation` block for every preset the pack has, and the
+more precise of the two ways wins over `pixelScale`.
+
+**The proportions always come out the canvas's.** The magnified target is stretched across the whole
+panel, so a grid whose ratio differs from the canvas's is a squashed picture -- and 96x54 on a 136x76
+board is exactly that, by about one percent. The width is read as the intent and the height recomputed
+from it and the canvas; when that changes the pack's number, one log line says so and why. A grid of
+`96` on a 136x76 canvas becomes `96x54`, and on the 1A canvas `96x31`.
+
+`tools/run-pids-check.ps1` grew a fourth check for this: `PixelationCheck`, which asserts the parse
+forms, the scale fallback, the aspect correction, and the ratio invariant across three canvases and
+six widths. It runs headlessly, which is the point -- the sizing is arithmetic, and the aspect rule was
+the part most likely to be quietly wrong.
+
+### Route type on an arrival
+
+Not related to pixelation, but small enough to travel with it. MTR 3 has `Route.routeType`
+(`NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`) and it reaches the client, so an arrival now exposes
+`routeType` and `isLightRailRoute`.
+
+This is a fork-only extension and the documentation says why: **neither MTR 3 nor MTR 4 has a notion
+of express versus local**, and MTR 4 has no route type at all. A preset asking for "快慢车" is asking
+for something the data does not contain; what it can do is colour by the route type, or match a
+keyword in the route name, which is what the packs that care already do.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.0
 
 ## Compatible MTR Version
