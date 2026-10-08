@@ -7,7 +7,8 @@ MTR
 
 1.5 could draw every preset we had. What it could not do was run a preset written against the
 scripting documentation rather than against the presets we happened to test. This release closes
-that gap: the scripting surface is now the documented Common APIs, and two real packs that failed
+that gap: the scripting surface is now the documented Common APIs
+(<https://jcm.joban.org/v2.2/dev/scripting/>), and two real packs that failed
 on it -- World PIDS-Pack (65 presets) and 琼岭追加包 -- now render.
 
 It also adds a block, and the two together are more than a patch release's worth.

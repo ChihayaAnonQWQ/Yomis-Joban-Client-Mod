@@ -1010,7 +1010,7 @@ Internal Exception: java.lang.IndexOutOfBoundsException:
 
 **脚本 API 里有一部分是 MTR 4 专有的，移植不过来，也不该假装移植**
 
-官方脚本文档的 API 参考分三块 ✓：渲染相关 ✓、PIDS 对象相关 ✓、以及
+官方脚本文档（https://jcm.joban.org/v2.2/dev/scripting/）的 API 参考分三块 ✓：渲染相关 ✓、PIDS 对象相关 ✓、以及
 
 > #### Transport Simulation Core Related
 > Transport Simulation Core (TSC) is the backend serving MTR 4.
