@@ -47,7 +47,15 @@ public abstract class PIDSRVBase extends JobanPIDSBase {
             if (entity1 instanceof TileEntityBlockRVPIDS && entity2 instanceof TileEntityBlockRVPIDS) {
                 ((TileEntityBlockRVPIDS) entity1).syncData();
                 ((TileEntityBlockRVPIDS) entity2).syncData();
+                /* The screen opens showing the board's own text, not a blank it would send back. */
+                final String[] messages = new String[((TileEntityBlockRVPIDS) entity1).getMaxArrivals()];
+                final boolean[] rowHidden = new boolean[messages.length];
+                for (int i = 0; i < messages.length; i++) {
+                    messages[i] = ((TileEntityBlockRVPIDS) entity1).getMessage(i);
+                    rowHidden[i] = ((TileEntityBlockRVPIDS) entity1).getHideArrival(i);
+                }
                 PacketServer.sendRVPIDSConfigScreenS2C((ServerPlayer) player, pos, otherPos, ((TileEntityBlockRVPIDS) entity1).getMaxArrivals(),
+                        messages, rowHidden, ((TileEntityBlockRVPIDS) entity1).getPlatformIds(),
                         ((TileEntityBlockRVPIDS) entity1).getHidePlatformNumber(), ((TileEntityBlockRVPIDS) entity1).getPresetID(),
                         ((TileEntityBlockRVPIDS) entity1).getAutoSwitchEnabled(), ((TileEntityBlockRVPIDS) entity1).getAutoSwitchPreset(), ((TileEntityBlockRVPIDS) entity1).getAutoSwitchCountdown(), ((TileEntityBlockRVPIDS) entity1).getAutoSwitchDuration(),
                         ((TileEntityBlockRVPIDS) entity1).getDepAutoSwitchEnabled(), ((TileEntityBlockRVPIDS) entity1).getDepAutoSwitchPreset(), ((TileEntityBlockRVPIDS) entity1).getDepAutoSwitchCountdown(), ((TileEntityBlockRVPIDS) entity1).getDepAutoSwitchDuration(), ((TileEntityBlockRVPIDS) entity1).getDepAutoSwitchUntilClose());

@@ -31,6 +31,20 @@ A check was added to prove the two directions agree field for field before shipp
 there is a disconnect rather than a wrong label — and this projector has been there once already, with
 its platform set in 1.5.
 
+## And: the other two screens opened blank, and could wipe what they could not see
+
+The same investigation turned up the same class of bug on the RV and 1A/LCD screens, in the other
+direction. Their open-screen packets carried no `customMessages`, `rowHidden` or `filteredPlatforms`, so
+the screens read those from the **client's own copy of the block entity** instead. Whenever that copy had
+not caught up -- joining a world, a block changed a moment earlier -- the fields opened empty, and closing
+the screen sent those empties back: a board that had been configured **lost its text**.
+
+Both packets now carry the data, and the screens use the packet's copy with the entity as a fallback.
+JCM 2.x never had this because `PIDSGUIPacket` carries exactly these fields.
+
+All six packet directions (C2S and S2C, three families) are compared field by field by a script before
+committing, because a mismatch there disconnects the client rather than showing something wrong.
+
 ## Also: how a pack shows express versus local
 
 The pack-author guide gained a section on it, in both languages. The short version: **neither MTR 3 nor

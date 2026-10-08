@@ -40,7 +40,16 @@ public abstract class JobanPIDSBase extends BlockPIDSBaseHorizontal {
             if (entity1 instanceof TileEntityBlockJobanPIDS && entity2 instanceof TileEntityBlockJobanPIDS) {
                 ((TileEntityBlockJobanPIDS) entity1).syncData();
                 ((TileEntityBlockJobanPIDS) entity2).syncData();
+                /* Same reason as the RV board: the screen gets the data it would otherwise have to
+                   guess from a possibly-stale client copy. */
+                final String[] messages = new String[((TileEntityBlockJobanPIDS) entity1).getMaxArrivals()];
+                final boolean[] rowHidden = new boolean[messages.length];
+                for (int i = 0; i < messages.length; i++) {
+                    messages[i] = ((TileEntityBlockJobanPIDS) entity1).getMessage(i);
+                    rowHidden[i] = ((TileEntityBlockJobanPIDS) entity1).getHideArrival(i);
+                }
                 PacketServer.sendJobanPIDSConfigScreenS2C((ServerPlayer) player, pos, otherPos, ((TileEntityBlockJobanPIDS)entity1).getMaxArrivals(),
+                        messages, rowHidden, ((TileEntityBlockJobanPIDS) entity1).getPlatformIds(),
                         ((TileEntityBlockJobanPIDS) entity1).getPresetID(),
                         ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchEnabled(), ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchPreset(), ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchCountdown(), ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchDuration(),
                         ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchEnabled(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchPreset(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchCountdown(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchDuration(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchUntilClose());

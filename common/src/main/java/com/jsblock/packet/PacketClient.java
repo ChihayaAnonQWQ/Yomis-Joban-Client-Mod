@@ -178,6 +178,21 @@ public class PacketClient {
         final BlockPos pos1 = packet.readBlockPos();
         final BlockPos pos2 = packet.readBlockPos();
         final int maxArrivals = packet.readInt();
+        final int messageCount = packet.readInt();
+        final String[] packetMessages = new String[messageCount];
+        for (int i = 0; i < messageCount; i++) {
+            packetMessages[i] = packet.readUtf();
+        }
+        final int rowCount = packet.readInt();
+        final boolean[] packetRowHidden = new boolean[rowCount];
+        for (int i = 0; i < rowCount; i++) {
+            packetRowHidden[i] = packet.readBoolean();
+        }
+        final java.util.Set<Long> packetPlatformIds = new java.util.HashSet<>();
+        final int platformCount = packet.readInt();
+        for (int i = 0; i < platformCount; i++) {
+            packetPlatformIds.add(packet.readLong());
+        }
         final boolean hidePlatformNumber = packet.readBoolean();
         final String presetID = packet.readUtf();
         final boolean autoSwitchEnabled = packet.readBoolean();
@@ -193,7 +208,7 @@ public class PacketClient {
         if (minecraft.level.getBlockEntity(pos1) instanceof PIDSRVBase.TileEntityBlockRVPIDS) {
             minecraft.execute(() -> {
                 if (!(minecraft.screen instanceof RVPIDSConfigScreen)) {
-                    UtilitiesClient.setScreen(minecraft, new RVPIDSConfigScreen(pos1, pos2, maxArrivals, hidePlatformNumber, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
+                    UtilitiesClient.setScreen(minecraft, new RVPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, hidePlatformNumber, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
                 }
             });
         }
@@ -206,6 +221,21 @@ public class PacketClient {
         final BlockPos pos1 = packet.readBlockPos();
         final BlockPos pos2 = packet.readBlockPos();
         final int maxArrivals = packet.readInt();
+        final int messageCount = packet.readInt();
+        final String[] packetMessages = new String[messageCount];
+        for (int i = 0; i < messageCount; i++) {
+            packetMessages[i] = packet.readUtf();
+        }
+        final int rowCount = packet.readInt();
+        final boolean[] packetRowHidden = new boolean[rowCount];
+        for (int i = 0; i < rowCount; i++) {
+            packetRowHidden[i] = packet.readBoolean();
+        }
+        final java.util.Set<Long> packetPlatformIds = new java.util.HashSet<>();
+        final int platformCount = packet.readInt();
+        for (int i = 0; i < platformCount; i++) {
+            packetPlatformIds.add(packet.readLong());
+        }
         final String presetID = packet.readUtf();
         final boolean autoSwitchEnabled = packet.readBoolean();
         final String autoSwitchPreset = packet.readUtf();
@@ -220,7 +250,7 @@ public class PacketClient {
         if (minecraft.level.getBlockEntity(pos1) instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
             minecraft.execute(() -> {
                 if (!(minecraft.screen instanceof JobanPIDSConfigScreen)) {
-                    UtilitiesClient.setScreen(minecraft, new JobanPIDSConfigScreen(pos1, pos2, maxArrivals, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
+                    UtilitiesClient.setScreen(minecraft, new JobanPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
                 }
             });
         }

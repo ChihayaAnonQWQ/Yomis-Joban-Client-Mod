@@ -96,7 +96,9 @@ public class RVPIDSConfigScreen extends ScreenMapper implements IGui, IPacket {
     private int depCheckY, depPresetY, depNumY, depDurY, depUntilY;
     private int hidePlatY;
 
-    public RVPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals, boolean hidePlatformNumber, String presetID,
+    public RVPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals,
+                              String[] packetMessages, boolean[] packetRowHidden, Set<Long> packetPlatformIds,
+                              boolean hidePlatformNumber, String presetID,
                               boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
                               boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
         super(Text.literal(""));
@@ -143,8 +145,21 @@ public class RVPIDSConfigScreen extends ScreenMapper implements IGui, IPacket {
         for (int i = 0; i < maxArrivals; i++)
             buttonsHideArrival[i] = new WidgetBetterCheckbox(0, 0, 0, SQUARE_SIZE, hideArrivalText, checked -> {});
 
+        /* What the server sent with the packet first, the client's own copy of the block entity only
+           as a fallback. Reading the entity alone meant a screen could open blank whenever that copy
+           had not caught up, and closing it then sent the blanks back -- which is how a configured
+           board lost its text. JCM 2.x sends the data in the packet for the same reason. */
+        if (packetPlatformIds != null) {
+            filterPlatformIds.addAll(packetPlatformIds);
+        }
+        for (int i = 0; i < maxArrivals && packetMessages != null && i < packetMessages.length; i++) {
+            messages[i] = packetMessages[i] == null ? "" : packetMessages[i];
+            if (packetRowHidden != null && i < packetRowHidden.length) {
+                hideArrival[i] = packetRowHidden[i];
+            }
+        }
         final Level world = Minecraft.getInstance().level;
-        if (world != null) {
+        if (packetMessages == null && world != null) {
             final BlockEntity entity = world.getBlockEntity(pos1);
             if (entity instanceof PIDSRVBase.TileEntityBlockRVPIDS) {
                 filterPlatformIds.addAll(((PIDSRVBase.TileEntityBlockRVPIDS) entity).getPlatformIds());

@@ -201,11 +201,22 @@ public class PacketServer {
     }
 
     /* Packet to open the Joban PIDS Configuration GUI in client */
-    public static void sendJobanPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+    public static void sendJobanPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals,
+                                                 String[] messages, boolean[] rowHidden, Set<Long> platformIds, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
         final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
         packet.writeBlockPos(pos1);
         packet.writeBlockPos(pos2);
         packet.writeInt(maxArrivals);
+        packet.writeInt(messages.length);
+        for (int i = 0; i < messages.length; i++) {
+            packet.writeUtf(messages[i] == null ? "" : messages[i]);
+        }
+        packet.writeInt(rowHidden.length);
+        for (int i = 0; i < rowHidden.length; i++) {
+            packet.writeBoolean(rowHidden[i]);
+        }
+        packet.writeInt(platformIds.size());
+        platformIds.forEach(packet::writeLong);
         packet.writeUtf(presetID);
         packet.writeBoolean(autoSwitchEnabled);
         packet.writeUtf(autoSwitchPreset);
@@ -220,11 +231,23 @@ public class PacketServer {
     }
 
     /* Packet to open the Railway Vision PIDS Configuration GUI in client */
-    public static void sendRVPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals, boolean hidePlatformNumber, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+    public static void sendRVPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals,
+                                               String[] messages, boolean[] rowHidden, Set<Long> platformIds,
+                                               boolean hidePlatformNumber, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
         final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
         packet.writeBlockPos(pos1);
         packet.writeBlockPos(pos2);
         packet.writeInt(maxArrivals);
+        packet.writeInt(messages.length);
+        for (int i = 0; i < messages.length; i++) {
+            packet.writeUtf(messages[i] == null ? "" : messages[i]);
+        }
+        packet.writeInt(rowHidden.length);
+        for (int i = 0; i < rowHidden.length; i++) {
+            packet.writeBoolean(rowHidden[i]);
+        }
+        packet.writeInt(platformIds.size());
+        platformIds.forEach(packet::writeLong);
         packet.writeBoolean(hidePlatformNumber);
         packet.writeUtf(presetID);
         packet.writeBoolean(autoSwitchEnabled);

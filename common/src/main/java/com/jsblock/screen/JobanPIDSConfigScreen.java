@@ -93,7 +93,9 @@ public class JobanPIDSConfigScreen extends ScreenMapper implements IGui, IPacket
     private int arrCheckY, arrPresetY, arrNumY, arrDurY;
     private int depCheckY, depPresetY, depNumY, depDurY, depUntilY;
 
-    public JobanPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals, String presetID,
+    public JobanPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals,
+                                 String[] packetMessages, boolean[] packetRowHidden, Set<Long> packetPlatformIds,
+                                 String presetID,
                                  boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
                                  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
         super(Text.literal(""));
@@ -137,20 +139,24 @@ public class JobanPIDSConfigScreen extends ScreenMapper implements IGui, IPacket
         for (int i = 0; i < maxArrivals; i++)
             buttonsHideArrival[i] = new WidgetBetterCheckbox(0, 0, 0, SQUARE_SIZE, hideArrivalText, checked -> {});
 
+        /* The packet's copy first, the client's own block entity as a fallback -- see the note in
+           RVPIDSConfigScreen. One assignment per path, because the field is final. */
+        for (int i = 0; i < maxArrivals && packetMessages != null && i < packetMessages.length; i++) {
+            messages[i] = packetMessages[i] == null ? "" : packetMessages[i];
+            if (packetRowHidden != null && i < packetRowHidden.length) {
+                hideArrival[i] = packetRowHidden[i];
+            }
+        }
         final Level world = Minecraft.getInstance().level;
-        if (world != null) {
-            final BlockEntity entity = world.getBlockEntity(pos1);
-            if (entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
-                filterPlatformIds = ((BlockPIDSBaseHorizontal.TileEntityBlockPIDSBaseHorizontal) entity).getPlatformIds();
-                for (int i = 0; i < maxArrivals; i++) {
-                    messages[i] = ((JobanPIDSBase.TileEntityBlockJobanPIDS) entity).getMessage(i);
-                    hideArrival[i] = ((JobanPIDSBase.TileEntityBlockJobanPIDS) entity).getHideArrival(i);
-                }
-            } else {
-                filterPlatformIds = new HashSet<>();
+        final BlockEntity entity = packetMessages == null && world != null ? world.getBlockEntity(pos1) : null;
+        if (entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
+            filterPlatformIds = ((BlockPIDSBaseHorizontal.TileEntityBlockPIDSBaseHorizontal) entity).getPlatformIds();
+            for (int i = 0; i < maxArrivals; i++) {
+                messages[i] = ((JobanPIDSBase.TileEntityBlockJobanPIDS) entity).getMessage(i);
+                hideArrival[i] = ((JobanPIDSBase.TileEntityBlockJobanPIDS) entity).getHideArrival(i);
             }
         } else {
-            filterPlatformIds = new HashSet<>();
+            filterPlatformIds = packetPlatformIds != null ? new HashSet<>(packetPlatformIds) : new HashSet<>();
         }
 
         filterButton = PIDSConfigScreen.getPlatformFilterButton(pos1, selectAllCheckbox, filterPlatformIds, this);
