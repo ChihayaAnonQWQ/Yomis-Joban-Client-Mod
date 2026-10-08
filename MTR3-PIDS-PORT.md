@@ -744,6 +744,9 @@ if (currentStation) {
 }
 ```
 
+![修复前：本站没解析对，脚本的比对全部落空，于是退回索引 0——线路图条画的是线路开头的几站
+（面板上是 Western Central Station、Central Station 一带），本站名那一栏也是错的](docs/pids-station-before.png)
+
 所以问题在「本站」那一侧。而 `PIDSWrapper.primaryPlatformId()` 当时写的是：
 
 ```java
@@ -764,6 +767,9 @@ cachedPlatformId = RailwayData.getClosePlatformId(platforms, dataCache, getBlock
 
 实机验证：诊断打出的 `station="沙地广场站|Sand Plaza"` **本来就在** `routeStops` 的第 4 项上，
 说明数据一直是对的——错的是脚本**拿到的东西**，见下一条。
+
+![修复后：本站解析正确，线路图条按「本站 → 下一站 → 再下一站」画——光峡谷，接下来是
+沙地广场站、柚子洲、体育广场](docs/pids-station-after.png)
 
 **9. Rhino 的陷阱：方法当属性读，拿到的是函数对象**
 
