@@ -316,7 +316,7 @@ inherited members included), and the two are diffed.
 they are listed here so a pack author can tell at a glance rather than by experiment. The count and
 this list were re-measured against the real packs: every `Resources.read*` call site in the library
 is in `assets/mtr/**` — MTR's own map and LCD scripting host, not PIDS — so the PIDS-side gap is
-zero. See `V2-API-覆盖表.md`.
+zero. See [`V2-API-覆盖表.md`](V2-API-覆盖表.md).
 
 *Classes that exist, with methods not yet added (81 entries):*
 

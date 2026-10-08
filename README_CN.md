@@ -117,7 +117,7 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 | PIDS 预设 | 三种，都在方块自己的配置界面里选：JCM 2.x 的 **JavaScript** 预设（`scriptFiles`）、JSON 声明的**组件式**布局（`components`）、以及**只有贴图**的传统资源包。既不声明 `components` 也不声明 `scriptFiles` 的预设，仍然走 YJCM 原来那套硬编码渲染路径 |
 | PIDS 投影仪 | `jsblock:pids_projector` —— 面板悬在空中，自带显示格式、偏移、旋转、缩放、逐行信息与隐藏月台号 |
 | 像素化与点阵 | 默认关闭：资源包声明它是按什么屏画的，玩家决定要多粗（按预设）。每个键与三种画布的精确比例见 [docs/pixelation-guide.zh.md](docs/pixelation-guide.zh.md) |
-| 脚本 API | 逐条对着官方 JCM 2.x 脚本文档比对，而不是「手头这些预设恰好用到什么」；对照表是 `V2-API-覆盖表.md` |
+| 脚本 API | 逐条对着官方 JCM 2.x 脚本文档比对，而不是「手头这些预设恰好用到什么」；对照表是 [`V2-API-覆盖表.md`](V2-API-覆盖表.md) |
 | 脚本沙箱 | 类访问白名单、关闭前的警告界面、面向玩家的失败提示，以及记录预设每一次绘制调用的诊断 |
 | 无头检查 | `tools/run-pids-check.ps1` 不开游戏，直接用真实引擎跑随模组附带的预设与脚本 API |
 
@@ -292,7 +292,7 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 **还缺的，按组列出。** 约 149 条，已知没有任何 PIDS 预设会调它们；列在这里是为了让写包的人一眼看清，
 而不是靠试。这个条数与下面的清单都按真实资源包重新核过：**全库里每一处 `Resources.read*` 调用都在
 `assets/mtr/**`**——那是 MTR 自己的地图 / LCD 脚本宿主，不是 PIDS——所以 **PIDS 侧的缺口是零**。
-完整对照见工作区根目录的 `V2-API-覆盖表.md`。*（译注：分组标题中的英文类名与官方文档一致，便于对照。）*
+完整对照见仓库里的 [`V2-API-覆盖表.md`](V2-API-覆盖表.md)。*（译注：分组标题中的英文类名与官方文档一致，便于对照。）*
 
 *类在、方法还没加的（81 条）：*
 
