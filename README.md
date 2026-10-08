@@ -1,5 +1,7 @@
 # Yomi's Joban Client Mod
 
+**English** | [中文](README_CN.md)
+
 An unofficial version of Joban Client Mod.
 
 Only 1.20(.1).
@@ -29,8 +31,6 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 > Most of this branch was written by **DeepSeek**, an AI agent, checking its own work
 > against the game rather than following a specification. It is **not guaranteed to be
 > compatible** with every resource pack or world, and it is **not guaranteed to be stable**.
->
-> 本分支大部分工作由 DeepSeek 完成，**不保证兼容性和稳定性**。
 
 The branch **`feat/jcm-pids-components`** ports **JCM 2.x / MTR 4's PIDS system** onto
 **YJCM for MTR 3** (Minecraft 1.20.1, YMTR 3.6.3) — and then fixes some of the problems
@@ -151,20 +151,18 @@ they are listed here so a pack author can tell at a glance rather than by experi
 If a pack needs one of these, the first four groups are the cheap ones -- a few lines each, and
 `Resources.read*` is the group most likely to matter, since it is how a pack loads its own files.
 
-### 资源包的 PIDS 无法正常工作怎么办
+### When a resource pack's PIDS does not work
 
-如果您遇到有资源包的 PIDS 无法正常工作，可以把**游戏版本信息**、**游戏日志**、**资源包下载链接**
-发给我，或者直接提 [Issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new)。
+If a resource pack's PIDS does not work, send me the **game version**, the **game log** and a
+**link to the resource pack**, or open an
+[issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new).
 
-- **游戏版本信息**：Minecraft 版本、MTR / YMTR 版本、本模组版本（当前 `1.2.12-JSPIDS-2.0`）
-- **游戏日志**：`logs/latest.log`。面板报错会写成一行 `[Joban Client] PIDS script "..." threw in render(): ...`，
-  带上它就能直接看到是哪个预设、哪一行、缺什么
-- **资源包下载链接**：包名或下载地址，方便我把预设拆出来在无头检查里复现
-
-> If a resource pack's PIDS does not work, open an
-> [issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new) with your game
-> version, `logs/latest.log`, and a link to the pack. The log line names the preset, the script line
-> and the API that was missing, which is usually enough to fix it without guessing.
+- **Game version**: Minecraft, MTR / YMTR, and this mod (currently `1.2.12-JSPIDS-2.0`)
+- **Game log**: `logs/latest.log`. A failing panel writes one line,
+  `[Joban Client] PIDS script "..." threw in render(): ...`, which names the preset, the script line
+  and the API that was missing -- usually enough to fix it without reproducing anything
+- **Pack link**: the pack's name or download address, so its presets can be pulled out and run
+  through the headless checks
 
 ### Config screen
 
