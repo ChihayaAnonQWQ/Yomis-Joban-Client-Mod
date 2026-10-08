@@ -151,6 +151,21 @@ they are listed here so a pack author can tell at a glance rather than by experi
 If a pack needs one of these, the first four groups are the cheap ones -- a few lines each, and
 `Resources.read*` is the group most likely to matter, since it is how a pack loads its own files.
 
+### 资源包的 PIDS 无法正常工作怎么办
+
+如果您遇到有资源包的 PIDS 无法正常工作，可以把**游戏版本信息**、**游戏日志**、**资源包下载链接**
+发给我，或者直接提 [Issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new)。
+
+- **游戏版本信息**：Minecraft 版本、MTR / YMTR 版本、本模组版本（当前 `1.2.12-JSPIDS-2.0`）
+- **游戏日志**：`logs/latest.log`。面板报错会写成一行 `[Joban Client] PIDS script "..." threw in render(): ...`，
+  带上它就能直接看到是哪个预设、哪一行、缺什么
+- **资源包下载链接**：包名或下载地址，方便我把预设拆出来在无头检查里复现
+
+> If a resource pack's PIDS does not work, open an
+> [issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new) with your game
+> version, `logs/latest.log`, and a link to the pack. The log line names the preset, the script line
+> and the API that was missing, which is usually enough to fix it without guessing.
+
 ### Config screen
 
 The preset selection box was drawn under its text field and covered the rows below, while
