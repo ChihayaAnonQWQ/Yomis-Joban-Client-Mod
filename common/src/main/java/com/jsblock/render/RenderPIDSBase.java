@@ -675,7 +675,16 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final int[] pixelDots = com.jsblock.client.ClientConfig.hasPixelDotsEntry(preset.id)
                 ? com.jsblock.client.ClientConfig.getPixelDots(preset.id)
                 : com.jsblock.data.PackPixelation.packDotsFor(preset.pixelDots);
-        if (pixelTarget != null && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelTarget, pixelScale, pixelShape, pixelDots)) {
+
+        /* The frame's panel data, which ctx.parseComponent() hands to a component so it can be asked
+           the same questions the components-array path asks -- and which both the direct and the
+           pixelated path need, since the offscreen pass draws the same panel. Built before the
+           pixelation attempt for that reason; it carries no transform, so it is valid in either. */
+        final com.jsblock.pids.PIDSContext frameContext = new com.jsblock.pids.PIDSContext(
+                world, pos, facing, customMessages, scheduleList, platformIds, hideArrivals, delta,
+                (long) Math.floor(MTRClient.getGameTick()));
+
+        if (pixelTarget != null && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelTarget, pixelScale, pixelShape, pixelDots, frameContext)) {
             matrices.popPose();
             return;
         }
@@ -684,6 +693,17 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final com.jsblock.script.ScriptRenderContext ctx = new com.jsblock.script.ScriptRenderContext(
                 matrices, vertexConsumers, immediate, facing, MAX_LIGHT_GLOWING,
                 canvasWidth, canvasHeight, scriptScale);
+
+        /* ctx.parseComponent(): the render state, exactly the pair the components-array path builds
+           in renderLayout -- same matrices, same vertex source, same immediate source for text -- so
+           a component reaches the panel from a script and from a preset by the same route and lands
+           in the same place. */
+        ctx.setComponentSupport(frameContext,
+                new com.jsblock.pids.PIDSGraphics(matrices, vertexConsumers, immediate, facing,
+                        MAX_LIGHT_GLOWING,
+                        preset.color == null ? geometry.defaultTextColor : preset.color,
+                        preset.font == null ? geometry.defaultFont : preset.font,
+                        1F));
 
         if (!program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper)) {
             /* The script threw, very likely before it reached its own background call, which is
@@ -935,6 +955,27 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
             new ResourceLocation(com.jsblock.Joban.MOD_ID, "textures/pids/pixel_dot.png");
 
     /**
+     * The render state a parsed component draws through during the pixelation pass.
+     *
+     * <p>The offscreen twin of the bundle {@code renderScripted} builds for the direct path: same
+     * panel data, same sources, except that both of them are the offscreen ones. That source keeps a
+     * builder per layer and is flushed by the caller, which is what the script's own text already
+     * relies on; a component's text and quads reach it the same way.</p>
+     *
+     * <p>Colours and font come from the preset, as they do on the direct path, so a component looks
+     * the same pixelated as not.</p>
+     */
+    private com.jsblock.pids.PIDSGraphics offscreenComponentGraphics(PIDSPreset preset, PoseStack panelStack,
+                                                                     PIDSPixelatedPanel.OffscreenSource source,
+                                                                     Direction facing) {
+        final PIDSGeometry geometry = getLayoutGeometry();
+        return new PIDSGraphics(panelStack, source, source, facing, MAX_LIGHT_GLOWING,
+                preset.color == null || geometry == null ? IGui.ARGB_WHITE : preset.color,
+                preset.font == null || geometry == null ? "mtr:mtr" : preset.font,
+                1F);
+    }
+
+    /**
      * Draws this panel by rendering its script into an offscreen target and magnifying that.
      *
      * <p>Called with the world transform already built, because the magnified quad is drawn in it.
@@ -951,7 +992,8 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                                        com.jsblock.script.ScriptEngine.Program program, Direction facing,
                                        PoseStack matrices, MultiBufferSource vertexConsumers,
                                        int canvasWidth, int canvasHeight, int[] pixelTarget, int pixelScale,
-                                       com.jsblock.data.PixelShape pixelShape, int[] dotGrid) {
+                                       com.jsblock.data.PixelShape pixelShape, int[] dotGrid,
+                                       com.jsblock.pids.PIDSContext frameContext) {
         final PIDSPixelatedPanel panel;
         try {
             panel = PIDSPixelatedPanel.of(canvasWidth, canvasHeight, pixelTarget[0], pixelTarget[1]);
@@ -986,6 +1028,10 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final PIDSPixelatedPanel.OffscreenSource offscreenSource = new PIDSPixelatedPanel.OffscreenSource(panel);
         boolean drawn = false;
         com.jsblock.script.ScriptRenderContext ctx = null;
+        /* One begin() per attempt: it binds the target and pushes the modelview, so the pose stack it
+           returns is the one the offscreen draws -- the script's and a parsed component's alike -- must
+           use, and it is not valid to ask for a second one while the first is running. */
+        PoseStack panelStack = null;
         try {
             /* The facing is reversed for the offscreen pass.
                
@@ -996,12 +1042,21 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                state on setup -- throw them all away.
                
                Asking MTR's draw helper for the opposite winding cancels the mirror out. */
+            panelStack = panel.begin();
             ctx = new com.jsblock.script.ScriptRenderContext(
-                    panel.begin(), offscreenSource, offscreenSource, facing.getOpposite(), MAX_LIGHT_GLOWING,
+                    panelStack, offscreenSource, offscreenSource, facing.getOpposite(), MAX_LIGHT_GLOWING,
                     canvasWidth, canvasHeight, 1F);
             /* Uploads go through the panel rather than through RenderType.end, which would bind the
                main framebuffer and drop the whole panel into the world. See PIDSPixelatedPanel.upload. */
             ctx.setQuadUploader(panel::upload);
+            /* ctx.parseComponent() in the offscreen pass: the same panel data as the direct path, and
+               the offscreen source for both the quads and the text. PIDSPixelatedPanel.OffscreenSource
+               exists precisely so that text drawn through it lands in the target instead of the world,
+               which is what a component's text needs; the quads accumulate in it per layer and are
+               uploaded by the flush() below. The facing is the reversed one for the same reason the
+               script's own draws get it -- the pass is mirrored, and the layers cull back faces. */
+            ctx.setComponentSupport(frameContext, offscreenComponentGraphics(
+                    preset, panelStack, offscreenSource, facing.getOpposite()));
             drawn = program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper);
             offscreenSource.flush();
 
@@ -1018,10 +1073,15 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                     /* A partial panel is about to be cleared anyway. */
                 }
                 panel.end();
+                panelStack = panel.begin();
                 ctx = new com.jsblock.script.ScriptRenderContext(
-                        panel.begin(), offscreenSource, offscreenSource, facing.getOpposite(), MAX_LIGHT_GLOWING,
+                        panelStack, offscreenSource, offscreenSource, facing.getOpposite(), MAX_LIGHT_GLOWING,
                         canvasWidth, canvasHeight, 1F);
                 ctx.setQuadUploader(panel::upload);
+                /* The retry draws the same frame, so it needs the same component state -- without this
+                   a preset that uses ctx.parseComponent would pixelate only until its first throw. */
+                ctx.setComponentSupport(frameContext, offscreenComponentGraphics(
+                        preset, panelStack, offscreenSource, facing.getOpposite()));
                 drawn = program.renderOrFail(ctx, wrapper.withLenientArrivals());
                 offscreenSource.flush();
                 if (drawn && pixelationRecovered.add(preset.id)) {

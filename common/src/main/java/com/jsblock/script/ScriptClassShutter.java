@@ -56,6 +56,19 @@ public final class ScriptClassShutter implements ClassShutter {
 				   headless check caught the first time the shutter was switched on. It is a
 				   namespace/path pair and grants nothing else. */
 				"net.minecraft.resources.ResourceLocation",
+				/* MTR's client data, for the MTRClientData global JCM 2.x gives a PIDS script.
+				   JCM 2.x allows mtr.* wholesale (JCMScripting.register calls ClassRule.parse("mtr.*")),
+				   which is more than a PIDS preset needs: the global hands out maps of platforms,
+				   stations and arrivals, so the classes it can actually reach are listed rather than
+				   the package. Rhino consults the shutter when it wraps the class at all -- the
+				   headless check caught the global failing to install with everything below absent,
+				   which is why they are here. */
+				"mtr.client.ClientData",
+				"mtr.client.ClientCache",
+				"mtr.data.Station",
+				"mtr.data.Platform",
+				"mtr.data.Route",
+				"mtr.data.ScheduleEntry",
 				// This branch's scripting surface: Text/Texture/Rectangle, PIDSWrapper, helpers.
 				"com.jsblock.script.*",
 				// Rhino's own runtime classes are needed for the engine to function at all.

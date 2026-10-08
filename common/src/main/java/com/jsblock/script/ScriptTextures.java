@@ -51,6 +51,17 @@ public final class ScriptTextures {
 		if (location == null || REGISTERED.contains(location) || FAILED.contains(location)) {
 			return location;
 		}
+		/* Before the read: a script may only reach its own pack. A texture referenced through
+		   Resources.id() never passed a builder that could check it, so the check lives here as
+		   well as in the builder -- this is the call that actually opens the file. Rejected
+		   locations are remembered as failed, so a per-frame draw reports once. See ScriptPaths. */
+		try {
+			ScriptPaths.checkLocation(location);
+		} catch (ScriptPaths.RejectedPathException refused) {
+			FAILED.add(location);
+			ScriptPaths.report("Texture", refused);
+			return location;
+		}
 		final Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft == null) {
 			return location;
@@ -83,6 +94,67 @@ public final class ScriptTextures {
 	public static void reset() {
 		REGISTERED.clear();
 		FAILED.clear();
+	}
+
+	/**
+	 * Records that a location is already registered with the texture manager.
+	 *
+	 * <p>For {@link GraphicsTexture}, whose pixels come from a script rather than from the pack: the
+	 * canvas registers its own texture under its own identifier, so {@link #resolve} must not go
+	 * looking for a file that was never meant to exist and report it missing.</p>
+	 */
+	public static void markExternal(ResourceLocation location) {
+		if (location != null) {
+			REGISTERED.add(location);
+			FAILED.remove(location);
+		}
+	}
+
+	/** Forgets an externally registered location, so a released canvas is not remembered as live. */
+	public static void forget(ResourceLocation location) {
+		if (location != null) {
+			REGISTERED.remove(location);
+			FAILED.remove(location);
+		}
+	}
+
+	/**
+	 * Reads a pack image as an ARGB {@code BufferedImage}, for the scripting surface's
+	 * {@code Resources.readBufferedImage} and for pasting a texture into a
+	 * {@link GraphicsTexture}.
+	 *
+	 * <p>Goes through the same rules as every other script read — the path guard first, then the
+	 * resource manager — and answers {@code null} with one warning rather than throwing, because a
+	 * missing texture is a pack bug a script should survive: the canvas keeps working and the
+	 * element that used it is simply absent, which is also what {@link #resolve} does for a missing
+	 * texture.</p>
+	 */
+	public static java.awt.image.BufferedImage readImage(ResourceLocation location) {
+		try {
+			ScriptPaths.checkLocation(location);
+		} catch (ScriptPaths.RejectedPathException refused) {
+			ScriptPaths.report("Resources.readBufferedImage()", refused);
+			return null;
+		}
+		final Minecraft minecraft = Minecraft.getInstance();
+		if (minecraft == null || minecraft.getResourceManager() == null) {
+			return null;
+		}
+		try (InputStream stream = minecraft.getResourceManager().getResource(location).orElseThrow().open()) {
+			final java.awt.image.BufferedImage image = javax.imageio.ImageIO.read(stream);
+			if (image == null) {
+				Joban.LOGGER.warn("[Joban Client] PIDS script image \"{}\" is not an image this JVM can read",
+						location);
+				return null;
+			}
+			return GraphicsTexture.createArgbBufferedImage(image);
+		} catch (Exception e) {
+			if (FAILED.add(location)) {
+				Joban.LOGGER.warn("[Joban Client] PIDS script image \"{}\" could not be read: {}",
+						location, e.toString());
+			}
+			return null;
+		}
 	}
 
 	/**

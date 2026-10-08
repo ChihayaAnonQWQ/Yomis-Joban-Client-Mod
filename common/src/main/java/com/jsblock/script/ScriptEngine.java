@@ -153,8 +153,15 @@ public final class ScriptEngine {
 	/** Drops every compiled program; call when the resource manager reloads. */
 	public static void reset() {
 		PROGRAMS.clear();
+		/* A script cannot be told it is being reloaded, so the canvases it made are released here --
+		   before the texture bookkeeping is cleared, since each canvas unregisters its own identifier
+		   on the way out. */
+		GraphicsTexture.releaseAll();
 		/* Script textures are keyed by the identifiers the old pack used, so they must go too. */
 		ScriptTextures.reset();
+		/* Which refusals have been reported describes scripts that no longer exist, and the
+		   canvases those scripts made are released with them. */
+		ScriptPaths.reset();
 		/* Undelivered failure notices describe programs that no longer exist. */
 		ERROR_NOTIFIER.reset();
 	}
@@ -188,7 +195,11 @@ public final class ScriptEngine {
 			return false;
 		}
 		try {
-			final ResourceLocation id = new ResourceLocation(location);
+			/* Before anything is resolved or read: a script may only reach its own pack. The
+			   reference goes through the same validation the texture path uses, so
+			   include("jsblock:../../../../x") is refused here rather than handed to a resource
+			   manager that would resolve it against the pack's directory. See ScriptPaths. */
+			final ResourceLocation id = ScriptPaths.resource(location);
 			final String source = readResource(id);
 			if (source == null || source.trim().isEmpty()) {
 				Joban.LOGGER.warn("[Joban Client] PIDS script {}:{} is missing or empty.",
@@ -197,6 +208,12 @@ public final class ScriptEngine {
 			}
 			cx.evaluateString(scope, source, id.toString(), 1, null);
 			return true;
+		} catch (ScriptPaths.RejectedPathException refused) {
+			/* A refusal is not a broken pack: the script asked for something it may not have, so
+			   the read is dropped and the rest of the preset carries on. Reported once per
+			   distinct reference -- an include() sits in a path that can run every frame. */
+			ScriptPaths.report("include()", refused);
+			return false;
 		} catch (Exception e) {
 			Joban.LOGGER.error("[Joban Client] Error evaluating PIDS script " + location + ": " + e);
 			return false;
@@ -249,11 +266,25 @@ public final class ScriptEngine {
 		ScriptableObject.putProperty(scope, "Resources", new NativeJavaClass(scope, Resources.class));
 		ScriptableObject.putProperty(scope, "TextUtil", new NativeJavaClass(scope, TextUtil.class));
 		ScriptableObject.putProperty(scope, "MinecraftClient", new NativeJavaClass(scope, MinecraftClient.class));
+		/* JCM 2.x registers this second name for the PIDS scope, and it does <b>not</b> point at the
+		   Minecraft client helper above. Its bytecode loads a different class for it:
+		   {@code JCMScripting.lambda$register$0} does {@code ldc class mtr/client/ClientData}, so a
+		   v2 PIDS script reaching for {@code MTRClientData.STATIONS} or {@code MTRClientData.PLATFORMS}
+		   is reading MTR's own client caches. Wiring the name to our MinecraftClient instead would
+		   leave exactly those scripts with {@code undefined} -- the pack would run and show nothing --
+		   so it is the MTR class that goes here. Both classes exist in MTR 3.6.3 unchanged (the
+		   arrival lists and station map the built-in PIDS renderers already read), so this is the same
+		   object a v2 pack asked for, on this branch's MTR. */
+		ScriptableObject.putProperty(scope, "MTRClientData", new NativeJavaClass(scope, mtr.client.ClientData.class));
 		/* A constructible class, not a bag of statics: scripts write new RateLimit(seconds). */
 		ScriptableObject.putProperty(scope, "RateLimit", new NativeJavaClass(scope, RateLimit.class));
 		ScriptableObject.putProperty(scope, "Text", new NativeJavaClass(scope, ScriptDrawCalls.Text.class));
 		ScriptableObject.putProperty(scope, "Texture", new NativeJavaClass(scope, ScriptDrawCalls.Texture.class));
 		ScriptableObject.putProperty(scope, "Rectangle", new NativeJavaClass(scope, ScriptDrawCalls.Rectangle.class));
+		/* A canvas a script draws into at runtime and then uses as a texture. JCM 2.x has it as a
+		   global of the same name and shape; see GraphicsTexture for what this port changed (the GPU
+		   side is built on the first upload, so it is usable with no game running) and why. */
+		ScriptableObject.putProperty(scope, "GraphicsTexture", new NativeJavaClass(scope, GraphicsTexture.class));
 		/* Math objects, documented under Common APIs and available to every script type. A pack that
 		   builds a transformation stack reaches for Matrices without checking whether it exists. */
 		ScriptableObject.putProperty(scope, "Matrices", new NativeJavaClass(scope, ScriptMath.Matrices.class));
@@ -332,6 +363,37 @@ public final class ScriptEngine {
 		public static String getAddonVersion(String modId) {
 			return modId != null && (modId.equalsIgnoreCase("jcm") || modId.equalsIgnoreCase("jsblock"))
 					? com.jsblock.Joban.getVersion() : "";
+		}
+
+		/**
+		 * {@code Resources.readBufferedImage(id)} -- a pack image as an ARGB {@code BufferedImage}, or
+		 * {@code null}.
+		 *
+		 * <p>JCM 2.x's own method, and the one an image-composing script needs: it is how a canvas gets
+		 * the pack's artwork into it (see {@link GraphicsTexture#drawTexture}), and how a script reads
+		 * an image at all without a texture. Anything from {@code Resources.id(...)} or a
+		 * {@code "namespace:path.png"} string is accepted, which is the same spelling the rest of the
+		 * API uses.</p>
+		 *
+		 * <p>Read through the script path rules like every other read, and a missing file answers
+		 * {@code null} with one warning rather than throwing: a pack image that is not there is
+		 * normally an element the script can leave out.</p>
+		 */
+		public static java.awt.image.BufferedImage readBufferedImage(Object id) {
+			final ResourceLocation location;
+			if (id instanceof ResourceLocation) {
+				location = (ResourceLocation) id;
+			} else if (id == null) {
+				return null;
+			} else {
+				try {
+					location = ScriptPaths.resource(org.mozilla.javascript.Context.toString(id));
+				} catch (ScriptPaths.RejectedPathException refused) {
+					ScriptPaths.report("Resources.readBufferedImage()", refused);
+					return null;
+				}
+			}
+			return ScriptTextures.readImage(location);
 		}
 	}
 

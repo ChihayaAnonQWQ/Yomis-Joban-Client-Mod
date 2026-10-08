@@ -168,8 +168,11 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 |---|---|
 | 绘制 | `Text` `Texture` `Rectangle` `Vector3f` `Matrices` |
 | 时间与状态 | `Timing` `StateTracker` `CycleTracker` `RateLimit` |
-| 资源 | `Resources`（含 `getMTRVersion`、`getAddonVersion`） `TextUtil` |
+| 资源 | `Resources`（含 `getMTRVersion`、`getAddonVersion`、`readBufferedImage`） `TextUtil` |
 | 世界 | `MinecraftClient` `MinecraftClient.localPlayer()` `PlayerEntity` |
+| MTR 客户端数据 | `MTRClientData`（= `mtr.client.ClientData`：`STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`。**不是** `MinecraftClient` 的别名，理由见下） |
+| 声明式组件 | `ctx.parseComponent(json)` → `render(ctx)` / `canRender()` / `x()` / `y()` / `width()` / `height()` / `type()`；也可以 `ctx.draw(component)` |
+| 运行时画布 | `GraphicsTexture(w, h)`：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`clear` / `fillRect` / `drawText` / `measureText` / `drawTexture` |
 | 耗时操作 | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
 | 声音 | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | 杂项 | `console` `print` `include` `SCRIPT_INPUT` |
@@ -183,7 +186,7 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 
 | 类 | 缺的 |
 |---|---|
-| `Resources` | `read` `readString` `readBufferedImage` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
+| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
 | `Station` | `getZone1/2/3`、`getMinX/Y/Z`、`getMaxX/Y/Z`、`getExits`、`inArea`、`isTransportMode`、`getCenter` —— 需要保留车站几何，而当前包装类没存 |
 | `Stop` | `distance` `dwellTime` `dwellTimeMillis` `platform` `destinationName` `destinationStation` `customDestination` 等 6 条 |
 | `PlayerEntity` | `activeItem` `mainHandItem` `offHandItem` `yaw` `pitch` `bodyYaw` `isSneaking` `isSprinting` `isSwimming` `isHoldingItem` `playerName` |
@@ -208,12 +211,80 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 
 *范围之外：那是另一种脚本类型（18 个类、约 162 条）。* `VehicleWrapper`、`VehicleScriptContext`、
 `VehicleExtraData`、`EyecandyWrapper`、`EyecandyScriptContext`、`RenderManager`、`ModelManager`、
-`Model`、`RawModel`、`RawMeshBuilder`、`DynamicModelHolder`、`GraphicsTexture`、`QuadDrawCall`、
+`Model`、`RawModel`、`RawMeshBuilder`、`DynamicModelHolder`、`QuadDrawCall`、
 `DisplayHelper`、`BlockUseEvent`、`EyecandyEvents`、`ModelData`、`Vehicle` —— 这些属于 Vehicle Scripting
-和 Eyecandy Scripting，不是 PIDS。
+和 Eyecandy Scripting，不是 PIDS。（`GraphicsTexture` 本来列在这里，它已经作为脚本画布实现了，
+见下。）
 
 如果某个包确实需要上面某一样，**前四组是最便宜的**（每项几行），其中 `Resources.read*` 最可能真被用到 ——
 那是包读取自己文件的必经之路。
+
+### 脚本：声明式组件与运行时画布
+
+这两样是 JCM 2.x 有、而本分支此前没有的能力，都按 v2 的函数名与参数形状接上。
+
+**一、把 JSON 组件交给脚本** —— v2 进入组件体系的唯一入口是
+`ctx.parseComponent(jsonString)`，参数与预设 JSON 的 `components` 数组**逐字相同**：
+
+```js
+function render(ctx, state, pids) {
+    // 背景
+    Texture.create("Bg").texture("mypack:pids/board.png").size(pids.width, pids.height).draw(ctx);
+
+    // 一个时钟，放在 (4, 2)、40x10 的位置 —— 与写进 JSON 预设时一模一样
+    const clock = ctx.parseComponent('{"component":"clock","x":4,"y":2,"width":40,"height":10,"format":"HH:mm"}');
+    if (clock.canRender()) {
+        clock.render(ctx);        // ctx.draw(clock) 等价
+    }
+
+    // 一个到站行，行号语义与 JSON 预设的 row 相同
+    const row = ctx.parseComponent('{"component":"arrival_destination","x":4,"y":14,"width":80,"height":12,"row":0}');
+    row.render(ctx);
+}
+```
+
+`component` 对象上可用的东西：`render(ctx)`、`canRender()`、`x()` / `y()` / `width()` / `height()`、
+`type()`。写错的声明（JSON 坏了、给的是数组、没有 `component` 键、组件名不认识）会**明确报错并列出
+已知类型**，面板退回预设背景，不会黑屏也不会崩。
+
+**二、运行时画布** —— 脚本自己画一张贴图，再当普通贴图贴到面板上：
+
+```js
+function create(ctx, state, pids) {
+    state.canvas = new GraphicsTexture(128, 32);          // 只在真正需要时分配
+    state.canvas.fillRect(0, 0, 128, 32, 0x101010);
+    state.canvas.drawText("06:00", 4, 4, 0xFC9700, 20);
+    // 把资源包里已有的贴图贴进来（同一张图也可以直接用 Texture 画，这里演示合成）
+    state.canvas.drawTexture("jsblock:textures/block/pids/plat_circle.png", 100, 4, 24, 24);
+    state.canvas.upload();
+}
+
+function render(ctx, state, pids) {
+    Texture.create("Board").texture(state.canvas.identifier).pos(0, 0).size(128, 32).draw(ctx);
+}
+
+function dispose(ctx, state, pids) {
+    state.canvas.close();                                  // 必须释放：纹理不会被 GC 回收
+}
+```
+
+要点：坐标是**画布自己的像素**；颜色是 ARGB（`0xRRGGBB` 视为不透明，`0` 视为透明）；
+`upload()` 之后 `identifier` 就是一张普通贴图；**一个脚本最多同时持有 64 张未释放的画布**
+（第 65 张会报错并提示 `close()`），资源重载时引擎会释放遗留的画布。画布里画的贴图
+**与像素化面板共存**：它和任何贴图走同一条路，不做离屏嵌套。
+
+**三、`MTRClientData` 与 `MinecraftClient` 是两个东西**。JCM 2.x 的
+`MTRClientData` 是 **MTR 自己的客户端数据**（其字节码里 `ldc class mtr/client/ClientData`），
+而 `MinecraftClient` 是它的世界状态工具类（`MinecraftClientUtil`）。本分支照此接：
+
+```js
+const station = MTRClientData.STATIONS.get(someId);   // 站台/车站/到站表
+const raining = MinecraftClient.worldIsRaining();     // 世界状态
+```
+
+**四、脚本读不到资源包之外的文件**。`include()` 与 `Texture.texture(...)` 都在读取**之前**校验路径：
+拒绝 `..`、前导 `/`、反斜杠与盘符（例如 `include("jsblock:../../../../secret.js")`）。
+拒绝时日志一行、聊天栏一行，脚本继续执行 —— 这既是安全边界，也是本分支新增读取入口后的必要配套。
 
 ### 资源包的 PIDS 无法正常工作怎么办
 

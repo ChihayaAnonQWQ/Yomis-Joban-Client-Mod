@@ -13,6 +13,11 @@
 #                    for real — Rhino compilation, include(), the globals, and the whole
 #                    Text/Texture/Rectangle builder chain — so a wrapper method this port
 #                    is missing fails here exactly as it would in game.
+#   ScriptShutterCheck  checks which Java classes a script may reach.
+#   ScriptPathCheck     checks which files a script may reach: include() and
+#                       Texture.texture() must not resolve outside the script's own pack.
+#   ScriptCanvasCheck   checks the runtime canvas: that drawing it paints pixels, that a failure
+#                       to upload it degrades, and that close()/reload release the texture.
 #
 # ScriptApiCheck is run against every script in -Script (default: the built-in
 # jsblock:scripts/builtin/pids_1a.js) at several arrival counts, because a preset that
@@ -97,7 +102,9 @@ $checkSources = @(
     'tools\checks\com\jsblock\pids\PIDSPresetCheck.java',
     'tools\checks\com\jsblock\pids\PixelationCheck.java',
     'tools\checks\com\jsblock\script\ScriptApiCheck.java',
-    'tools\checks\com\jsblock\script\ScriptShutterCheck.java'
+    'tools\checks\com\jsblock\script\ScriptShutterCheck.java',
+    'tools\checks\com\jsblock\script\ScriptPathCheck.java',
+    'tools\checks\com\jsblock\script\ScriptCanvasCheck.java'
 )
 foreach ($source in $checkSources) {
     if (-not (Test-Path $source)) { throw "check source missing: $source" }
@@ -139,6 +146,26 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptShutterCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "ScriptShutterCheck (exit $NativeExitCode)" }
+
+# What a script can make the engine read. The sandbox check above covers Java classes; this
+# covers the files, which a script reaches through include() and Texture.texture(...) instead.
+Write-Host ''
+Write-Host '== script file access (ScriptPathCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptPathCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptPathCheck (exit $NativeExitCode)" }
+
+# The canvas a script draws into at runtime: the drawing half runs for real (Java2D needs no GPU),
+# the upload half degrades, and the release half is the one that decides whether a pack leaks.
+Write-Host ''
+Write-Host '== script canvas (ScriptCanvasCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptCanvasCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptCanvasCheck (exit $NativeExitCode)" }
 
 # The built-in pids_1a.js is the script the mod ships, so it is the one that must never
 # regress. Anything passed through -Script is run in addition to it.

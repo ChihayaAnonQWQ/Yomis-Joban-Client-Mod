@@ -1,3 +1,123 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.3
+
+## Compatible MTR Version
+MTR
+
+## This one adds JCM 2.x abilities rather than fixing bugs
+
+Three things a v2 script can reach for were still missing here, and one thing it could reach that it
+never should have. All four came out of the NeoJCM bytecode analysis (`NeoJCM-分析报告.md`), which is
+why each one names the JCM 2.x class and method it was ported from — the point is parity with what a
+v2 resource pack already does, not a new API of this fork's own.
+
+### `ctx.parseComponent(jsonString)` — the declarative components, from a script
+
+JCM 2.x's only entry into its component system is `PIDSScriptContext.parseComponent(String)`, which is
+`JsonParser.parseString` into `PIDSComponent.parse(JsonObject)` and nothing else. This branch has had
+the whole component system — all eleven registered types, the JSON `components` array, the layout
+engine — but no way for a script to touch it.
+
+```js
+const clock = ctx.parseComponent('{"component":"clock","x":4,"y":2,"width":40,"height":10}');
+if (clock.canRender()) {
+    clock.render(ctx);
+}
+```
+
+The parameter list is the one thing that differs, and it has to: v2's component renders with
+`render(PoseStack, MultiBufferSource, Direction, PIDSContext)`, and a script has none of those — they
+belong to the frame the engine is drawing. v2's own `ctx.draw(component)` cannot help either, because
+it accepts only `PIDSDrawCall` and throws `"1st parameter is not a DrawCall!"` for a component. So the
+component is handed the frame's state by the engine and a script calls `render(ctx)`; `canRender()`,
+and the four geometry getters, are v2's public surface otherwise unchanged. `ctx.draw(component)` works
+too, since that is what an author who has just written `parseComponent` reaches for next.
+
+A declaration that cannot be used is refused by name — malformed JSON, an array, a missing `component`
+key, an unknown type (the message lists the eleven known ones). v2's `PIDSComponent.parse` answers
+`null` for an unknown type, which is right for a JSON preset that must keep loading its other
+components and wrong for a script, which would fail later with "cannot call method render of null".
+
+### A canvas a script draws into: `new GraphicsTexture(width, height)`
+
+Ported from `com.lx862.mtrscripting.util.GraphicsTexture`: the same class name, constructor, public
+fields (`identifier`, `bufferedImage`, `graphics`, `width`, `height`), `upload()` and `close()`.
+What it adds is the part a PIDS board needs — `fillRect`, `drawText`, `measureText`, `drawTexture`
+(to paste a pack texture in) and `clear` — and one change of ordering: v2 allocates its
+`DynamicTexture` in the constructor, this port allocates the Java2D image immediately and the GL
+texture on the first `upload()`. A canvas that is created and never uploaded therefore costs no
+texture at all, and the whole create-draw-close path runs with no game running, which is how the
+headless check covers it.
+
+```js
+const canvas = new GraphicsTexture(128, 32);
+canvas.fillRect(0, 0, 128, 32, 0x101010);
+canvas.drawText("06:00", 4, 4, 0xFC9700, 20);
+canvas.drawTexture("jsblock:textures/block/pids/plat_circle.png", 100, 4, 24, 24);
+canvas.upload();
+Texture.create("board").texture(canvas.identifier).pos(0, 0).size(128, 32).draw(ctx);
+```
+
+Colours are ARGB with the surface's usual shorthand (`0xRRGGBB` means opaque, as `.color()` does;
+`0` means transparent). They are taken as `long`, not `int`: a JavaScript number is a double, and
+Rhino refuses to narrow `0xFF102030` into an `int` — every full-ARGB literal has the high bit set, so
+an `int` parameter would make the notation unusable.
+
+Textures are the one thing on this surface the garbage collector cannot reclaim — a `DynamicTexture`
+holds a GL name and a native image — so `close()` is required, and there are two backstops for a pack
+that forgets. A script may hold 64 canvases before the next is refused with a message naming
+`close()` (JCM 2.x has neither limit nor cleanup), and a resource reload releases whatever was left
+open, because nothing else can reach a script's canvases once its program is dropped.
+
+`Resources.readBufferedImage(id)` came with it — it is v2's method, it was listed as missing, and it
+is how a script gets a pack image into a canvas without a texture in between.
+
+### `MTRClientData` is MTR's client data, not a second name for `MinecraftClient`
+
+The analysis report suggested aliasing this mod's `MinecraftClient` global to `MTRClientData`, on the
+assumption that v2's two client-data globals are one object under two names. The bytecode says
+otherwise: `JCMScripting.lambda$register$0` reads `ldc class mtr/client/ClientData` for
+`MTRClientData`, while `ParsedScript` reads `MinecraftClientUtil` for `MinecraftClient`. They are two
+different classes in v2, and a port that conflated them would leave exactly the scripts the global
+exists for — `MTRClientData.STATIONS`, `.PLATFORMS`, `.SCHEDULES_FOR_PLATFORM` — reading `undefined`
+and drawing nothing.
+
+So `MTRClientData` is `mtr.client.ClientData`, which MTR 3.6.3 has unchanged. The sandbox had to allow
+it and the four types those maps hand out, because Rhino consults the class shutter when it wraps a
+class at all — the first attempt at this installed the global and failed every script with
+`Access to Java class "mtr.client.ClientData" is prohibited`, which the headless check caught before
+anything shipped. JCM 2.x allows `mtr.*` wholesale; this allows the five classes a PIDS script can
+actually reach through that global.
+
+### A script can no longer read outside its own resource pack
+
+`include()` and `Texture.texture(...)` both take a resource location, and a resource location accepts
+`jsblock:../../../../../../etc/hosts` — dots and slashes are legal path characters. For a **folder**
+resource pack, which is what a pack in `resourcepacks/` is and what every pack is in a development
+environment, Minecraft resolves that at the filesystem level, where `..` means what it always means.
+A script could read any file the game can and get the contents back in the log.
+
+Both entry points now validate before anything is resolved or opened, and refuse `..` as a segment, a
+leading `/`, a backslash, and a drive letter. The refusal is one console line naming the reference and
+the reason, plus one chat line, and the script keeps running — `include()` returns without loading,
+a texture resolves to Minecraft's missing-texture placeholder. This is
+`FilesUtil.ensurePathNotEscaped`'s rule (JCM 2.x needs it for its `Files` global, which writes into
+the game directory) applied to the two reads this branch has; the physical-path half is ported too and
+is what the check exercises against real directories.
+
+### Checks
+
+Two new headless checks, plus additions to the existing ones, all of which run from
+`tools/run-pids-check.ps1`:
+
+| Check | What it pins |
+|---|---|
+| `ScriptPathCheck` | A decoy file **outside** the resource root, which a script's `include("jsblock:../../../secret.js")` must not read — asserted by the global it would have set, not by whether a guard threw. Plus the rule table, the physical guard on a real directory tree, and the same refusal through `Texture.texture()` |
+| `ScriptCanvasCheck` | That drawing a canvas really paints pixels (read back and compared), that `upload()` with no client degrades instead of throwing, that `close()` releases it, that the 65th unreleased canvas is refused, and that a resource reload releases what a script left open |
+| `ScriptApiCheck` | `ctx.parseComponent` from inside a real script (a clock: parse, rectangle, `canRender`, `render`, `ctx.draw(component)`, and all five refusals), and that `MTRClientData` resolves to `mtr.client.ClientData` and is readable through the shutter |
+
+The canvas check is the one place a real engine cannot be run — there is no GL context in a headless
+JVM — so it asserts the degraded path instead and says so in its own header.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.2
 
 ## Compatible MTR Version

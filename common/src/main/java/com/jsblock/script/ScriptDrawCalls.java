@@ -130,16 +130,19 @@ public final class ScriptDrawCalls {
 			/* Scripts write paths without the "textures/" prefix, e.g.
 			   "nanbin:pids/image/crt_pids_1.png"; ResourceLocation keeps it as-is and the
 			   texture manager resolves it under assets/<ns>/textures/. */
-			this.textureId = new ResourceLocation(id);
+			/* Checked before the location is built, so a path that would climb out of the pack is
+			   refused at the line the author wrote -- ScriptTextures checks again, because this
+			   builder is not the only way a location reaches it. See ScriptPaths. */
+			this.textureId = ScriptPaths.resource(id);
 			return this;
 		}
 
 		/** Rhino passes back whatever {@code Resources.id(...)} produced. */
 		public Texture texture(Object id) {
 			if (id instanceof ResourceLocation) {
-				this.textureId = (ResourceLocation) id;
+				this.textureId = ScriptPaths.checkLocation((ResourceLocation) id);
 			} else if (id != null) {
-				this.textureId = new ResourceLocation(id.toString());
+				this.textureId = ScriptPaths.resource(id.toString());
 			}
 			return this;
 		}

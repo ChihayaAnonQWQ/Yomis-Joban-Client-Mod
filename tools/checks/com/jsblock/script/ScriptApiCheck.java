@@ -100,6 +100,8 @@ public final class ScriptApiCheck {
 					+ " type=" + pids.type + " arrivals=" + pids.arrivals().size());
 
 			failures += callLifecycle(cx, scope, "create", state, pids);
+			failures += checkClientDataGlobals(cx, scope);
+			failures += checkParseComponent(cx, scope);
 			failures += checkArrivalsContract(pids);
 			failures += checkLenientRetryRenders(cx, scope, state, pids);
 
@@ -137,6 +139,221 @@ public final class ScriptApiCheck {
 	}
 
 	// ------------------------------------------------------------------
+
+	/**
+	 * Pins down the two client-data globals, which are easy to conflate and were.
+	 *
+	 * <p>JCM 2.x installs {@code MinecraftClient} globally and {@code MTRClientData} for the PIDS
+	 * scope, and reads two <em>different</em> classes for them: its bytecode loads
+	 * {@code MinecraftClientUtil} for the first and {@code mtr/client/ClientData} for the second.
+	 * A port that treats the second as a second name for the first therefore compiles, loads, and
+	 * leaves every {@code MTRClientData.STATIONS}-style read returning {@code undefined} -- a pack
+	 * that draws nothing and reports nothing.</p>
+	 *
+	 * <p>The second half is the sandbox: {@code mtr.*} is not in
+	 * {@link ScriptClassShutter}'s allow-list, so this is also the place that says whether a class
+	 * handed to the scope directly can still be used. A global that the shutter silently empties
+	 * would be the same failure by another route.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkClientDataGlobals(Context cx, Scriptable scope) {
+		int failures = 0;
+
+		final Object minecraftClient = scope.get("MinecraftClient", scope);
+		final Object mtrClientData = scope.get("MTRClientData", scope);
+
+		if (!(minecraftClient instanceof org.mozilla.javascript.NativeJavaClass)) {
+			System.out.println("FAIL MinecraftClient is missing from the scope");
+			failures++;
+		} else if (((org.mozilla.javascript.NativeJavaClass) minecraftClient).getClassObject()
+				!= ScriptEngine.MinecraftClient.class) {
+			System.out.println("FAIL MinecraftClient resolves to "
+					+ ((org.mozilla.javascript.NativeJavaClass) minecraftClient).getClassObject().getName()
+					+ " instead of the Minecraft client helper");
+			failures++;
+		} else {
+			System.out.println("OK   MinecraftClient -> the game-state helper");
+		}
+
+		if (!(mtrClientData instanceof org.mozilla.javascript.NativeJavaClass)) {
+			System.out.println("FAIL MTRClientData is missing from the scope");
+			failures++;
+		} else if (((org.mozilla.javascript.NativeJavaClass) mtrClientData).getClassObject()
+				!= mtr.client.ClientData.class) {
+			System.out.println("FAIL MTRClientData resolves to "
+					+ ((org.mozilla.javascript.NativeJavaClass) mtrClientData).getClassObject().getName()
+					+ " instead of mtr.client.ClientData, which is what JCM 2.x wires it to");
+			failures++;
+		} else {
+			System.out.println("OK   MTRClientData -> mtr.client.ClientData, as JCM 2.x has it"
+					+ " (and not a second name for MinecraftClient)");
+		}
+
+		/* Reachable through the shutter, which is the half that decides whether it is usable. */
+		for (String[] probe : new String[][]{
+				{"MTRClientData.STATIONS", "the station map the built-in PIDS read"},
+				{"MTRClientData.PLATFORMS", "the platform map"},
+				{"MTRClientData.SCHEDULES_FOR_PLATFORM", "the arrival lists"}}) {
+			try {
+				final Object value = cx.evaluateString(scope, probe[0], "client-data-check", 1, null);
+				if (value == null || value == Undefined.instance) {
+					System.out.println("FAIL " + probe[0] + " (" + probe[1] + ") is not readable");
+					failures++;
+				} else {
+					System.out.println("OK   " + probe[0] + " is readable (" + probe[1] + ")");
+				}
+			} catch (Exception e) {
+				System.out.println("FAIL " + probe[0] + " (" + probe[1] + ") threw: " + e);
+				failures++;
+			}
+		}
+		return failures;
+	}
+
+	/**
+	 * Runs {@code ctx.parseComponent(...)} from inside a script, through the real scope.
+	 *
+	 * <p>JCM 2.x's only entry point into its declarative components is that one call, and the
+	 * declaration it takes — {@code component}, {@code x}, {@code y}, {@code width}, {@code height},
+	 * plus the component's own options — is the same JSON a preset's {@code components} array holds.
+	 * This is the one place the two spellings can be compared, so it checks the whole path: the parse,
+	 * the rectangle the component reports, the {@code canRender} rule, and that drawing it reaches the
+	 * frame's draw-call list like any other element.</p>
+	 *
+	 * <p>The clock is the case the documentation's own examples use and the one that needs no panel
+	 * data, which is why it is here rather than an arrival component: on a headless context there are
+	 * no trains to draw, and a check whose fixture has to invent them tests the fixture.</p>
+	 *
+	 * <p>Refusals are half the API: a script author mistypes a component name far more often than they
+	 * get it right, and {@code null} would have them hunting for "cannot call method of null" in a
+	 * panel that never appears.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkParseComponent(Context cx, Scriptable scope) {
+		int failures = 0;
+		final ScriptRenderContext ctx = ScriptRenderContext.dryRun(136, 76, 1F);
+		/* The script side of the check: the context is handed to the scope the way the engine hands it
+		   to a preset's render(), so every call below is resolved through Rhino and the sandbox. */
+		ScriptableObject.putProperty(scope, "PROBE_CTX", ctx);
+
+		final int before = ctx.recordedCalls().size();
+
+		/* A clock, parsed and drawn exactly as the guide's example writes it. */
+		final Object type = evaluate(cx, scope,
+				"var c = PROBE_CTX.parseComponent('{\"component\":\"clock\",\"x\":4,\"y\":2,\"width\":40,\"height\":10,\"format\":\"HH:mm\"}');"
+						+ " String(c.type());");
+		if ("clock".equals(String.valueOf(type))) {
+			System.out.println("OK   ctx.parseComponent() returns a clock component");
+		} else {
+			System.out.println("FAIL ctx.parseComponent() returned " + type + " instead of a clock component");
+			failures++;
+		}
+
+		final Object box = evaluate(cx, scope, "[c.x(), c.y(), c.width(), c.height()].join(\",\")");
+		if ("4,2,40,10".equals(String.valueOf(box))) {
+			System.out.println("OK   the component reports the rectangle it was declared with: " + box);
+		} else {
+			System.out.println("FAIL the component reports " + box + " instead of 4,2,40,10");
+			failures++;
+		}
+
+		/* The JSON path's own guard, asked from the script. No world here, so a clock is not drawn --
+		   which is the same answer a components-array preset would get on a panel with no data. */
+		final Object canRender = evaluate(cx, scope, "c.canRender()");
+		if (Boolean.FALSE.equals(canRender)) {
+			System.out.println("OK   canRender() applies the component's own rule (false without a world)");
+		} else {
+			System.out.println("FAIL canRender() returned " + canRender + " for a clock with no world");
+			failures++;
+		}
+
+		evaluate(cx, scope, "c.render(PROBE_CTX);");
+		if (ctx.recordedCalls().size() == before + 1
+				&& ctx.recordedCalls().get(before).startsWith("Component(type=clock")) {
+			System.out.println("OK   component.render(ctx) reaches the frame: " + ctx.recordedCalls().get(before));
+		} else {
+			System.out.println("FAIL component.render(ctx) recorded " + ctx.recordedCalls().size()
+					+ " calls (expected " + (before + 1) + ")");
+			failures++;
+		}
+
+		/* The spelling a script author reaches for next, and the one v2's own draw() takes: an
+		   Object. Both must land in the same place. */
+		evaluate(cx, scope, "PROBE_CTX.draw(c);");
+		if (ctx.recordedCalls().size() == before + 2) {
+			System.out.println("OK   ctx.draw(component) draws it too");
+		} else {
+			System.out.println("FAIL ctx.draw(component) recorded " + ctx.recordedCalls().size()
+					+ " calls (expected " + (before + 2) + ")");
+			failures++;
+		}
+
+		/* A second, unrelated type, so the registry is what is being exercised and not one hard-coded
+		   branch. custom_text draws without any panel data at all. */
+		final Object textType = evaluate(cx, scope,
+				"String(PROBE_CTX.parseComponent('{\"component\":\"custom_text\",\"text\":\"Hello\",\"x\":0,\"y\":0,\"width\":30,\"height\":8}').type())");
+		if ("custom_text".equals(String.valueOf(textType))) {
+			System.out.println("OK   every registered type is reachable, not just the one: custom_text parses");
+		} else {
+			System.out.println("FAIL custom_text parsed as " + textType);
+			failures++;
+		}
+
+		/* And the refusals, which must name the problem. */
+		failures += expectRefused(cx, scope, "PROBE_CTX.parseComponent('this is not json')", "malformed JSON");
+		failures += expectRefused(cx, scope, "PROBE_CTX.parseComponent('[1,2,3]')", "a JSON array");
+		failures += expectRefused(cx, scope, "PROBE_CTX.parseComponent('{\"x\":1}')", "no component key");
+		failures += expectRefused(cx, scope,
+				"PROBE_CTX.parseComponent('{\"component\":\"there_is_no_such_thing\",\"x\":0,\"y\":0,\"width\":1,\"height\":1}')",
+				"an unknown component name");
+		failures += expectRefused(cx, scope, "PROBE_CTX.parseComponent('')", "an empty string");
+
+		/* The registry's own list has to be in the message, or the author is told "unknown" and left
+		   to guess the spelling. */
+		try {
+			cx.evaluateString(scope, "PROBE_CTX.parseComponent('{\"component\":\"nope\"}')", "probe", 1, null);
+		} catch (Exception expected) {
+			final String message = String.valueOf(expected.getMessage());
+			if (message.contains("arrival_eta") && message.contains("clock")) {
+				System.out.println("OK   the unknown-component message lists the known types");
+			} else {
+				System.out.println("FAIL the unknown-component message does not list the known types: " + message);
+				failures++;
+			}
+		}
+		return failures;
+	}
+
+	/**
+	 * Asserts that an expression throws, and says which refusal it was.
+	 *
+	 * <p>Rhino wraps a Java exception, so the message is searched rather than the type compared —
+	 * what matters is that the author gets told what was wrong with the declaration.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int expectRefused(Context cx, Scriptable scope, String expression, String what) {
+		try {
+			final Object value = cx.evaluateString(scope, expression, "probe", 1, null);
+			System.out.println("FAIL ctx.parseComponent() accepted " + what + " and returned " + value);
+			return 1;
+		} catch (Exception expected) {
+			final String message = String.valueOf(expected.getMessage());
+			if (message.contains("parseComponent")) {
+				System.out.println("OK   refuses " + what);
+				return 0;
+			}
+			System.out.println("FAIL " + what + " was refused without naming the call: " + message);
+			return 1;
+		}
+	}
+
+	/** Evaluates an expression in the scope and returns its value. */
+	private static Object evaluate(Context cx, Scriptable scope, String expression) {
+		return cx.evaluateString(scope, expression, "probe", 1, null);
+	}
 
 	/**
 	 * Pins the one part of the arrivals API that a preset can see and this port got wrong.
@@ -338,6 +555,11 @@ public final class ScriptApiCheck {
 	/**
 	 * Replaces the engine's {@code include} with one that reads ordinary files, so a script's
 	 * dependencies can be resolved outside the game.
+	 *
+	 * <p>The path rules are the engine's own, not a relaxed version of them: a preset that reaches
+	 * out of its resource root is refused here exactly as it would be in game, and the file is not
+	 * opened. {@link ScriptPathCheck} is where that is asserted; this keeps a real pack from
+	 * quietly succeeding at something the game would refuse.</p>
 	 */
 	private static void installFileInclude(final Context cx, final Scriptable scope) {
 		ScriptableObject.putProperty(scope, "include", new BaseFunction() {
@@ -347,12 +569,27 @@ public final class ScriptApiCheck {
 					return Undefined.instance;
 				}
 				final String reference = Context.toString(args[0]);
+				try {
+					ScriptPaths.checkReference(reference);
+				} catch (ScriptPaths.RejectedPathException refused) {
+					ScriptPaths.report("include()", refused);
+					return Undefined.instance;
+				}
 				final int colon = reference.indexOf(':');
 				final String namespace = colon < 0 ? "minecraft" : reference.substring(0, colon);
 				final String path = colon < 0 ? reference : reference.substring(colon + 1);
 
 				for (Path root : RESOURCE_ROOTS) {
-					final Path candidate = root.resolve("assets").resolve(namespace).resolve(path);
+					final Path candidate;
+					try {
+						/* Resolved under assets/<namespace>/ and checked against it, so a ".."
+						   that survived the reference rules cannot leave the root either. */
+						candidate = ScriptPaths.resolveWithin(
+								root.resolve("assets").resolve(namespace), path.split("/"));
+					} catch (Exception refused) {
+						System.out.println("     include refused (outside " + root + "): " + reference);
+						continue;
+					}
 					if (Files.isRegularFile(candidate)) {
 						try {
 							final String text = new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8);

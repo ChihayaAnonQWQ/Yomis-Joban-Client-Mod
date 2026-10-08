@@ -198,9 +198,12 @@ function dispose(ctx, state, pids) { }   // 面板消失时调用
 |---|---|
 | `Text` / `Texture` / `Rectangle` | 三条绘制构建链，见 §4.3 |
 | `Resources.id("namespace:path")` | 引用资源 |
-| `include(Resources.id("...:....js"))` | 把另一份脚本并入当前作用域（JCM 2.x 的依赖写法） |
+| `Resources.readBufferedImage(id)` | 读一张资源包图片为 ARGB `BufferedImage`（v2 同名方法，画布贴图用；见 §4.9） |
+| `include(Resources.id("...:....js"))` | 把另一份脚本并入当前作用域（JCM 2.x 的依赖写法），受 §4.7 的路径防护约束 |
 | `TextUtil` | `cycleString(text[, ticks])`、`getCjkParts` / `getNonCjkParts` / `getExtraParts` / `getNonExtraParts` / `getNonCjkAndExtraParts`、`isCjk` |
 | `MinecraftClient` | `worldDayTime()`、`worldIsRaining()`、`worldIsThundering()` |
+| `MTRClientData` | **MTR 自己的客户端数据** `mtr.client.ClientData`：`STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`（与 `MinecraftClient` 不是同一个对象，见 §4.10） |
+| `GraphicsTexture(w, h)` | 运行时画布：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`fillRect` / `drawText` / `drawTexture` / `clear`（见 §4.9） |
 | `RateLimit(seconds)` | 新建一个限流器：`shouldUpdate()` / `resetCoolDown()` |
 | `print(...)` | 输出到游戏日志（`[PIDS script]` 前缀） |
 
@@ -376,6 +379,166 @@ deny 规则只在 allow 规则命中之后才查，所以 `java.lang.*` 可以�
 | `scriptDebugMode` | `false` | 绘制脚本调试浮层 |
 | `scriptRestrictionsDisabled` | `false` | 关闭类访问限制（会先弹警告界面） |
 
+### 4.7 脚本的文件访问与路径防护（`feat/jcm-pids-components` 后续补充，非修 bug）
+
+**这一节补的是 v2 的能力，不是修本分支的缺陷**：本分支此前根本没有给脚本任何文件读取入口，
+所以也没有逃逸问题；补上 `GraphicsTexture` / `Resources.readBufferedImage` 之后就有了，
+因此连同 v2 的防护一起补。
+
+#### 核实结果：脚本能触发的读取有三处，全部经过防护
+
+| 入口 | 代码位置 | 读取方式 |
+|---|---|---|
+| `include("ns:path.js")` | `ScriptEngine.evaluateResource` | Minecraft 资源管理器（`assets/<ns>/<path>`） |
+| `Texture.create().texture("ns:path.png")` | `ScriptDrawCalls.Texture.texture` → `ScriptTextures.resolve` | 同上 |
+| `Resources.readBufferedImage(id)` / `GraphicsTexture.drawTexture(id, ...)` | `ScriptTextures.readImage` | 同上 |
+| 预设 JSON 的 `scriptFiles` | 与 `include()` 同一条路 | 同上 |
+
+`ScriptNetwork`（`Networking` / `BackgroundWorker`）只走 HTTP，不碰文件系统，**已核实**。
+
+#### 为什么资源位置也需要防护
+
+一个脚本写的是 `jsblock:../../../../../../x`。`ResourceLocation` 的路径字符集包含 `.` 与 `/`，
+所以这个引用**是合法的**，能一路构造出来。对**目录形式**的资源包（`resourcepacks/` 里的包，
+以及开发环境里的每一个包），Minecraft 是在文件系统层面解析它的——那里 `..` 就是上一级目录。
+于是一个预设可以读走游戏进程能读的任何文件，而现象是「这个包看起来工作正常」。
+
+#### 拒绝规则与失败方式
+
+`ScriptPaths`（`common/src/main/java/com/jsblock/script/ScriptPaths.java`）拒绝：
+
+| 形态 | 例子 |
+|---|---|
+| `..` 作为一个路径段（任意位置、任意层数） | `jsblock:../../x`、`jsblock:a/../../x`、`jsblock:scripts/..` |
+| 前导 `/`（绝对路径） | `jsblock:/etc/passwd` |
+| 反斜杠（Windows 分隔符，也是盘符的写法） | `jsblock:..\..\x`、`C:\Windows\win.ini` |
+| 盘符 | `C:/Windows/win.ini`（由前导 `/` 规则接住，报错文案会点名） |
+| UNC | `\\server\share\x` |
+| 空路径 | `jsblock:`、`""` |
+
+拒绝时：**一条控制台 error**（点名 API、引用与原因，同一引用只报一次）+ **一条聊天栏提示**
+（走 `ScriptErrorNotifier`，与脚本异常同一条投递路径）。`include()` 返回而不加载、
+贴图退回原版的 missing-texture 占位，**脚本继续跑，异常不穿透渲染器**。
+
+物理路径那一半是 v2 `FilesUtil.resolvePathSafe` / `ensurePathNotEscaped` 的**逐行移植**
+（`ScriptPaths.resolveWithin` / `ensureWithin`，同样是逐级向上找根、找不到就抛
+`Path must be within the "%s" directory!`）。游戏内的读取走资源管理器、拿的是
+`ResourceLocation` 而不是 `Path`，所以这一半目前由无头检查在**真实目录树**上验证：
+`ScriptApiCheck` 的文件版 `include` 与 `ScriptPathCheck` 都用它。
+
+### 4.8 `ctx.parseComponent(jsonString)`：脚本用声明式组件（本次新增）
+
+JCM 2.x 进入组件体系的**唯一**入口就是 `PIDSScriptContext.parseComponent(String)`：
+
+```java
+// javap -p -c  com.lx862.jcm.mod.scripting.jcm.pids.PIDSScriptContext
+public PIDSComponent parseComponent(java.lang.String);
+    invokestatic  JsonParser.parseString:(Ljava/lang/String;)Lcom/google/gson/JsonElement;
+    invokevirtual JsonElement.getAsJsonObject:()Lcom/google/gson/JsonObject;
+    invokestatic  PIDSComponent.parse:(Lcom/google/gson/JsonObject;)Lcom/google/gson/.../PIDSComponent;
+```
+
+本分支组件体系齐全（11 个可声明键），缺的正是这个入口。现在：
+
+```js
+const clock = ctx.parseComponent('{"component":"clock","x":4,"y":2,"width":40,"height":10,"format":"HH:mm"}');
+if (clock.canRender()) {
+    clock.render(ctx);          // 或 ctx.draw(clock)
+}
+```
+
+| 脚本侧 | JCM 2.x 对应物 | 说明 |
+|---|---|---|
+| `ctx.parseComponent(json)` | 同名同参数 | `component` / `x` / `y` / `width` / `height` 加该组件自己的键，与预设 JSON 的 `components` 数组**逐字相同** |
+| `component.render(ctx)` | `render(PoseStack, MultiBufferSource, Direction, PIDSContext)` | 参数表不同，且不得不不同，见下 |
+| `component.canRender()` | `canRender(PIDSContext)` | 用**本帧**的面板数据判定（与组件树走的同一条规则） |
+| `component.x()/y()/width()/height()` | 四个 `protected` 字段 | v2 里脚本看不到；这里可读，便于组件之间互相定位 |
+| `component.type()` | —— | 解析时用的 `component` 名，本分支新增，用于诊断 |
+| `ctx.draw(component)` | —— | v2 的 `draw()` 只收 `PIDSDrawCall`，收到组件会抛 `1st parameter is not a DrawCall!`；这里两种写法等价 |
+
+**为什么是 `render(ctx)` 而不是照抄 v2 的参数表**：`PoseStack`、`MultiBufferSource`、
+`Direction`、`PIDSContext` 四样都**不属于脚本**，属于引擎正在画的那一帧——脚本既拿不到也造不出。
+所以引擎把这四样绑进上下文，脚本只交出 `ctx`。除此之外没有改动：同一个组件、同一次解析、
+同一条 `canRender` 规则。
+
+**非法输入按现有脚本错误风格报错，不崩**：JSON 坏了、给的是数组、缺 `component` 键、组件名不认识
+（报错文案会列出全部已知类型），一律抛 `IllegalArgumentException`，由 `Program.invokeInternal`
+捕获——写一次日志、给玩家一条聊天栏提示、面板退回预设背景，与其它脚本异常同一条路径。
+v2 的 `PIDSComponent.parse` 对未知类型返回 `null`（对「其余组件必须继续加载」的 JSON 预设是对的），
+但脚本拿到 `null` 只会在之后报 "cannot call method render of null"，所以这里显式抛。
+
+**与像素化面板共存**：`PIDSPixelatedPanel` 的离屏 pass 也拿到了同一份面板数据与
+`PIDSGraphics`（顶点与文本都走 `OffscreenSource`，与脚本自己的绘制同一条路），
+重试那一遍同样设置——否则用了 `parseComponent` 的预设在第一次抛异常后就再也不会被像素化。
+**这一条只做了构建期验证与代码路径推演，没有实机截图证据**（无头环境没有 GL 上下文），
+见 §7.10。
+
+### 4.9 运行时画布 `GraphicsTexture`（本次新增）
+
+对应 `com.lx862.mtrscripting.util.GraphicsTexture`：**同名**、同构造器
+`new GraphicsTexture(width, height)`、同公共字段 `identifier` / `bufferedImage` / `graphics` /
+`width` / `height`、同 `upload()` / `close()`（`Closeable`）。v2 的这个类只提供 Java2D 画布，
+本分支补上了给 PIDS 用的几个helper（`clear` / `fillRect` / `drawText` / `measureText` /
+`drawTexture`），因为「往画布上贴一张现有贴图」在 v2 里要绕 `Resources.readBufferedImage` 自己来。
+
+```js
+const canvas = new GraphicsTexture(128, 32);
+canvas.fillRect(0, 0, 128, 32, 0x101010);
+canvas.drawText("06:00", 4, 4, 0xFC9700, 20);
+canvas.drawTexture("jsblock:textures/block/pids/plat_circle.png", 100, 4, 24, 24);
+canvas.upload();
+Texture.create("board").texture(canvas.identifier).pos(0, 0).size(128, 32).draw(ctx);
+```
+
+| 要点 | 做法 | 为什么 |
+|---|---|---|
+| 只在真用到时才分配 | Java2D 图像在构造器里建，**GL 纹理在第一次 `upload()` 才建**（v2 在构造器里就建 `DynamicTexture`） | 建了不用的画布不占纹理名；也让「创建→画→释放」能在**没有游戏**的情况下跑通，无头检查因此覆盖得到 |
+| 用完能释放 | `close()` 释放纹理（`TextureManager.release` → `DynamicTexture.close()` → `NativeImage.close()`，原生内存）并 dispose `Graphics2D`；`ScriptEngine.reset()`（资源重载）再兜一次 | 原生内存 GC 看不见；脚本的 `dispose()` 里应自己 `close()`，忘了也不会留到会话结束 |
+| 不得每帧泄漏 | 同时最多 `MAX_LIVE = 64` 张未释放的画布，第 65 张抛错并点名 `close()` | JCM 2.x 既无上限也无清理，每帧建一张就是一帧漏一个纹理，直到显存耗尽；这里把它变成一次可见的报错 |
+| 失败降级不崩 | 没有客户端 / 没有 GL 上下文 / 驱动拒绝：**报一次**警告、标记失效、后续 upload 直接返回；图像与脚本都还在，贴图退回 missing-texture 占位 | 与 `Program` 的失败上报风格一致：同类失败只报一次，面板不因画布失败而消失 |
+| 颜色取值 | ARGB，`0xRRGGBB` 视为不透明（与 `.color()` 同一条简写规则），`0` 视为全透明 | 与脚本绘制链保持一致，同时留出真正的透明 |
+| 参数类型 | 颜色是 `long` 不是 `int` | JS 的数字是 double，`0xFF102030` 超出 `int` 范围，Rhino 会直接抛 `Cannot convert ... to java.lang.Integer`——ARGB 字面量高位恒为 1，用 `int` 等于这套写法不可用 |
+
+坐标是**画布自己的像素**，原点左上、y 向下，与脚本其余部分一致；与像素化的关系就是
+「画布里画的贴图当普通贴图用」——`Texture` 拿到的是 `canvas.identifier`，剩下的事与任何贴图相同，
+**不做离屏嵌套**。
+
+### 4.10 全局对象 `MTRClientData`（本次新增，并更正一处分析结论）
+
+`NeoJCM-分析报告.md` 的结论里写着「把 `MinecraftClient` 全局加一个 `MTRClientData` 别名就能接住
+照 v2 文档写的包」。**字节码不支持这句话**：
+
+```
+// javap -p -c com.lx862.jcm.mod.scripting.jcm.JCMScripting
+  ldc  #93   // String MTRClientData
+  ldc  #97   // class mtr/client/ClientData          <-- 不是 MinecraftClientUtil
+
+// javap -p -c com.lx862.mtrscripting.core.ParsedScript
+  ldc  #144  // String MinecraftClient
+  ldc  #146  // class com/lx862/mtrscripting/util/MinecraftClientUtil
+```
+
+即 v2 的 `MinecraftClient`（世界状态工具）与 `MTRClientData`（**MTR 自己的客户端数据**）
+是两个不同的类。把它做成前者的别名，恰好会让 `MTRClientData.STATIONS` / `.PLATFORMS` /
+`.SCHEDULES_FOR_PLATFORM` 这类**唯一会用到它的读法**得到 `undefined`——包照跑、面板空白。
+
+所以这里接的是 `mtr.client.ClientData`（MTR 3.6.3 同名同类，内置渲染器读的就是它）：
+
+```js
+const stations = MTRClientData.STATIONS;      // 站台 -> 车站
+const arrivals = MTRClientData.SCHEDULES_FOR_PLATFORM;
+const platforms = MTRClientData.PLATFORMS;
+```
+
+`MinecraftClient` 保持原样（`worldDayTime()` / `worldIsRaining()` / …）。
+
+**沙箱连带改动**：Rhino **连显式塞进作用域的类也要过白名单**——第一次接上时
+`ScriptEngine.newScope()` 直接抛
+`Access to Java class "mtr.client.ClientData" is prohibited`，全部脚本检查一次失败（这正是
+`ScriptApiCheck` 里那几条断言的用处）。JCM 2.x 放行的是整个 `mtr.*`；这里只放行这个全局
+实际能交出去的 5 个类：`mtr.client.ClientData`、`mtr.client.ClientCache`、`mtr.data.Station`、
+`mtr.data.Platform`、`mtr.data.Route`、`mtr.data.ScheduleEntry`。
+
 ---
 
 ## 5. 顺带修复的三个上游缺陷
@@ -456,14 +619,16 @@ Modrinth / Fabric meta / Forge promotions。这样配置阶段不需要网络。
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
 ```
 
-它会：构建 → 导出 `:common` 运行时 classpath → 用 `javac` 编译 `tools/checks/` 下的两个
-检查 → 运行它们。任何一步失败都以非零码退出。
+它会：构建 → 导出 `:common` 运行时 classpath → 用 `javac` 编译 `tools/checks/` 下的检查 →
+运行它们。任何一步失败都以非零码退出。
 
 | 检查 | 覆盖内容 |
 |---|---|
 | `PIDSPresetCheck` | 三个附带布局预设的解析（逐条打印组件树）、未知组件的降级、**显示行映射**语义（4 组用例比对内置渲染器的推进规则） |
 | `ScriptShutterCheck` | 脚本沙箱。24 条白名单/黑名单断言，再用**真实引擎作用域**去够四个被禁类（见 §7.7） |
-| `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画 |
+| `ScriptPathCheck` | 脚本的**文件**可达范围：资源根**之外**放一个诱饵文件，脚本用 `include("jsblock:../../../secret.js")` 去读，断言的是「它设的那个全局不存在」而不是「防护抛了异常」；另有规则表、真实目录树上的物理防护、以及 `Texture.texture()` 的同一拒绝 |
+| `ScriptCanvasCheck` | 运行时画布：画上去的像素**读回来比对**、无客户端时 `upload()` 降级不抛、`close()` 释放、第 65 张未释放画布被拒、资源重载释放遗留画布 |
+| `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画。另外断言 `MTRClientData` 指向 `mtr.client.ClientData` 且可读，以及脚本里的 `ctx.parseComponent` 全路径（clock 组件、矩形、`canRender`、`render`、`ctx.draw(component)`、五种拒绝） |
 
 沙箱检查排在脚本检查**之前**：白名单若写错，下面每个脚本要么被拦住、要么毫无防护，
 先看到沙箱那一块就能直接定位，不必从 16 个脚本失败里反推。
@@ -483,6 +648,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 ```
 
 ### 7.3 最近一次验证结果
+
+> **2.3 那一轮（本次）**：`PIDSPresetCheck` / `PixelationCheck` / `ScriptShutterCheck` /
+> `ScriptPathCheck` / `ScriptCanvasCheck` / `ScriptApiCheck`（4 个班次数）全部通过，
+> 汇总行 `RESULT: ALL CHECKS PASSED`。下表是 2.2 那一轮的记录，保留作对照。
 
 | 项目 | 状态 | 证据 |
 |---|---|---|
@@ -1268,10 +1437,25 @@ cx.evaluateString(scope, "java.lang.System", ...)   // 期望抛异常，结果�
 结论是**沙箱在使用点确实有效**，此前那次失败是断言写错，不是白名单漏了。这条经验也适用于
 `ScriptApiCheck`：它之所以有价值，是因为它**真的调用** API，而不是检查 API 存在。
 
+### 7.10 2.3 这四项里，哪些只是"推演过"
+
+无头检查能证明的都证明了，以下是**没有**被证明的部分，逐条写明依据与验证方式，避免下一位接手者
+把推断当实测：
+
+| 项 | 现状 | 依据 / 怎么验 |
+|---|---|---|
+| `GraphicsTexture.upload()` 的**真实 GL 路径**（建 `DynamicTexture`、逐像素拷贝、`texture.upload()`） | ❌ 未实测 | 无头 JVM 没有 GL 上下文，检查只跑到降级分支（"there is no client running"）。API 形状（`DynamicTexture(NativeImage)`、`getPixels()`、`setPixelRGBA`、`upload()`、`TextureManager.register/release`、`RenderSystem.isOnRenderThread`）已对 1.20.1 的命名 jar `javap` 逐个确认存在。实机验证方式：脚本里 `upload()` 后把 `canvas.identifier` 贴到面板上，看画布内容是否出现、红蓝是否互换 |
+| ABGR 像素转换（`abgr()`） | ⚠️ 逐行照抄 v2 字节码，未实测 | 若实机发现画布颜色红蓝对调，就是这里 |
+| `close()` → `TextureManager.release()` 的释放 | ⚠️ 代码路径已确认，未实测 | 释放链：`release` → `AbstractTexture.close()` → `DynamicTexture.close()` → `NativeImage.close()`（原生内存）。可实机反复重载资源包并用 F3 观察内存 |
+| 直接路径上的 `ctx.parseComponent` 绘制（`RenderPIDSBase.renderScripted` 里的 `PIDSGraphics`） | ⚠️ 编译 + 代码路径推演，无截图 | 与组件数组路径共用同一份 `PIDSContext`/`PIDSGraphics` 构造（`renderLayout` 已验证过的那套）。实机验证方式：脚本里 `ctx.parseComponent('{"component":"clock",...}').render(ctx)`，看时钟是否出现在面板上 |
+| **像素化（`PIDSPixelatedPanel`）下的 `ctx.parseComponent`** | ⚠️ 同上，且这一条风险最高 | 离屏 pass 用的是同一套 `OffscreenSource`（文本走它正是 `PIDSPixelatedPanel` 存在的理由）；重试那一遍也设置了，否则用过 `parseComponent` 的预设抛一次异常后就再也不会被像素化。**没有实机截图**；若出问题，`drawPixelatedPanel` 的"全有或全无"设计会让面板退回非像素化绘制，不会画错 |
+| `MTRClientData` 里**数据的内容** | ⚠️ 只验证了字段可读与类型 | 无头环境没有 MTR 数据，`STATIONS`/`PLATFORMS` 是空表；检查断言的是「解析到 `mtr.client.ClientData`」与「三个字段读得到」。实机验证方式：脚本里 `MTRClientData.STATIONS.size()` |
+| `ScriptPaths` 对**游戏内资源管理器**的拦截效果 | ⚠️ 拦截点已断言，逃逸本身只在真实目录树上演示 | 无头环境没有资源管理器；`ScriptPathCheck` 用真实目录树证明「不拦就会读到根之外的文件」（负向对照）与「拦了就抛」。游戏内是同一个引用在解析前被拒 |
+| README 里那份"脚本 API 覆盖率"表（机械 `javap` 比对） | ⏳ 未重跑 | 本轮新增了 `ctx.parseComponent` / `MTRClientData` / `GraphicsTexture` / `Resources.readBufferedImage`，表已手工同步，但生成脚本没再跑一遍 |
+
 ---
 
 ## 8. 与 JCM 2.x 的 API 对照（供后续移植参考）
-
 | JCM 2.x (MTR 4) | 本分支 (MTR 3) |
 |---|---|
 | `org.mtr.core.operation.ArrivalResponse` | `mtr.data.ScheduleEntry`（`arrivalMillis` / `trainCars` / `routeId` / `currentStationIndex`） |
@@ -1286,6 +1470,11 @@ cx.evaluateString(scope, "java.lang.System", ...)   // 期望抛异常，结果�
 | `ScriptPIDSPreset` + `mtrscripting` + 内嵌 Rhino | `ScriptEngine` + `ScriptDrawCalls` + Rhino 1.7.15 依赖 |
 | `PIDSWrapper` / `TextWrapper` / `TextureWrapper` / `RectangleWrapper` | `PIDSWrapper` / `ScriptDrawCalls.Text` / `.Texture` / `.Rectangle` |
 | `ScriptRenderManager` / `ScriptSoundManager` | `ScriptRenderContext`（音效未移植） |
+| `ctx.parseComponent(String)` → `PIDSComponent` | `ScriptRenderContext.parseComponent(String)` → `ScriptComponent`（参数表按本分支的渲染管线改写，见 §4.8） |
+| `MTRClassShutter` 放行 `mtr.*` | `ScriptClassShutter` 只放行 `MTRClientData` 实际交出的 5 个类 |
+| `FilesUtil`（`resolvePathSafe` / `ensurePathNotEscaped`） | `ScriptPaths`（`resolveWithin` / `ensureWithin` 为逐行移植；本分支没有 `Files` 全局） |
+| `GraphicsTexture`（`DynamicTexture` 在构造器里建） | `GraphicsTexture`（同名同 API；GL 纹理改到第一次 `upload()` 才建，并加了上限与重载释放） |
+| `Resources.readBufferedImage(Identifier)` | `Resources.readBufferedImage(Object)`（接受 `Resources.id(...)` 或字符串） |
 
 ---
 

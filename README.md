@@ -184,8 +184,11 @@ inherited members included), and the two are diffed.
 |---|---|
 | Drawing | `Text` `Texture` `Rectangle` `Vector3f` `Matrices` |
 | Timing & state | `Timing` `StateTracker` `CycleTracker` `RateLimit` |
-| Resources | `Resources` (incl. `getMTRVersion`, `getAddonVersion`) `TextUtil` |
+| Resources | `Resources` (incl. `getMTRVersion`, `getAddonVersion`, `readBufferedImage`) `TextUtil` |
 | World | `MinecraftClient` `MinecraftClient.localPlayer()` `PlayerEntity` |
+| MTR client data | `MTRClientData` (= `mtr.client.ClientData`: `STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`. **Not** a second name for `MinecraftClient` — see below) |
+| Declarative components | `ctx.parseComponent(json)` -> `render(ctx)` / `canRender()` / `x()` / `y()` / `width()` / `height()` / `type()`, or `ctx.draw(component)` |
+| Runtime canvas | `GraphicsTexture(w, h)`: `graphics` / `bufferedImage` / `identifier`, `upload()`, `close()`, `clear` / `fillRect` / `drawText` / `measureText` / `drawTexture` |
 | Slow work | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
 | Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | Misc | `console` `print` `include` `SCRIPT_INPUT` |
@@ -199,7 +202,7 @@ they are listed here so a pack author can tell at a glance rather than by experi
 
 | Class | Missing |
 |---|---|
-| `Resources` | `read` `readString` `readBufferedImage` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
+| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
 | `Station` | `getZone1/2/3`, `getMinX/Y/Z`, `getMaxX/Y/Z`, `getExits`, `inArea`, `isTransportMode`, `getCenter` -- needs the station's geometry, which the wrapper does not carry |
 | `Stop` | `distance` `dwellTime` `dwellTimeMillis` `platform` `destinationName` `destinationStation` `customDestination` and 6 more |
 | `PlayerEntity` | `activeItem` `mainHandItem` `offHandItem` `yaw` `pitch` `bodyYaw` `isSneaking` `isSprinting` `isSwimming` `isHoldingItem` `playerName` |
@@ -225,11 +228,81 @@ they are listed here so a pack author can tell at a glance rather than by experi
 *Out of scope: a different script type (18 classes, ~162 entries).* `VehicleWrapper`,
 `VehicleScriptContext`, `VehicleExtraData`, `EyecandyWrapper`, `EyecandyScriptContext`,
 `RenderManager`, `ModelManager`, `Model`, `RawModel`, `RawMeshBuilder`, `DynamicModelHolder`,
-`GraphicsTexture`, `QuadDrawCall`, `DisplayHelper`, `BlockUseEvent`, `EyecandyEvents`, `ModelData`,
+`QuadDrawCall`, `DisplayHelper`, `BlockUseEvent`, `EyecandyEvents`, `ModelData`,
 `Vehicle`. These belong to Vehicle Scripting and Eyecandy Scripting rather than to PIDS.
+(`GraphicsTexture` used to be listed here; it is implemented now, as the runtime canvas below.)
 
 If a pack needs one of these, the first four groups are the cheap ones -- a few lines each, and
 `Resources.read*` is the group most likely to matter, since it is how a pack loads its own files.
+
+### Scripting: declarative components and a runtime canvas
+
+Two JCM 2.x abilities this branch did not have, both wired up under v2's own names and parameter
+shapes.
+
+**Components from a script.** v2's only entry into its component system is
+`ctx.parseComponent(jsonString)`, and the declaration it takes is byte-for-byte what a preset's
+`components` array holds:
+
+```js
+function render(ctx, state, pids) {
+    Texture.create("Bg").texture("mypack:pids/board.png").size(pids.width, pids.height).draw(ctx);
+
+    // A clock at (4, 2), 40x10 -- the same declaration a JSON preset would carry.
+    const clock = ctx.parseComponent('{"component":"clock","x":4,"y":2,"width":40,"height":10,"format":"HH:mm"}');
+    if (clock.canRender()) {
+        clock.render(ctx);        // ctx.draw(clock) is equivalent
+    }
+
+    // An arrival row; `row` means the same display row it means in JSON.
+    const row = ctx.parseComponent('{"component":"arrival_destination","x":4,"y":14,"width":80,"height":12,"row":0}');
+    row.render(ctx);
+}
+```
+
+A component offers `render(ctx)`, `canRender()`, `x()` / `y()` / `width()` / `height()` and `type()`.
+A declaration that cannot be used — malformed JSON, an array, no `component` key, an unknown type —
+is refused with a message that lists the known types; the panel falls back to its preset background
+rather than going black.
+
+**A canvas the script draws into.** Then it is an ordinary texture:
+
+```js
+function create(ctx, state, pids) {
+    state.canvas = new GraphicsTexture(128, 32);          // allocated only when actually used
+    state.canvas.fillRect(0, 0, 128, 32, 0x101010);
+    state.canvas.drawText("06:00", 4, 4, 0xFC9700, 20);
+    state.canvas.drawTexture("jsblock:textures/block/pids/plat_circle.png", 100, 4, 24, 24);
+    state.canvas.upload();
+}
+
+function render(ctx, state, pids) {
+    Texture.create("Board").texture(state.canvas.identifier).pos(0, 0).size(128, 32).draw(ctx);
+}
+
+function dispose(ctx, state, pids) {
+    state.canvas.close();                                  // required: a texture is not collected
+}
+```
+
+Coordinates are the canvas's own pixels; colours are ARGB (`0xRRGGBB` means opaque, `0` means
+transparent). A script may hold 64 unreleased canvases before the next one is refused by name, and a
+resource reload releases whatever was left open. The canvas is an ordinary texture as far as the
+pixelation pass is concerned — nothing is nested offscreen.
+
+**`MTRClientData` and `MinecraftClient` are two different things.** In JCM 2.x `MTRClientData` is
+MTR's own client data (its bytecode reads `class mtr/client/ClientData`) while `MinecraftClient` is
+the world-state helper (`MinecraftClientUtil`). This branch wires them the same way:
+
+```js
+const station = MTRClientData.STATIONS.get(someId);   // stations, platforms, arrival lists
+const raining = MinecraftClient.worldIsRaining();     // world state
+```
+
+**A script cannot read outside its own resource pack.** `include()` and `Texture.texture(...)` both
+validate before anything is opened and refuse `..`, a leading `/`, a backslash and a drive letter —
+`include("jsblock:../../../../secret.js")` is refused with one console line and one chat line, and
+the script carries on. That guard came with the new read paths rather than after them.
 
 ### When a resource pack's PIDS does not work
 
