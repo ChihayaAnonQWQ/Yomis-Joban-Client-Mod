@@ -135,7 +135,7 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 | 声音 | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | 杂项 | `console` `print` `include` `SCRIPT_INPUT` |
 | 面板本身 | `pids.*`、`arrivals().*`、`arrival.*`、`pids.station()`、`route().getPlatforms()`、`ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
-| 本分支独有 | `arrival.routeType` 与 `arrival.isLightRailRoute`（MTR 3 的 `Route.routeType`：`NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`）。MTR 4 没有线路制式，而且**两个版本都没有快慢车**——所以预设想要「快慢车」是在要一份不存在的数据；要体现它，只能像那些包一样去匹配线路名里的关键字 |
+| 本分支独有 | `arrival.routeType` 与 `arrival.isLightRailRoute`（MTR 3 的 `Route.routeType`：`NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`）。MTR 4 没有线路制式，而**两个版本都没有「快慢车」这个标志位**——在意的包是把种别写进线路的**线路号**里再做关键字匹配（见 HKR 的 `getColorByKeyword`）。MTR 3 的线路号藏在界面文案为 **Has Route Number** 的那个勾选框后面，勾上它，那些颜色才会在这里出现 |
 
 **还缺的，按组列出。** 约 154 条，已知没有任何 PIDS 预设会调它们；列在这里是为了让写包的人一眼看清，
 而不是靠试。*（译注：分组标题中的英文类名与官方文档一致，便于对照。）*

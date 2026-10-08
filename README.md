@@ -147,7 +147,7 @@ inherited members included), and the two are diffed.
 | Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
 | Misc | `console` `print` `include` `SCRIPT_INPUT` |
 | The panel | `pids.*`, `arrivals().*`, `arrival.*`, `pids.station()`, `route().getPlatforms()`, `ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
-| Fork-only | `arrival.routeType` and `arrival.isLightRailRoute` (MTR 3's `Route.routeType`: `NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`). MTR 4 has no route type and **neither version has express versus local**, so a preset asking for 快慢车 is asking for data that does not exist — match a keyword in the route name instead, as the packs that care already do |
+| Fork-only | `arrival.routeType` and `arrival.isLightRailRoute` (MTR 3's `Route.routeType`: `NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`). MTR 4 has no route type, and **neither version has express versus local as a flag** — the packs that care put the service type in the route's **number** and keyword-match it (see HKR's `getColorByKeyword`). On MTR 3 a route's number is gated behind the checkbox MTR labels *Has Route Number*, so that checkbox is what makes those colours appear here |
 
 **Still missing, by group.** Roughly 154 entries, none of which a PIDS preset is known to call;
 they are listed here so a pack author can tell at a glance rather than by experiment.

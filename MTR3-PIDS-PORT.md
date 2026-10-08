@@ -1073,6 +1073,33 @@ Internal Exception: java.lang.IndexOutOfBoundsException:
 
 **16. Rhino 里从 Java 造出来的 JS 数组没有 prototype，`.map()` 会报一个毫不相干的错**
 
+
+**17. MTR 3 的「线路号」藏在轻轨开关后面 —— 所以 HKR 的快慢车配色其实是能用的**
+
+背景：`hkr_pids_default.js` 判断快慢车的方式是 `getColorByKeyword(train.routeNumber(), train.routeColor())`
+（第 192、195 行），把「区間快速 / 特急 / 急行 / 快速 / 各停」这些关键字映射成徽章底色；同一张表在
+`kamino_jp_pids.js`（Japanese_PIDS v1.5）里逐字出现，两处都喂的是 `routeNumber()`。我先前用
+`javap -public mtr.data.Route` 只看到 `lightRailRouteNumber`，就判定「MTR 3 没有普通线路号、这套配色
+在此失效」——**这个结论是错的**。
+
+证据链：
+
+| 来源 | 内容 |
+|---|---|
+| 界面文案 | `gui.mtr.is_light_rail_route = Has Route Number`、`gui.mtr.light_rail_route_number = Route Number` —— 那个勾选框的字面意思就是「有线路号」 |
+| 字段 | `Route.lightRailRouteNumber`，自由文本，由 `isLightRailRoute` 开关控制 |
+| 序列化 | `writePacket(FriendlyByteBuf)` 读它、`Route(FriendlyByteBuf)` 写它 → **会同步到客户端**；`toMessagePack` / `Route(Map)` / `Route(CompoundTag)` 也存；`setExtraData` / `update` 同 |
+| 副作用 | 全 jar 常量池里只有 9 个类引用 `isLightRailRoute`：`Route` 本身、`RenderPIDS`、`RenderTrains`、`EditRouteScreen`、五个 `*ServletHandler` —— **全是显示层**，不碰物理也不碰列车行为 |
+
+所以：**给线路勾上「Has Route Number」，在里面写「特急」「快速」「各停」之类，HKR 的徽章就会显示
+种别文字和对应底色**——不用改包，也不用改模组。截图里显示「6卡」正是因为那些线路没勾这个框：号码是空串，
+`hasRoute = false`，于是回落到 `carCount + "卡"`。逻辑自洽。
+
+**这一条的教训值得单独记**：字段名和它在界面上的名字可能毫无关系。`lightRailRouteNumber` 看上去像
+「轻轨专用号码」，而 MTR 自己在界面上管它叫 **Route Number**——查「某个能力存不存在」，要同时看
+**字段、序列化路径、界面文案**三处，只查字段会得出反向结论（我这次就反了，还把错误结论写进了发布说明
+并据此建议用户改包）。
+
 **World PIDS-Pack**（65 个预设）里 **33 个脚本**都写同一句：
 
 ```js
