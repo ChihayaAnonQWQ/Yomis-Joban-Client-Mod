@@ -68,8 +68,9 @@ the defects fixed below came from: the script pipeline drawing several resource 
 once, a preset writing its own state to disk through `Files`, the projector and its aim lines, and the
 PIDS config screens. `MTR3-PIDS-PORT.md` sections 7.8 and 7.9 are the logs from those runs.
 
-**The Fabric side is built, not yet run.** `gradle build` compiles it, the merge puts it in the same
-jar, and the artifact is there:
+**The Fabric side has been launched in a Fabric instance as well.** It starts and works normally in a
+Fabric 1.20.1 instance (a maintainer's run). `gradle build` compiles it, the merge puts it in the same
+jar, and the artifacts are:
 
 | Path | What it is |
 |---|---|
@@ -77,8 +78,9 @@ jar, and the artifact is there:
 | `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | the Forge jar, the one the merge consumes |
 | `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | the merged jar: this is the one to install |
 
-Nobody has launched that jar in a Fabric instance yet, so read the platform table above as "this is
-what the manifests and the bytecode ask for", not as "this has been seen working on Fabric".
+The Fabric run was a launch-and-use check, not the item-by-item pass behind the Forge list above: that
+feature list stays on the Forge side. Read the platform table above as "this is what the manifests and
+the bytecode ask for" -- which is what the Fabric 1.20.1 instance was set up with.
 
 ## Installation
 

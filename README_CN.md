@@ -66,7 +66,8 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 预设通过 `Files` 把状态写进磁盘、投影仪与它的瞄准线、以及几个 PIDS 配置界面。
 日志见 `MTR3-PIDS-PORT.md` 的 §7.8 与 §7.9。
 
-**Fabric 侧目前只到「能构建」这一步。** `gradle build` 能编出它，合并步骤把它放进同一颗 jar，产物确实在：
+**Fabric 侧现在也在 Fabric 实例里启动过了。** 在 Fabric 1.20.1 实例上可以启动、正常使用（维护者实测）。
+`gradle build` 能编出它，合并步骤把它放进同一颗 jar，产物在：
 
 | 路径 | 是什么 |
 |---|---|
@@ -74,8 +75,8 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 | `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | Forge 侧，合并步骤的输入 |
 | `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | 合并包，要装的是这一个 |
 
-但这颗 jar **还没有人在 Fabric 实例里启动过**，所以上面那张平台表的读法是「清单和字节码要求这样」，
-而不是「已经在 Fabric 上看着它跑起来了」。
+这次 Fabric 侧是「能启动、能正常用」这一级的确认，不是 Forge 那份逐项过一遍的清单 —— 逐项验证过的仍然
+只有 Forge 侧。上面那张平台表的读法仍然是「清单和字节码要求这样」，Fabric 1.20.1 实例就是照它装起来的。
 
 ## 安装
 
