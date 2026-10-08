@@ -147,15 +147,18 @@ public final class ScriptShutterCheck {
 
 			// Installing twice on one context must be a handled no-op.
 			//
-			// This is the case that reached players: ScriptEngine.programFor() compiles inside
-			// one entered context and then builds the Program, whose constructor calls
-			// create() -- which enters the same context again and installs the shutter a second
-			// time. Rhino refuses that with a SecurityException, the install used to catch only
-			// IllegalStateException, and the result was every scripted preset reporting
-			// "threw in create(): Cannot overwrite existing ClassShutter object" in game.
+			// This is the case that reached players: Rhino's Context.enter() is per-thread, so the
+			// context programFor() compiles in is the same one the script's own lifecycle calls run
+			// in, and each of those installs the shutter again. Rhino refuses a second ClassShutter
+			// with a SecurityException, the install used to catch only IllegalStateException, and
+			// the result was every scripted preset reporting "threw in create(): Cannot overwrite
+			// existing ClassShutter object" in game.
 			//
 			// The other checks cannot see this: they call newScope() and then evaluate directly,
-			// so they never take the compile-then-construct path.
+			// so they never take the compile-then-run path. That path used to be the Program
+			// constructor (which called create()); create() now runs on the first frame instead,
+			// in the same already-configured context, so the repeat install is still reached --
+			// by program.start() rather than by the constructor.
 			try {
 				ScriptClassShutter.install(cx, ScriptEngine.shutter());
 				if (ScriptClassShutter.lastInstallSkipped() == null) {

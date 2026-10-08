@@ -184,13 +184,17 @@ common/src/main/resources/assets/jsblock/scripts/
 ### 4.1 脚本生命周期
 
 ```js
-function create(ctx, state, pids)  { }   // 面板首次出现时调用一次
+function create(ctx, state, pids)  { }   // 首帧渲染前调用一次，pids 就是本面板的包装对象
 function render(ctx, state, pids)  { }   // 每帧调用，在这里 draw
 function dispose(ctx, state, pids) { }   // 面板消失时调用
 ```
 
 `state` 是一个每块面板独立的空对象，用来存放脚本自己的状态（轮播计时器等）。
 **每块 PIDS 方块位置有独立的脚本实例**，同一面板的两半不会共用状态。
+
+三个函数收到的**第三个参数都是同一个 `pids` 包装对象**，`create` 也不例外——这一点曾经错过，
+详见 §4.13。`create` 的调用时机是**首次进入渲染路径的那一帧**，不是编译时：包装对象要在那一帧
+才凑得出（到站列表、自定义文案、站台过滤都来自世界与客户端数据缓存），见 §4.13。
 
 ### 4.2 注册的全局对象
 
@@ -635,6 +639,65 @@ assets/jsblock/scripts/Digital_Rail.js
 **这是「对包的宽容」，不是 MC 规范**：日志与注释都写明了；`ScriptCaseCheck` 另有 6 种逃逸形态
 （`..`、绝对路径、反斜杠……）断言在**两条路径上都仍然被拒**——大写不是逃出资源包的办法。
 
+### 4.13 `create()` 拿到的是真 `pids`，不是 null（本次修复；只有实机能暴露）
+
+**症状**（用户实机日志，`met transit` 包的 `met_running_board.js`）：
+
+```
+[Joban Client] PIDS script "MET Running Board@met_running_board#…" threw in create():
+    org.mozilla.javascript.EcmaError: TypeError: Cannot call method "blockPos" of null
+    JS stack: at jsblock:scripts/met_running_board.js:10 (create)
+[PIDS script] [MET Running Board] Saved 1 departed trains to met_running_board/undefined_departed.json
+```
+
+**根因**：`ScriptEngine.Program` 的构造函数里那句 `invoke("create", null, null)`——第三参数是
+Java 字面量 `null`。`met_running_board.js#10` 是 `let pos = pids.blockPos();`，用来给存档日志文件命名，
+于是 `state.stationId` 从未被赋值，`render()` 拼出的文件名就是 `undefined_departed.json`。
+**注意报错里的 `blockPos` 只是「被调用的那个方法名」**，错的是接收者 `pids` 为 null
+（`blockPos()` 是我们自己的扩展，见 §4.4 与 `V2-API-覆盖表.md`）。
+
+**依据：v2 不会传 null。** javap 反编译 `com.lx862.mtrscripting.core.ParsedScript`：
+
+- `lambda$invokeFunction$0` 构造**同一个三元素数组**
+  `{getScriptContext(), ScriptInstance.state, ScriptInstance.getWrapperObject()}`，
+  用它调用 **create / render / dispose 全部三个函数**；
+- `PIDSScriptInstance.<init>` 字节码第 13–14 条就是 `setWrapperObject(wrapper)`，
+  在任何生命周期函数可能运行之前完成。
+
+顺带确认：v2 的 `PIDSWrapper` **没有** `blockPos()`（字节码里只有 `getBlockPos` 出现在
+`station(..., BlockPos)` 的参数位置），也就是这个脚本在真 v2 上会在同一行**以另一种方式**失败
+（方法不存在）。也就是说 `blockPos()` 是**我们的扩展**，把这个包在真 v2 之外救活了；
+v2 语境下这属于「包用了 v2 没有的 API」，但我们既然提供了它，就必须让它拿到正确的对象。
+
+**修法**：
+
+- `Program` 构造函数不再调 `create`；
+- 新增 `Program.start(PIDSWrapper)`：幂等，用 `invoke("create", null, pids)`，
+  在 `create` 被调用的那一刻才把包装对象交出去；
+- `RenderPIDSBase` 在**包装对象构造之后、两条渲染路径分叉之前**调用 `program.start(wrapper)`，
+  于是直接路径与像素化路径共用同一次 `create`。
+
+包装对象无法在编译期构造：到站列表、自定义文案、隐藏行、站台过滤全部来自世界与
+`mtr.client.ClientData` 的每帧数据。所以 `create` 顺延到首帧之前执行——对脚本而言
+「`create` 仍然先于第一次 `render` 出现、且只出现一次」这一点没有变。
+
+**为什么无头检查看不见**：`ScriptApiCheck` 自己调 `create`（`callLifecycle`）并递给它一个真的
+`PIDSWrapper`，而真引擎走的是另一条路；更根本的是，**编译期→包装对象**这条路径无法在无头下复现
+（`ScriptEngine` 的编译路径需要已加载的资源管理器，`Minecraft.getInstance()` 在游戏外为 null）。
+本次新增的检查分两半把这件事钉住：
+
+1. 正例：断言 `create` 收到的那个对象**就是本面板的**——`pids.blockPos()` 读回 `12|65|-34`
+   （`PANEL_POS` 特意改成非零、含负数，见 `ScriptApiCheck.PANEL_POS`）、`pids.type` 读回 `crt_pids`；
+2. 反例：同一段 pack 写法（`var pos = pids.blockPos();`）在第三参数为 `null` 时**必须仍然抛**
+   `TypeError: Cannot call method "blockPos" of null`——即用户日志里那一行原文。
+   如果哪天有人再把 `null` 传回去，这条断言会失败，而不是悄悄产出 `undefined_departed.json`。
+
+> 已知限制：本仓库的无头检查**无法**直接断言 `Program.start()` 实际传了什么（同上，编译路径依赖
+> 资源管理器）。第 1 条断言建立在检查自己构造的包装对象上，第 2 条钉住的是 pack 写法对 null 敏感。
+> 两者合起来能防住回归，但真正的端到端确认只有实机一条路——见 §7.8 一类的实机记录做法。
+> **不要**为了让某个包不报错去改 `FilesUtil` 的读写语义：本 bug 里 `Files` 全程工作正常，
+> `undefined` 只是上游 `state.stationId` 没赋值的结果。
+
 ---
 
 ## 5. 顺带修复的三个上游缺陷
@@ -747,7 +810,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 
 ### 7.3 最近一次验证结果
 
-> **2.4 那一轮（本次）**：`PIDSPresetCheck` / `PixelationCheck` / `ScriptShutterCheck` /
+> **`create()` 拿到真 `pids`（§4.13，本次）**：`.\tools\run-pids-check.ps1`（含完整
+> `gradle build`）汇总行 `RESULT: ALL CHECKS PASSED`；`gradle :common:compileJava`
+> `BUILD SUCCESSFUL`。另用
+> `-ResourceRoot <解包目录> -Script @('<解包目录>\assets\jsblock\scripts\met_running_board.js')`
+> 把出问题的那个脚本单跑一遍，4 个班次数全绿，日志里是
+> `[MET Running Board] Station ID: 12_65_-34` /
+> `Loading from: met_running_board/12_65_-34_departed.json`——**不再是 `undefined`**。
+> 反例断言（第三参数为 `null` 时必须抛）复现出的正是用户实机那一行：
+> `TypeError: Cannot call method "blockPos" of null`。
+>
+> **2.4 那一轮**：`PIDSPresetCheck` / `PixelationCheck` / `ScriptShutterCheck` /
 > `ScriptPathCheck` / `ScriptCanvasCheck` / `FilesCheck` / `ScriptCaseCheck` /
 > `ScriptApiCheck`（4 个班次数）全部通过，汇总行 `RESULT: ALL CHECKS PASSED`。
 > 另外把 **9 个真实资源包、112 个 `.js`** 全部过了一遍 `ScriptApiCheck`：
@@ -781,6 +854,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
 | 「每个 Texture/Rectangle 的最终颜色必须不透明」新断言 | ✅ 全部通过（2/3/4/6 个调用随班次数变化） | 本次运行 |
 | 「`arrivals().get(i)` 越界必须是 `null`」新断言 | ✅ 通过（越界 4 个下标 + 有效下标 1 个） | 本次运行 |
+| 「`create` 收到的 `pids` 是本面板的」新断言（§4.13） | ✅ 通过（`blockPos()` 读回 `12\|65\|-34`、`type` 读回 `crt_pids`） | 本次运行 |
+| 「`create` 第三参数为 `null` 时必须抛」新反例（§4.13） | ✅ 通过（复现 `TypeError: Cannot call method "blockPos" of null`） | 本次运行 |
+| `met transit` 的 `met_running_board.js` 单跑 `ScriptApiCheck` × 4 班次数 | ✅ 全部 `RESULT: SCRIPT OK`，站点 id 为真实坐标 | 本次运行 |
 | 脚本沙箱（ClassShutter）开启后仍能跑通全部 16 个用例 | ✅ 通过（首轮 16/16 失败，见 §4.6，修好后全绿） | 本次运行 |
 | **实机运行**（`Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） | ✅ 脚本管线跑通，多个资源包预设同屏渲染，聊天栏无报错 | 见 §7.8、§7.9 |
 
@@ -812,8 +888,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 [Joban Client] PIDS CRT PIDS (Style 1) threw in create(): Cannot overwrite existing ClassShutter object
 ```
 
-`ScriptEngine.programFor()` **在同一个已进入的 Context 里**先编译、再构造 `Program`，
-而 `Program` 的构造函数会调 `create()`——于是再次进入同一个 Context 并二次安装白名单。
+`ScriptEngine.programFor()` **在同一个已进入的 Context 里**先编译、再构造 `Program`。
+（当时的构造函数会调 `create()`，于是二次进入同一个 Context 并二次安装白名单；`create()` 现在
+改到首帧调用，见 §4.13，但它在**同一个线程的同一个 Context** 里运行，所以二次安装这条路径依然存在。）
 Rhino 拒绝二次安装时抛的是 **`SecurityException`**（不是它自己文档暗示的
 `IllegalStateException`），而 `install()` 只 catch 了后者，异常就逃进了脚本的 `create()`，
 被当成预设失败报出来。面板随后仍画对了，所以这个问题**只有看聊天栏才会发现**。

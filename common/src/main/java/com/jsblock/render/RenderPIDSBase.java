@@ -684,6 +684,24 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 world, pos, facing, customMessages, scheduleList, platformIds, hideArrivals, delta,
                 (long) Math.floor(MTRClient.getGameTick()));
 
+        /* create(ctx, state, pids) runs here, on the first frame that has a pids to hand it.
+           
+           It used to run while the program was compiled, with a literal null as the third
+           argument, because at that point the panel's arrivals, messages and platform filter do
+           not exist yet -- they are read from the world and the client's schedule cache every
+           frame. A script that reads that argument in create therefore threw on its first
+           statement on a real client, and the throw was caught and logged like any other, so
+           nothing downstream noticed: met transit's met_running_board.js:10 does
+           `let pos = pids.blockPos();` to name its saved-log file, and instead of naming it after
+           the block it wrote met_running_board/undefined_departed.json.
+           
+           JCM 2.x hands the real wrapper to create as well -- PIDSScriptInstance.<init> calls
+           setWrapperObject(wrapper) before any lifecycle function runs, and
+           ParsedScript.invokeFunction passes getWrapperObject() as the third argument to create and
+           render alike -- so this is the contract, not a convenience. Placed before the pixelation
+           attempt so both render paths share one create(). */
+        program.start(wrapper);
+
         if (pixelTarget != null && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelTarget, pixelScale, pixelShape, pixelDots, frameContext)) {
             matrices.popPose();
             return;

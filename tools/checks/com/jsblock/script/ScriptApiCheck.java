@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import org.mozilla.javascript.BaseFunction;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.Function;
+import org.mozilla.javascript.NativeObject;
 import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
 import org.mozilla.javascript.Undefined;
@@ -99,7 +100,7 @@ public final class ScriptApiCheck {
 			System.out.println("OK   stub pids: " + pids.width + "x" + pids.height
 					+ " type=" + pids.type + " arrivals=" + pids.arrivals().size());
 
-			failures += callLifecycle(cx, scope, "create", state, pids);
+			failures += checkCreateContract(cx, scope, state, pids);
 			failures += checkClientDataGlobals(cx, scope);
 			failures += checkParseComponent(cx, scope);
 			failures += checkArrivalsContract(pids);
@@ -356,6 +357,22 @@ public final class ScriptApiCheck {
 	}
 
 	/**
+	 * Evaluates a function expression and calls it with the given arguments, from Java.
+	 *
+	 * <p>Needed wherever a probe has to read a Java object the check holds rather than one the
+	 * script scope happens to carry: the call is a real Rhino call, so the reads inside it resolve
+	 * through the same member lookup, and the same class shutter, that a pack's script goes
+	 * through.</p>
+	 */
+	private static Object callProbe(Context cx, Scriptable scope, String functionExpression, Object... args) {
+		final Object fn = cx.evaluateString(scope, functionExpression, "probe", 1, null);
+		if (!(fn instanceof Function)) {
+			throw new IllegalStateException("probe expression did not evaluate to a function: " + fn);
+		}
+		return ((Function) fn).call(cx, scope, scope, args);
+	}
+
+	/**
 	 * Pins the one part of the arrivals API that a preset can see and this port got wrong.
 	 *
 	 * <p>JCM 2.x's {@code ArrivalsWrapper.get} is
@@ -500,6 +517,17 @@ public final class ScriptApiCheck {
 	}
 
 	/**
+	 * Sample panel position the checks hand to {@code pids.blockPos()}.
+	 *
+	 * <p>Deliberately negative and not axis-aligned. It used to be {@code BlockPos(0, 64, 0)}, and
+	 * the only record of what {@code met_running_board.js} derives from it was a log line reading
+	 * {@code Station ID: 0_64_0} — which is what a hard-coded position looks like as much as it is
+	 * what a real one looks like. A script that reads a position the wrapper never carried has to
+	 * be able to disagree with this constant.</p>
+	 */
+	private static final BlockPos PANEL_POS = new BlockPos(12, 65, -34);
+
+	/**
 	 * @param count how many upcoming trains to simulate. JCM 2.x's {@code arrivals().get(i)}
 	 *              returns null past the end, which is exactly the case a preset must survive
 	 *              on a platform with no trains -- so 0 is a case worth running.
@@ -510,11 +538,155 @@ public final class ScriptApiCheck {
 		for (int i = 0; i < count; i++) {
 			schedule.add(new ScheduleEntry(now + 90_000L * (i + 1), 6 - i, 1L + i, 2 + i));
 		}
-		return new PIDSWrapper("crt_pids", 3, 128, 72, new BlockPos(0, 64, 0),
+		return new PIDSWrapper("crt_pids", 3, 128, 72, PANEL_POS,
 				Collections.<Long>emptyList(),
 				new String[]{"欢迎乘坐重庆轨道交通", "", ""},
 				new boolean[]{false, false, false},
 				schedule);
+	}
+
+	/**
+	 * The engine's side of {@code create(ctx, state, pids)}: the pids argument is the panel's own
+	 * wrapper, not null.
+	 *
+	 * <h2>The bug this exists for</h2>
+	 * <p>{@code ScriptEngine.Program}'s constructor used to run {@code invoke("create", null, null)}
+	 * while the program was being compiled — the wrapper did not exist yet, so a literal null went
+	 * in as the third argument. Every other check here calls {@code create} itself, through
+	 * {@link #callLifecycle}, and hands it a real {@code PIDSWrapper}, so the whole suite passed
+	 * while a real client threw on the first line of any script that read that argument:</p>
+	 *
+	 * <pre>org.mozilla.javascript.EcmaError: TypeError: Cannot call method "blockPos" of null
+	 *   at jsblock:scripts/met_running_board.js:10 (create)</pre>
+	 *
+	 * <p>{@code met_running_board.js#10} is {@code let pos = pids.blockPos();}, and {@code pos}
+	 * names the file its departure log is saved to — so on a client the panel wrote
+	 * {@code met_running_board/undefined_departed.json} instead of {@code 12_65_-34_departed.json}.
+	 * The null receiver, not {@code blockPos}, was the fault: it is one of our own extensions and
+	 * resolves through the same wrapper the script is handed.</p>
+	 *
+	 * <h2>What it asserts</h2>
+	 * <p>{@code create} is called exactly as the engine calls it — the same three arguments, the
+	 * same {@code PIDSWrapper} the render path built, at {@link #PANEL_POS} — and the script has to
+	 * come through it with the position, the panel geometry, and a state of its own. A null or
+	 * mismatched pids fails here instead of in a player's log.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkCreateContract(Context cx, Scriptable scope, ScriptableObject state, PIDSWrapper pids) {
+		int failures = 0;
+
+		failures += callLifecycle(cx, scope, "create", state, pids);
+
+		/* The position the wrapper carries, read back through the accessors a pack actually writes --
+		   met_running_board.js#10 is this expression. A null receiver gives "Cannot call method
+		   blockPos of null"; a wrapper built from the wrong block position fails the comparison. */
+		final Object pos = callProbe(cx, scope,
+				"(function(p) { var v = p.blockPos(); return v.x() + '|' + v.y() + '|' + v.z(); })", pids);
+		if (pos instanceof String && ((String) pos).equals("12|65|-34")) {
+			System.out.println("OK   the pids handed to create() is this panel's: blockPos() reads " + pos);
+		} else {
+			System.out.println("FAIL pids.blockPos() in create() answered \"" + pos + "\" instead of 12|65|-34");
+			failures++;
+		}
+
+		/* Geometry off the same object, so a wrapper that is present but not the panel's is caught.
+		   String() inside the probe: pids.type is a Java String field, and Rhino hands a Java field
+		   read back as a wrapped value rather than a JS string, so a Java-side equals() would be
+		   comparing the wrong thing. */
+		final Object type = callProbe(cx, scope, "(function(p) { return String(p.type); })", pids);
+		if (type instanceof String && ((String) type).equals("crt_pids")) {
+			System.out.println("OK   the pids handed to create() reports the panel's own type");
+		} else {
+			System.out.println("FAIL pids.type in create() answered \"" + type + "\" instead of crt_pids");
+			failures++;
+		}
+
+		/* The same expression the pack writes, run against a null third argument: this is the
+		   failure a real client logged, and it has to still be one. */
+		failures += checkCreateProbeScript(cx, scope, pids);
+
+		/* Whatever the preset's own create() put on state has to survive the call -- which is the
+		   whole reason create exists, and what met_running_board.js relies on when it assigns
+		   state.stationId there and reads it back in render(). What that key is depends on the
+		   preset, so this only reports it; it is not a contract this port can impose. */
+		final Object written = callProbe(cx, scope,
+				"(function(s){ var names = []; for (var k in s) { names.push(k); } return names.join(','); })",
+				state);
+		System.out.println("     state keys create() left behind: " + (written == null || "".equals(written)
+				? "(none -- this preset keeps nothing between frames)" : written));
+
+		return failures;
+	}
+
+	/**
+	 * Reproduces the failure on a scope of its own, and asserts it is still a failure.
+	 *
+	 * <p>The engine used to call {@code create} with a literal null third argument, and that is
+	 * what a real client logged: {@code TypeError: Cannot call method "blockPos" of null} at
+	 * {@code met_running_board.js:10}. Nothing here can call the engine — the compile path needs a
+	 * loaded resource manager, which does not exist outside the game — so this drives the same
+	 * expression through the same lifecycle shape from the outside, and pins the fact that a
+	 * create() written the way packs write theirs <em>cannot</em> survive a null pids. That is the
+	 * invariant the engine fix restores: paired with the position and type reads above, which run
+	 * against the real wrapper, it says both that the wrapper is readable and that reading it
+	 * matters.</p>
+	 *
+	 * <p>The preset's own {@code create} is left to {@link #callLifecycle}, which is the one place
+	 * a pack's script is allowed to run its lifecycle: running it a second time would double
+	 * anything it starts. The probe names nothing the preset owns.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkCreateProbeScript(Context cx, Scriptable scope, PIDSWrapper pids) {
+		/* A scope of its own, whose parent is the preset's, so the probe sees the same globals a
+		   pack does -- the shutter included -- while naming nothing the preset owns. */
+		final ScriptableObject probeScope = new NativeObject();
+		probeScope.setPrototype(ScriptableObject.getObjectPrototype(scope));
+		probeScope.setParentScope(scope);
+		final Function probeCreate;
+		try {
+			probeCreate = (Function) cx.evaluateString(probeScope,
+					"function create(ctx, state, pids) {"
+							+ "  var pos = pids.blockPos();"
+							+ "  state.stationId = pos.x() + '_' + pos.y() + '_' + pos.z();"
+							/* String(): pids.type is a Java field, and the probe writes a JS string
+							   so the read below compares a string rather than a wrapped value. */
+							+ "  state.sawType = String(pids.type);"
+							+ "}",
+					"create-probe", 1, null);
+		} catch (Exception e) {
+			System.out.println("FAIL the create() probe did not compile: " + e);
+			return 1;
+		}
+		final ScriptableObject probeState = new NativeObject();
+		probeState.setPrototype(ScriptableObject.getObjectPrototype(scope));
+		probeState.setParentScope(scope);
+		/* The third argument here is a literal null, which is what the engine used to pass and what
+		   every create() that reads its pids died on. It is null rather than pids on purpose: this
+		   is the reproduction, and the assertion below is that a create() written the way packs
+		   write theirs fails on it. If someone later decides a null pids is acceptable after all,
+		   this line is what turns that decision into a failing check instead of a silent
+		   "undefined_departed.json". A create() that ignores pids passes either way, so the
+		   preset's own create() is not the thing under test here. */
+		try {
+			probeCreate.call(cx, probeScope, probeScope, new Object[]{null, probeState, null});
+		} catch (Exception expected) {
+			final String message = String.valueOf(expected.getMessage());
+			if (message.contains("of null") || expected instanceof org.mozilla.javascript.EcmaError) {
+				System.out.println("OK   a create() that reads its third argument fails when it is null, as it"
+						+ " was on a real client: " + message);
+				return 0;
+			}
+			System.out.println("FAIL a create() reading a null pids threw something unexpected: " + expected);
+			return 1;
+		}
+
+		/* Past the try: the probe did NOT throw on a null pids, so it is not reading it, and this
+		   check would pass against an engine that hands create() nothing at all. */
+		System.out.println("FAIL the create() probe survived a null pids, so it does not read it;"
+				+ " this check can no longer detect the bug it exists for");
+		return 1;
 	}
 
 	private static int callLifecycle(Context cx, Scriptable scope, String name, ScriptableObject state, PIDSWrapper pids) {

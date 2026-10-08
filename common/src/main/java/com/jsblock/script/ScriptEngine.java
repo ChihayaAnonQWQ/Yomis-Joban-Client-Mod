@@ -898,6 +898,8 @@ public final class ScriptEngine {
 		private volatile boolean lenientArrivals;
 		/** Set once the player has been told about the placeholder arrivals. */
 		private volatile boolean lenientReported;
+		/** Set once create() has run; see {@link #start(PIDSWrapper)}. */
+		private volatile boolean started;
 		/**
 		 * The chat line a failed render queued, held until the caller knows whether the frame
 		 * was recovered. See {@link #flushFailureNotice()} and {@link #discardFailureNotice()}.
@@ -941,7 +943,10 @@ public final class ScriptEngine {
 			};
 			state.setPrototype(ScriptableObject.getObjectPrototype(scope));
 			state.setParentScope(scope);
-			invoke("create", null, null);
+			/* create() is NOT run here. It needs the panel's pids object, and a compiled
+			   program is not yet bound to a panel: this constructor is reached from
+			   programFor(preset, panelKey), which is handed nothing but the key block's
+			   position. See start(). */
 		}
 
 		public String getKey() {
@@ -1098,6 +1103,55 @@ public final class ScriptEngine {
 		/** Runs the script's {@code render(ctx, state, pids)} for one frame. */
 		public void render(ScriptRenderContext ctx, PIDSWrapper pids) {
 			renderOrFail(ctx, pids);
+		}
+
+		/**
+		 * Runs the script's {@code create(ctx, state, pids)} once, with the panel's own pids.
+		 *
+		 * <h2>Why create() is not called when the program is compiled</h2>
+		 * <p>It used to be, from the constructor, as {@code invoke("create", null, null)} -- so the
+		 * pids argument was a Java {@code null}. A script's {@code create} that reads the object
+		 * therefore died on its first statement with {@code TypeError: Cannot call method "..." of
+		 * null}. {@code met transit}'s {@code met_running_board.js#10} does exactly that
+		 * ({@code let pos = pids.blockPos();}, to name its saved-log file after the block), so on a
+		 * real client {@code state.stationId} was never assigned and the panel went on to write
+		 * {@code met_running_board/undefined_departed.json}.</p>
+		 *
+		 * <p>JCM 2.x never passes null there. Its {@code ParsedScript.lambda$invokeFunction$0}
+		 * builds one three-element argument array
+		 * ({@code getScriptContext(), ScriptInstance.state, ScriptInstance.getWrapperObject()})
+		 * and calls <em>every</em> lifecycle function with it; {@code PIDSScriptInstance.<init>}
+		 * sets the wrapper with {@code setWrapperObject(wrapper)} before any of them can run. The
+		 * third argument is the real {@code PIDSWrapper} for create exactly as for render, which is
+		 * the contract this port has to keep.</p>
+		 *
+		 * <p>The wrapper cannot be built at compile time: it carries the arrival list, the custom
+		 * messages, the hidden rows and the platform filter, all of which are read from the world
+		 * and the client's schedule cache at frame time. So create waits for the first frame that
+		 * has one, which is also the first moment a script could observe anything create sets up.
+		 * A script's create therefore still runs before its first render, and still once.</p>
+		 *
+		 * <p>Idempotent, and safe to call from either render path: whichever reaches it first wins
+		 * and the other is a no-op.</p>
+		 *
+		 * @param pids the wrapper the render path built for this panel; never null, and a null is
+		 *             ignored rather than run -- running create with a null pids is the bug this
+		 *             method exists to end, so it must not be reachable from here
+		 */
+		public void start(PIDSWrapper pids) {
+			if (pids == null) {
+				return;
+			}
+			synchronized (this) {
+				if (started) {
+					return;
+				}
+				started = true;
+			}
+			/* The same three arguments render gets, so create may use ctx and pids as well as
+			   state -- which is what the port's own scripts already assume. lenientArrivals is
+			   deliberately not consulted here: create reads the panel, not the train list. */
+			invoke("create", null, pids);
 		}
 
 		/**
