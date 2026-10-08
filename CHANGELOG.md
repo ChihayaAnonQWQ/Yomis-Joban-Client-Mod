@@ -45,6 +45,26 @@ JCM 2.x never had this because `PIDSGUIPacket` carries exactly these fields.
 All six packet directions (C2S and S2C, three families) are compared field by field by a script before
 committing, because a mismatch there disconnects the client rather than showing something wrong.
 
+## The Projector draws every kind of preset, and frames them all
+
+Two more things the projector got wrong, and both for the same reason: only the scripted path knew
+where a projector's panel actually is.
+
+| A preset with... | is drawn by | and used to land |
+|---|---|---|
+| a script | `renderScripted` -- the one path that knew about projectors | the panel |
+| a `components` array | `renderLayout`, whose matrix chain is JCM 2.x's **RV panel literals** | inside the block |
+| only a texture (what a traditional, non-JS pack contains) | the built-in renderer, whose chain makes the same assumption, in two places | inside the block |
+
+All three use the projector's own chain now — its offset, rotation and scale — while keeping their own
+units-per-block, so RV, SIL, 1A and LCD render exactly as before.
+
+The frame had the same shape of problem: it was drawn from `renderScripted` alone, so only JS presets
+were framed. JCM 2.x draws it from its renderer, which is why every preset gets it there. It is drawn
+from the layout and built-in paths too, and JCM 2.x's projection rectangle came with it: four red lines
+around the area the panel will cover, 1.785 by 1 blocks per unit of scale, drawn only while the
+projector is unrotated — a plain rectangle stops describing the panel as soon as it is turned.
+
 ## Also: how a pack shows express versus local
 
 The pack-author guide gained a section on it, in both languages. The short version: **neither MTR 3 nor
