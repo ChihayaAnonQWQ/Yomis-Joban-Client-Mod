@@ -1028,7 +1028,7 @@ Internal Exception: java.lang.IndexOutOfBoundsException:
 
 **16. Rhino 里从 Java 造出来的 JS 数组没有 prototype，`.map()` 会报一个毫不相干的错**
 
-欧洲那个 PIDS 包里 **33 个脚本**都写同一句：
+**World PIDS-Pack**（65 个预设）里 **33 个脚本**都写同一句：
 
 ```js
 let stops = arrival.route().getPlatforms().toArray().map(platform => platform.stationName);

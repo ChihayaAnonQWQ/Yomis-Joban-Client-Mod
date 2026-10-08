@@ -706,7 +706,7 @@ public class PIDSWrapper {
 		/**
 		 * {@code stop.stationName} -- a String field, not the {@link #getStationName()} method.
 		 *
-		 * <p>Thirty-three scripts in one European pack write
+		 * <p>Thirty-three scripts in World PIDS-Pack write
 		 * {@code getPlatforms().toArray().map(platform => platform.stationName)} and then treat the
 		 * result as a string: {@code .normalize("NFC")}, {@code .replace(...)}, {@code .trim()}.
 		 * Reading a property that exists only as a method does not yield undefined here -- Rhino

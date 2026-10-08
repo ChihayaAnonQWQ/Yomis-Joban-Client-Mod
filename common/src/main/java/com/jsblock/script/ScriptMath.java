@@ -9,7 +9,7 @@ import org.joml.Matrix4f;
  *
  * <p>Both are documented under the scripting docs' Common APIs, which is where a script looks for
  * them. A resource pack written against JCM 2.x reaches for them without any ceremony -- the
- * European PIDS pack that prompted this uses {@code new Matrices()} to rotate a clock hand -- and
+ * World PIDS-Pack -- the pack that prompted this -- uses {@code new Matrices()} to rotate a clock hand -- and
  * touching a global that is not there ends the script on the spot.</p>
  *
  * <p>The Java classes are named {@code Vector3f} and {@code Matrices}, matching the documentation,
