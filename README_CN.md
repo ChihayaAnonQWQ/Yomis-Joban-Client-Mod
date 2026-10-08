@@ -4,7 +4,8 @@
 
 Joban Client Mod 的非官方版本。
 
-仅支持 1.20(.1)。
+**Minecraft 1.20.1，Forge 与 Fabric 通用同一颗 jar。** 两边各自还需要在旁边装什么 —— 对应平台的
+MTR 3（YMTR）、Fabric API、Architectury API —— 见[平台与环境要求](#平台与环境要求)。
 
 Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railway](https://github.com/jonafanho/Minecraft-Transit-Railway) 的扩展模组，加入了大量港铁风格的方块，以及能显著改善世界搭建体验的工具方块。
 
@@ -24,6 +25,113 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 > - JCM 部分的代码可以按 MIT 许可使用、修改和分发。
 > - **YJCM 专有代码并非开源**。未经许可复制、再分发或修改均被禁止。
 > - 如果你 fork 本仓库，必须保留两份许可文件和本声明。
+
+## 平台与环境要求
+
+| | |
+|---|---|
+| Minecraft | **1.20.1**。模组自己的清单只接受 1.20 与 1.20.1：`META-INF/mods.toml` 写的是 `[1.20,1.20.2)`，`fabric.mod.json` 写的是 `>=1.20 <=1.20.1` |
+| 加载器 | **Forge 与 Fabric，同一颗 jar 都能装** |
+| MTR | MTR 3，也就是 **YMTR** 这一支 —— 1.20.1 上对应 3.6.3 —— 而且必须是**你那个平台**的那一份 |
+
+**「同一颗 jar」是当场可以验证的。** `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` 是合并产物：
+把它打开，两份清单并排躺在根目录，各自带着自己的 mixin 配置。
+
+| jar 里面 | Forge | Fabric |
+|---|---|---|
+| 模组清单 | `META-INF/mods.toml`（`modLoader = "javafml"`、`modId = "jsblock"`） | `fabric.mod.json`（`id = "jsblock"`） |
+| 入口 | `forge/com/jsblock/` 下的 `@Mod` 类 | `entrypoints.main` → `fabric.com.jsblock.JobanFabric`，另有 `.client`、`.modmenu` |
+| Mixin | `META-INF/MANIFEST.MF` 里的 `MixinConfigs: forge-jsblock-common.mixins.json` | `"mixins": ["fabric-jsblock-common.mixins.json"]` |
+| Minecraft | `minecraft` `[1.20,1.20.2)` | `minecraft` `>=1.20 <=1.20.1` |
+
+没有单独的 Forge 下载，也没有单独的 Fabric 下载：发布的就是这一个文件。所以下面这张表说的不是
+「该下哪一个」，而是「它旁边还得装什么」。
+
+### 两边分别要装什么
+
+| 平台 | 需要装什么 | 说明 |
+|---|---|---|
+| **两边都要** | 本模组：`MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` 放进 `mods/` | 合并包；两个加载器装的是同一个文件 |
+| **两边都要** | MTR 3 / YMTR 3.6.3 —— **对应你平台的那一份** | Forge 用 `MTR-forge-1.20.1-3.6.3.jar`，Fabric 用 `MTR-fabric-1.20.1-3.6.3.jar`。MTR 每个加载器各一个 jar，两者不能互换；两份清单都把 `mtr` 列为必需依赖 |
+| **两边都要** | Architectury API `9.2.14` | Forge 侧：`META-INF/mods.toml` 把 `architectury` `[1.26.37,)` 标成 **mandatory**。Fabric 侧：`fabric.mod.json` 没有列它，但模组自己的类链接了 `dev.architectury.event.Event`、`ClientGuiEvent`、`ClientTickEvent`（在 `com.jsblock.JobanClient`，一个声明过的入口），而 jar 里并没有打包它们 —— 所以 Fabric 也必须装。版本取自 `gradle.properties` 的 `architectury_version` |
+| **Forge** | 1.20.1 的 Forge，build 36 或更高 | `META-INF/mods.toml` 写的是 `forge` `[36,)`。Forge 侧没有别的必需项 |
+| **Fabric** | Fabric Loader | `fabric.mod.json` 写的是 `fabricloader: *`；本构建编译与运行所用的是 `0.19.5`（`gradle.properties`） |
+| **Fabric** | Fabric API `0.83.0+1.20` | `fabric.mod.json` 里写作 `fabric: *`；版本取自 `gradle.properties` 的 `fabric_api_version` |
+| **Fabric** | 可选：ModMenu `7.0.1` | 只影响配置界面的按钮。`fabric.mod.json` 里有 `modmenu` 入口（`com.jsblock.ModMenuConfig`）；版本取自 `gradle.properties` 的 `mod_menu_version` |
+
+### 已经实机跑过的，和还没跑过的
+
+**Forge 侧是真正启动过、用过的。** 那几次是 `Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`，
+`mods/` 里放的是本分支构建出的 jar；下面修掉的那些缺陷就是从这些运行里来的：脚本管线同时画出多个资源包的预设、
+预设通过 `Files` 把状态写进磁盘、投影仪与它的瞄准线、以及几个 PIDS 配置界面。
+日志见 `MTR3-PIDS-PORT.md` 的 §7.8 与 §7.9。
+
+**Fabric 侧目前只到「能构建」这一步。** `gradle build` 能编出它，合并步骤把它放进同一颗 jar，产物确实在：
+
+| 路径 | 是什么 |
+|---|---|
+| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.4.jar` | Fabric 侧、重映射后的 jar，合并步骤的输入 |
+| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | Forge 侧，合并步骤的输入 |
+| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | 合并包，要装的是这一个 |
+
+但这颗 jar **还没有人在 Fabric 实例里启动过**，所以上面那张平台表的读法是「清单和字节码要求这样」，
+而不是「已经在 Fabric 上看着它跑起来了」。
+
+## 安装
+
+两个加载器放的是同一个文件、放的也是同一个地方，不一样的是它旁边那颗 MTR。
+
+### Forge
+
+1. 1.20.1 的 Forge —— build 36 或更高（`META-INF/mods.toml` 里的 `forge` `[36,)`）。
+2. `mods/` —— MTR 3 / YMTR 的 **Forge** 版：`MTR-forge-1.20.1-3.6.3.jar`。
+3. `mods/` —— Architectury API。`META-INF/mods.toml` 把它标成必需，缺了 Forge 会直接拒绝启动。
+4. `mods/` —— `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar`。
+
+### Fabric
+
+1. 1.20.1、带 Fabric Loader 的 Fabric 档案。
+2. `mods/` —— MTR 3 / YMTR 的 **Fabric** 版：`MTR-fabric-1.20.1-3.6.3.jar`。
+3. `mods/` —— Fabric API。
+4. `mods/` —— Architectury API。`fabric.mod.json` 没有声明它，但模组的类链接了它，理由见上表。
+5. `mods/` —— `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar`。
+6. 可选 —— ModMenu，想让配置界面出现在模组列表里就装。
+
+### 容易装错的几种情况
+
+| 装成了什么 | 会发生什么 |
+|---|---|
+| Fabric 实例里放了 MTR 的 **Forge** 版（或反过来） | MTR 每个加载器各一个 jar，放错的那颗对该加载器来说根本不是模组。装与档案匹配的那一份 |
+| 没装 MTR，或装了别的 Minecraft 版本的那份 | 两份清单都把 `mtr` 列为必需依赖，模组不会加载 |
+| Fabric 上缺 Fabric API 或缺 Architectury API | `fabric.mod.json` 里写了 `fabric: *`；Architectury 则是模组自己的类链接的对象 |
+| 1.20.2 以上，或 1.19.x 的档案 | 清单会拒绝：Forge 侧 `[1.20,1.20.2)`，Fabric 侧 `>=1.20 <=1.20.1` |
+| 往 `mods/` 里放了 `fabric/build/libs/fabric-1.20-….jar` 或 `forge/build/libs/forge-1.20-….jar` | 那是合并步骤的**输入**，不是发布件。要装的是合并后的 `build/MTR-YJCM-1.20-….jar` |
+
+## 功能一览
+
+每一行在下面都有展开，这里只是地图。
+
+| | |
+|---|---|
+| PIDS 预设 | 三种，都在方块自己的配置界面里选：JCM 2.x 的 **JavaScript** 预设（`scriptFiles`）、JSON 声明的**组件式**布局（`components`）、以及**只有贴图**的传统资源包。既不声明 `components` 也不声明 `scriptFiles` 的预设，仍然走 YJCM 原来那套硬编码渲染路径 |
+| PIDS 投影仪 | `jsblock:pids_projector` —— 面板悬在空中，自带显示格式、偏移、旋转、缩放、逐行信息与隐藏月台号 |
+| 像素化与点阵 | 默认关闭：资源包声明它是按什么屏画的，玩家决定要多粗（按预设）。每个键与三种画布的精确比例见 [docs/pixelation-guide.zh.md](docs/pixelation-guide.zh.md) |
+| 脚本 API | 逐条对着官方 JCM 2.x 脚本文档比对，而不是「手头这些预设恰好用到什么」；对照表是 `V2-API-覆盖表.md` |
+| 脚本沙箱 | 类访问白名单、关闭前的警告界面、面向玩家的失败提示，以及记录预设每一次绘制调用的诊断 |
+| 无头检查 | `tools/run-pids-check.ps1` 不开游戏，直接用真实引擎跑随模组附带的预设与脚本 API |
+
+### 哪些方块有配置界面
+
+| 方块 | 界面 |
+|---|---|
+| `jsblock:pids_1a`、`jsblock:pids_4`（LCD PIDS） | Joban PIDS 界面：显示格式（预设）、月台筛选、逐行信息、逐行隐藏、自动切换（发车另有一套自动切换） |
+| `jsblock:pids_rv`、`jsblock:pids_rv_sil`、`jsblock:pids_rv_sil_2` | RV PIDS 界面，字段相同，另外多一个「隐藏月台号」 |
+| `jsblock:pids_projector` | 投影仪自己的界面：显示格式、偏移、旋转、缩放、逐行信息、逐行隐藏、隐藏月台号、月台筛选 |
+| 模组本身 | `ConfigScreen` —— Fabric 从 ModMenu 进，Forge 从模组列表进。客户端设置都在这里，包括脚本调试开关 |
+
+> **不是每块板子都能给自定义信息。** 上游 JCM 2.x 自己也有几个 PIDS 界面不提供信息输入框 —— MTR 4 上一样 ——
+> 那是界面本身的设计，不是这次移植漏掉的。这一点写在 [docs/pixelation-guide.zh.md](docs/pixelation-guide.zh.md) 里，
+> 免得下一个人再为此花一个晚上。
 
 ## 版本差异
 
@@ -295,7 +403,7 @@ const raining = MinecraftClient.worldIsRaining();     // 世界状态
 如果您遇到有资源包的 PIDS 无法正常工作，可以把**游戏版本信息**、**游戏日志**、**资源包下载链接**
 发给我，或者直接提 [Issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new)。
 
-- **游戏版本信息**：Minecraft 版本、MTR / YMTR 版本、本模组版本（当前 `1.2.12-JSPIDS-2.0`）
+- **游戏版本信息**：Minecraft 版本、MTR / YMTR 版本、本模组版本（当前 `1.2.12-JSPIDS-2.4`）
 - **游戏日志**：`logs/latest.log`。面板报错会写成一行
   `[Joban Client] PIDS script "..." threw in render(): ...`，
   它直接写明是哪个预设、脚本哪一行、缺的是哪个 API —— 多数情况下不用复现就能定位
@@ -342,6 +450,47 @@ gradle build --no-daemon --console=plain --max-workers=1        # -> build/MTR-Y
 配置阶段出现一长串堆栈是 `build.gradle` 里 `setupFiles` 的 catch 分支在打印一次失败的
 `Minecraft-Mappings` 下载，不是构建失败。
 
+## 从源码构建
+
+`settings.gradle` 里有三个 Gradle 模块（根工程名是 `Joban-Client-Mod`）：
+
+| 模块 | 装什么 |
+|---|---|
+| `common` | 共用代码：方块、PIDS 渲染器、组件体系、脚本引擎，以及 `tools/checks` 编译时依赖的那些类。依赖 MTR 与 Architectury 的 common 构件 |
+| `fabric` | Fabric 入口（`com.jsblock.JobanFabric`、`JobanFabricClient`、`ModMenuConfig`）与 `fabric.mod.json`。通过 `shadowCommon` 把 Rhino 打进去 |
+| `forge` | Forge 入口与 `META-INF/mods.toml`，同样方式把 Rhino 打进去 |
+
+把两个平台 jar 合成发布用的那一颗，靠的是 `build.finalizedBy mergeJars`（forgix，
+`mergedJarName = "MTR-YJCM-${minecraft_version}-${project.mod_version}.jar"`）。
+
+| | |
+|---|---|
+| JDK | 源码目标是 **Java 17**（`build.gradle` 里 1.20 走 `options.release = 17`）。这里的构建是用 `JAVA_HOME` 指向 Zulu 21 跑的 |
+| Gradle | **8.8**。仓库里有 `gradlew` / `gradlew.bat`，但没有 `gradle/wrapper/gradle-wrapper.jar`，所以 wrapper 按现状跑不起来 —— 用你自己的 Gradle 8.8，或用 `tools/run-pids-check.ps1` 解析到的那个：`%USERPROFILE%\.gradle\wrapper\dists\gradle-8.8-bin\dl7vupf4psengwqhwktix4v1\gradle-8.8\bin\gradle.bat` |
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
+gradle build --no-daemon --console=plain --max-workers=1
+```
+
+产物如下（`mod_version` 为 `1.2.12-JSPIDS-2.4` 时，文件名里的版本就是它）：
+
+| 路径 | 是什么 |
+|---|---|
+| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | 合并包：Forge 与 Fabric 在同一颗文件里。要装的是这一个 |
+| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.4.jar` | 合并用的 Fabric 侧 jar |
+| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | 合并用的 Forge 侧 jar |
+| 名字里带 `-dev-shadow` 的 `fabric/build/libs/fabric-1.20-….jar`、`forge/build/libs/forge-1.20-….jar` | 重映射之前的中间 shadow jar |
+
+构建需要 `checkouts/1.20/` 下的 MTR 开发 jar（已被 git 忽略），而 MTR 3 已经不在 Maven 上了 ——
+这颗 jar 从哪来，见上面的[怎么对着本分支构建 MTR 3](#怎么对着本分支构建-mtr-3)。
+
+无头检查会先构建，再拿编译出的类跑 `tools/checks` 下的每一项；任何一项失败就返回非零：
+
+```powershell
+.\tools\run-pids-check.ps1
+```
+
 ## 常见问题与支持
 
 ### 游戏为什么崩了？
@@ -357,6 +506,32 @@ gradle build --no-daemon --console=plain --max-workers=1        # -> build/MTR-Y
 ### 我想了解更多！
 
 模组的大部分内容都写进了我们的 [wiki](https://www.joban.tk/wiki/JCM:Joban_Client_Mod)。
+
+### 资源包的 PIDS 还是不工作
+
+上面有专门一节，需要提供什么也在那里：[资源包的 PIDS 无法正常工作怎么办](#资源包的-pids-无法正常工作怎么办)。
+
+### 脚本报错在哪里看
+
+`logs/latest.log`。预设抛错的面板会写一行：
+
+```
+[Joban Client] PIDS script "..." threw in render(): ...
+```
+
+它会写明是哪个预设、脚本哪一行、缺的是哪个 API。之后引擎会用占位数据**重试一次**这一帧，
+因为资源包不是模组能改的东西；抛错无论重试成败都会留在日志里，玩家只有在重试也救不回来时才会看到聊天栏提示。
+
+### 怎么开调试
+
+两个开关，开一个就够：
+
+| 开关 | 怎么开 |
+|---|---|
+| 配置界面 | `ConfigScreen` 里的脚本调试开关 —— Fabric 从 ModMenu 进，Forge 从模组列表进 |
+| 启动参数 | 加 `-Djsblock.pids.trace=true` 启动游戏 |
+
+开了之后，预设发出的每一次绘制调用都会连类型、深度、颜色和文字一起写进日志。
 
 ## 环境搭建
 

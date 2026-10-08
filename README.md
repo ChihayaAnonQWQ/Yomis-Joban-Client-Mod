@@ -4,7 +4,9 @@
 
 An unofficial version of Joban Client Mod.
 
-Only 1.20(.1).
+**Minecraft 1.20.1, on Forge and on Fabric, out of the same jar.** What each loader needs beside it --
+MTR 3 (YMTR) for that loader, Fabric API, Architectury API -- is in
+[Platforms and requirements](#platforms-and-requirements).
 
 Yomi's Joban Client Mod (Abbreviated as YJCM) is an addon based on [Minecraft Transit Railway](https://github.com/jonafanho/Minecraft-Transit-Railway) Mod, adding various blocks from the Hong Kong MTR and utility blocks that will greatly improve your world.
 
@@ -24,6 +26,118 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 > - The JCM portion may be used, modified, and distributed under the MIT License.
 > - The YJCM-specific code is **NOT open source**. Copying, redistributing, or modifying it without permission is prohibited.
 > - If you fork this repository, you must keep both license files and this notice.
+
+## Platforms and requirements
+
+| | |
+|---|---|
+| Minecraft | **1.20.1**. The manifests allow 1.20 and 1.20.1 and nothing else: `META-INF/mods.toml` asks for `[1.20,1.20.2)`, `fabric.mod.json` for `>=1.20 <=1.20.1` |
+| Loaders | **Forge and Fabric, both served by the same file** |
+| MTR | MTR 3, the **YMTR** line -- 3.6.3 on 1.20.1 -- and it has to be the build for the loader you run |
+
+**The one jar really does serve both.** `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` is a merged jar.
+Open it and the two manifests sit side by side at the top level, each with its own mixin config:
+
+| Inside the jar | Forge | Fabric |
+|---|---|---|
+| Mod manifest | `META-INF/mods.toml` (`modLoader = "javafml"`, `modId = "jsblock"`) | `fabric.mod.json` (`id = "jsblock"`) |
+| Entry points | the `@Mod` classes under `forge/com/jsblock/` | `entrypoints.main` -> `fabric.com.jsblock.JobanFabric`, `.client`, `.modmenu` |
+| Mixins | `MixinConfigs: forge-jsblock-common.mixins.json` in `META-INF/MANIFEST.MF` | `"mixins": ["fabric-jsblock-common.mixins.json"]` |
+| Minecraft | `minecraft` `[1.20,1.20.2)` | `minecraft` `>=1.20 <=1.20.1` |
+
+There is no Forge download and no Fabric download. The release is one file, and that is why the table
+below is about what has to be installed *beside* it rather than about which file to pick.
+
+### What to install, per platform
+
+| Platform | What to install | Note |
+|---|---|---|
+| **Both** | This mod: `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` into `mods/` | the merged jar; the same file on either loader |
+| **Both** | MTR 3 / YMTR 3.6.3 -- **the build for your loader** | `MTR-forge-1.20.1-3.6.3.jar` on Forge, `MTR-fabric-1.20.1-3.6.3.jar` on Fabric. MTR ships one jar per loader and the two are not interchangeable. `mtr` is a required dependency in both manifests |
+| **Both** | Architectury API `9.2.14` | On Forge, `META-INF/mods.toml` declares `architectury` `[1.26.37,)` **mandatory**. On Fabric `fabric.mod.json` does not list it, but the mod's own classes link `dev.architectury.event.Event`, `ClientGuiEvent` and `ClientTickEvent` (`com.jsblock.JobanClient`, a declared entry point) and the jar does not bundle them, so Fabric needs it too. The version is `gradle.properties`' `architectury_version` |
+| **Forge** | Forge for 1.20.1, build 36 or newer | `META-INF/mods.toml` asks for `forge` `[36,)`. Nothing else is mandatory there |
+| **Fabric** | Fabric Loader | `fabric.mod.json` asks for `fabricloader: *`; the loader this build compiles and runs against is `0.19.5` (`gradle.properties`) |
+| **Fabric** | Fabric API `0.83.0+1.20` | declared as `fabric: *` in `fabric.mod.json`; the version is `gradle.properties`' `fabric_api_version` |
+| **Fabric** | *Optional:* ModMenu `7.0.1` | only for the config-screen button. `fabric.mod.json` carries a `modmenu` entry point (`com.jsblock.ModMenuConfig`); the version is `gradle.properties`' `mod_menu_version` |
+
+### What has been run in game, and what has not
+
+**The Forge side has been launched and used.** The runs were
+`Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`, with this branch's jar in `mods/`, and they are where
+the defects fixed below came from: the script pipeline drawing several resource packs' presets at
+once, a preset writing its own state to disk through `Files`, the projector and its aim lines, and the
+PIDS config screens. `MTR3-PIDS-PORT.md` sections 7.8 and 7.9 are the logs from those runs.
+
+**The Fabric side is built, not yet run.** `gradle build` compiles it, the merge puts it in the same
+jar, and the artifact is there:
+
+| Path | What it is |
+|---|---|
+| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.4.jar` | the Fabric jar, remapped, the one the merge consumes |
+| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | the Forge jar, the one the merge consumes |
+| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | the merged jar: this is the one to install |
+
+Nobody has launched that jar in a Fabric instance yet, so read the platform table above as "this is
+what the manifests and the bytecode ask for", not as "this has been seen working on Fabric".
+
+## Installation
+
+The same file goes to the same place on both loaders. What differs is the MTR jar beside it.
+
+### Forge
+
+1. A 1.20.1 Forge profile, build 36 or newer (`forge` `[36,)` in `META-INF/mods.toml`).
+2. `mods/` -- MTR 3 / YMTR, the **Forge** build: `MTR-forge-1.20.1-3.6.3.jar`.
+3. `mods/` -- Architectury API. `META-INF/mods.toml` marks it mandatory, so Forge refuses to start
+   without it.
+4. `mods/` -- `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar`.
+
+### Fabric
+
+1. A 1.20.1 Fabric profile with Fabric Loader.
+2. `mods/` -- MTR 3 / YMTR, the **Fabric** build: `MTR-fabric-1.20.1-3.6.3.jar`.
+3. `mods/` -- Fabric API.
+4. `mods/` -- Architectury API. `fabric.mod.json` does not declare it, but the mod's classes link
+   against it; see the table above.
+5. `mods/` -- `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar`.
+6. Optional -- ModMenu, if you want the config screen listed with the other mods.
+
+### Ways this gets installed wrong
+
+| What was done | What happens |
+|---|---|
+| MTR's **Forge** jar in a Fabric instance, or its **Fabric** jar on Forge | MTR ships one jar per loader; the wrong one is simply not a mod for that loader. Install the build that matches the profile |
+| MTR missing, or a build for another Minecraft version | `mtr` is a required dependency in both manifests; the mod does not load |
+| Fabric API or Architectury API missing on Fabric | `fabric: *` is declared in `fabric.mod.json`, and Architectury is what the mod's own classes link against |
+| A 1.20.2+ or a 1.19.x profile | the manifests refuse it: `[1.20,1.20.2)` on Forge, `>=1.20 <=1.20.1` on Fabric |
+| `fabric/build/libs/fabric-1.20-….jar` or `forge/build/libs/forge-1.20-….jar` in `mods/` | those are the two jars the merge step produces, not the release. Install the merged `build/MTR-YJCM-1.20-….jar` |
+
+## Features at a glance
+
+Each row is expanded further down; this is the map.
+
+| | |
+|---|---|
+| PIDS presets | three kinds, all selectable from a board's own config screen: a JCM 2.x **JavaScript** preset (`scriptFiles`), a **component** layout declared in JSON (`components`), and a **traditional texture-only** pack. A preset that declares neither keeps YJCM's own hard-coded render path, unchanged |
+| PIDS Projector | `jsblock:pids_projector` -- a panel in the air, with its own format, offset, rotation, scale, per-row text and hide-platform switch |
+| Pixelation and dot matrix | off until somebody asks for it: a pack declares what it drew for, the player decides how coarse, per preset. Every key and the exact canvas proportions are in [docs/pixelation-guide.md](docs/pixelation-guide.md) |
+| Script API | measured entry by entry against the official JCM 2.x scripting docs rather than against whichever presets happened to be tested; the table is `V2-API-覆盖表.md` |
+| Script sandbox | a class-access allow-list, a warning screen before it is switched off, player-facing failure notices, and a trace of every draw call a preset issues |
+| Headless checks | `tools/run-pids-check.ps1` runs the shipped presets and the script API through the real engine, with no game running |
+
+### Which boards have a config screen
+
+| Block | Screen |
+|---|---|
+| `jsblock:pids_1a`, `jsblock:pids_4` (the LCD PIDS) | the Joban PIDS screen: display format (preset), platform filter, per-row text, per-row hide, auto-switch (and a second auto-switch for departures) |
+| `jsblock:pids_rv`, `jsblock:pids_rv_sil`, `jsblock:pids_rv_sil_2` | the RV PIDS screen, the same fields plus hide-platform-numbers |
+| `jsblock:pids_projector` | the projector's own screen: display format, offset, rotation, scale, per-row text, per-row hide, hide-platform-numbers, platform filter |
+| the mod itself | `ConfigScreen` -- from ModMenu on Fabric, from the mods list on Forge. The client settings live here, including the script debug switch |
+
+> **Not every board can be given its own text.** A few of JCM 2.x's own PIDS screens do not offer the
+> message fields either, on MTR 4 as well as here -- that is the screen's own design rather than
+> something this port left out. It is written down in [docs/pixelation-guide.md](docs/pixelation-guide.md)
+> so that nobody spends an evening on it.
 
 ## Version differences
 
@@ -315,7 +429,7 @@ If a resource pack's PIDS does not work, send me the **game version**, the **gam
 **link to the resource pack**, or open an
 [issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new).
 
-- **Game version**: Minecraft, MTR / YMTR, and this mod (currently `1.2.12-JSPIDS-2.0`)
+- **Game version**: Minecraft, MTR / YMTR, and this mod (currently `1.2.12-JSPIDS-2.4`)
 - **Game log**: `logs/latest.log`. A failing panel writes one line,
   `[Joban Client] PIDS script "..." threw in render(): ...`, which names the preset, the script line
   and the API that was missing -- usually enough to fix it without reproducing anything
@@ -368,6 +482,50 @@ gradle build --no-daemon --console=plain --max-workers=1        # -> build/MTR-Y
 A long stack trace during configuration is `build.gradle`'s `setupFiles` catch branch
 printing a failed `Minecraft-Mappings` download; it is not a build failure.
 
+## Building from source
+
+Three Gradle modules, from `settings.gradle` (the root project is `Joban-Client-Mod`):
+
+| Module | What it holds |
+|---|---|
+| `common` | the shared code: blocks, PIDS renderers, the component system, the scripting engine, and the classes `tools/checks` is compiled against. Depends on MTR and on Architectury's common artifact |
+| `fabric` | the Fabric entry points (`com.jsblock.JobanFabric`, `JobanFabricClient`, `ModMenuConfig`) and `fabric.mod.json`. Bundles Rhino through `shadowCommon` |
+| `forge` | the Forge entry points and `META-INF/mods.toml`. Bundles Rhino the same way |
+
+`build.finalizedBy mergeJars` is what turns the two platform jars into the single released jar
+(forgix, `mergedJarName = "MTR-YJCM-${minecraft_version}-${project.mod_version}.jar"`).
+
+| | |
+|---|---|
+| JDK | the sources target **Java 17** (`options.release = 17` for 1.20 in `build.gradle`). The builds here were run with `JAVA_HOME` at Zulu 21 |
+| Gradle | **8.8**. The repository has `gradlew` / `gradlew.bat` but no `gradle/wrapper/gradle-wrapper.jar`, so the wrapper cannot run as shipped -- use your own Gradle 8.8, or the one `tools/run-pids-check.ps1` resolves: `%USERPROFILE%\.gradle\wrapper\dists\gradle-8.8-bin\dl7vupf4psengwqhwktix4v1\gradle-8.8\bin\gradle.bat` |
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
+gradle build --no-daemon --console=plain --max-workers=1
+```
+
+What the build leaves behind -- with `mod_version` at `1.2.12-JSPIDS-2.4`, the version in the file
+names is that value:
+
+| Path | What it is |
+|---|---|
+| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | the merged jar: Forge and Fabric in one file. This is the one to install |
+| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.4.jar` | the Fabric jar the merge is made from |
+| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | the Forge jar the merge is made from |
+| `fabric/build/libs/fabric-1.20-….jar`, `forge/build/libs/forge-1.20-….jar` with `-dev-shadow` in the name | the intermediate shadow jars, before remapping |
+
+The build needs MTR's development jar under `checkouts/1.20/` (git-ignored), and MTR 3 is no longer
+published to Maven -- see [Building MTR 3 against this branch](#building-mtr-3-against-this-branch)
+above for where that jar comes from.
+
+The headless checks build first and then run every check under `tools/checks` against the compiled
+classes; a failure exits non-zero:
+
+```powershell
+.\tools\run-pids-check.ps1
+```
+
 ## FAQ & Support
 ### Why does my game crash?
 There's a variety of reasons, one of the main reasons is that <b>you're using the wrong version of the MTR Mod</b>.  
@@ -379,6 +537,33 @@ Most of the support are done in our Discord for easier communication, please joi
 
 ### I want to know more!
 We have documented most parts of the mod in our [wiki](https://www.joban.tk/wiki/JCM:Joban_Client_Mod).
+
+### A resource pack's PIDS does not work
+That has a section of its own above, with what to send:
+[When a resource pack's PIDS does not work](#when-a-resource-packs-pids-does-not-work).
+
+### Where do script errors go?
+`logs/latest.log`. A panel whose preset throws writes one line:
+
+```
+[Joban Client] PIDS script "..." threw in render(): ...
+```
+
+which names the preset, the script line and the API that was missing. The engine then retries the
+frame once with placeholder data, because a resource pack is not something the mod can edit; the
+throw stays in the log either way, and the player gets a chat notice only when the retry could not
+save the panel.
+
+### How do I turn debugging on?
+Two switches, and either one is enough:
+
+| Switch | How |
+|---|---|
+| The config screen | the script debug switch in `ConfigScreen` -- ModMenu on Fabric, the mods list on Forge |
+| A launch flag | start the game with `-Djsblock.pids.trace=true` |
+
+With either on, every draw call a preset issues is written to the log with its type, depth, colour and
+text.
 
 ## Setup
 
