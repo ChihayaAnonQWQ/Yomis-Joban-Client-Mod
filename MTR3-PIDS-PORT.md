@@ -818,11 +818,25 @@ return path.get(nextStoppingIndex).dwellTime * 10;   // ×10 = ticks，10 ticks 
 `ButterflyLight` / `RenderDepartureTimer` / `RenderPIDSBase` 三处老代码全是 `/2`，只有新写的那处漏了。
 实机确认：改后半秒当秒的错误消失，20 秒停站 → 发车前 10 秒切「车门即将关闭」。
 
-**顺带澄清一件不属于本移植的事**：「请勿靠近车门」的**语音**不由 PIDS 发出。查过三条独立证据——
+**顺带澄清一件不属于本移植的事**：「请勿靠近车门」的**语音**不由 PIDS 发出。查过两条独立证据——
 HKR 包里没有任何音频、两个脚本无一处声音调用；180 个脚本里所有 `playSound` / `playCarSound` /
-`TickableSound` 都在列车与 EyeCandy 脚本里；JCM 2.x 的 PIDS 脚本 API 也没有声音接口。那是 **MTR 自己的
-发车播报**（`TrainClient.simulateTrain` 的两个 `AnnouncementCallback` 之一，正好在车门关闭时响），
+`TickableSound` 调用都在列车与 EyeCandy 脚本里。那是 **MTR 自己的发车播报**
+（`TrainClient.simulateTrain` 的两个 `AnnouncementCallback` 之一，正好在车门关闭时响），
 人声必须由资源包提供并在 MTR 里配置；YJCM 另有一个独立的 `SoundLooper` 方块可放站台循环语音。
+
+> **一处更正（2026-10-08）**：这段原先还写了第四条证据——「JCM 2.x 的 PIDS 脚本 API 也没有声音接口」——
+> **那一句是错的，已作废。**
+>
+> JCM 2.x 的 `PIDSScriptContext` 有 `getSoundManager()`，返回 `ScriptSoundManager`；PIDS 脚本**可以**发声。
+> 写错的原因是把「**这个包不用声音**」推成了「**根本没有这个接口**」——两件事，前者是观察，后者是结论，
+> 而我只查了包和它那两个脚本，就顺手把结论放大到了整个 API。
+>
+> 这条更正有实际后果：2.0 把这套接口实现进来，起因正是**琼岭追加包真的在用**——
+> 缺 `ctx.getSoundManager()` 时它的脚本在第一次渲染就停，面板一直黑。
+> 细节见第 16 条之后新增的声音部分与 README 的 *Script API coverage* 一节。
+>
+> 上面那段**结论本身仍然成立**：对 HKR 那个包而言，「语音不出自 PIDS」由另一条证据支持——
+> 包里没有音频、脚本里没有声音调用。只是支持它的证据从三条变成两条。
 
 **11. 面板悬在方块外面：JCM 的档位是照 MTR 4 的模型调的**
 
