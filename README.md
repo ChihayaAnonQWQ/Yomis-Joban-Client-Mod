@@ -89,6 +89,68 @@ and the engine recovers the frame by retrying it once with a placeholder, becaus
 resource pack is not something the mod can edit. The throw stays in the log; the player
 gets one line, and gets the red error only when the retry could not save the panel.
 
+### Script API coverage
+
+Measured against the official scripting docs, <https://jcm.joban.org/v2.2/dev/scripting/>, rather
+than against whichever presets happened to be tested. Those pages document **515 API entries**;
+this is where the branch stands against them.
+
+The comparison is mechanical: every `Class.method(...)` row is scraped from the 37 documentation
+pages, the port's own members come from `javap -public` over the built jar (nested classes and
+inherited members included), and the two are diffed.
+
+**Implemented** -- the globals a PIDS script can reach:
+
+| | |
+|---|---|
+| Drawing | `Text` `Texture` `Rectangle` `Vector3f` `Matrices` |
+| Timing & state | `Timing` `StateTracker` `CycleTracker` `RateLimit` |
+| Resources | `Resources` (incl. `getMTRVersion`, `getAddonVersion`) `TextUtil` |
+| World | `MinecraftClient` `MinecraftClient.localPlayer()` `PlayerEntity` |
+| Slow work | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
+| Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
+| Misc | `console` `print` `include` `SCRIPT_INPUT` |
+| The panel | `pids.*`, `arrivals().*`, `arrival.*`, `pids.station()`, `route().getPlatforms()`, `ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
+
+**Still missing, by group.** Roughly 154 entries, none of which a PIDS preset is known to call;
+they are listed here so a pack author can tell at a glance rather than by experiment.
+
+*Classes that exist, with methods not yet added (81 entries):*
+
+| Class | Missing |
+|---|---|
+| `Resources` | `read` `readString` `readBufferedImage` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
+| `Station` | `getZone1/2/3`, `getMinX/Y/Z`, `getMaxX/Y/Z`, `getExits`, `inArea`, `isTransportMode`, `getCenter` -- needs the station's geometry, which the wrapper does not carry |
+| `Stop` | `distance` `dwellTime` `dwellTimeMillis` `platform` `destinationName` `destinationStation` `customDestination` and 6 more |
+| `PlayerEntity` | `activeItem` `mainHandItem` `offHandItem` `yaw` `pitch` `bodyYaw` `isSneaking` `isSprinting` `isSwimming` `isHoldingItem` `playerName` |
+| `Platform` | `getId` `getHexId` `getName` `getMidPosition` `getDwellTime` `containsPos` `routes` `routeColors` |
+| `MinecraftClient` | `blockLightAt` `skyLightAt` `getRedstoneLevel` `getScoreboardScore` `getWorldPlayers` `spawnParticleInWorld` |
+| `DataReader` | `asInputStream` `openInputStream` `asByteArray` `asBufferedImage` `asFont` |
+| `SimplifiedRoute` | `getId` `getColor` `getCircularState` `getPlatformIndex` |
+| `NetworkResponse` | `success` `exception` `getHeaders` |
+| `SimplifiedRoutePlatform` | `getDestination` `getStationId` |
+| `PIDSScriptContext` | `getRenderManager()` (3D model rendering), `setDebugInfo()` |
+
+*Classes not implemented at all (73 entries):*
+
+| Class | Entries | Note |
+|---|---|---|
+| `VanillaText` | 11 | rich text for `displayMessage(VanillaText, ...)` |
+| `Siding` `PathData` `Vector` `Position` `Rail` | 43 | TSC data, reached from *vehicle* scripting in practice |
+| `Files` | 5 | reading and saving data files |
+| `VoxelShape` `ItemStack` `TransportMode` `UtilitiesClient` | 11 | odds and ends |
+| `StationExit` | 2 | station exits |
+| `CarDetails` | 1 | `getVehicleId()` -- MTR 3 does not stream per-car data to the client, so `cars()` returns an empty list on purpose |
+
+*Out of scope: a different script type (18 classes, ~162 entries).* `VehicleWrapper`,
+`VehicleScriptContext`, `VehicleExtraData`, `EyecandyWrapper`, `EyecandyScriptContext`,
+`RenderManager`, `ModelManager`, `Model`, `RawModel`, `RawMeshBuilder`, `DynamicModelHolder`,
+`GraphicsTexture`, `QuadDrawCall`, `DisplayHelper`, `BlockUseEvent`, `EyecandyEvents`, `ModelData`,
+`Vehicle`. These belong to Vehicle Scripting and Eyecandy Scripting rather than to PIDS.
+
+If a pack needs one of these, the first four groups are the cheap ones -- a few lines each, and
+`Resources.read*` is the group most likely to matter, since it is how a pack loads its own files.
+
 ### Config screen
 
 The preset selection box was drawn under its text field and covered the rows below, while
