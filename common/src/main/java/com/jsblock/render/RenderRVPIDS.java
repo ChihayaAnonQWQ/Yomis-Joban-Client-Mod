@@ -153,16 +153,32 @@ public class RenderRVPIDS<T extends BlockEntityMapper> extends RenderPIDSBase<T>
             showCarLength = minCars != maxCars;
 
             matrices.pushPose();
-            matrices.translate(0.5, 0, 0.5);
-            UtilitiesClient.rotateYDegrees(matrices, (rotate90 ? 90 : 0) - facing.toYRot());
-            UtilitiesClient.rotateZDegrees(matrices, 180);
-            UtilitiesClient.rotateXDegrees(matrices, rotation);
-            matrices.translate((startX - 8) / 16, -startY / 16, (startZ - 8) / 16 - SMALL_OFFSET * 2);
-            matrices.scale(1F / scale, 1F / scale, 1F / scale);
+            if (projectorMode && entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+                /* A projector's panel is not on the block; see applyProjectorBuiltInTransform. A preset
+                   with a texture but no components -- what a traditional pack contains -- landed inside
+                   the block before this, which looks exactly like nothing having rendered. */
+                applyProjectorBuiltInTransform(matrices, entity, world, facing, rotate90, scale);
+            } else {
+                matrices.translate(0.5, 0, 0.5);
+                UtilitiesClient.rotateYDegrees(matrices, (rotate90 ? 90 : 0) - facing.toYRot());
+                UtilitiesClient.rotateZDegrees(matrices, 180);
+                UtilitiesClient.rotateXDegrees(matrices, rotation);
+                matrices.translate((startX - 8) / 16, -startY / 16, (startZ - 8) / 16 - SMALL_OFFSET * 2);
+                matrices.scale(1F / scale, 1F / scale, 1F / scale);
+            }
 
             /* Render Background */
             final VertexConsumer vertexConsumerBackground = vertexConsumers.getBuffer(MoreRenderLayers.getLight(pidsPreset.image, false));
-            matrices.translate(0, BACKGROUND_Y, 0.01);
+            /* A traditional pack -- a texture with no components and no script -- lands here, which used to
+           be the one path with no frame at all. Same outline, around the built-in panel's rectangle. */
+        if (projectorMode) {
+            matrices.pushPose();
+            matrices.translate(startX - 26F / 2F, -1.5F, 0.02F);
+            drawProjectorFrameIfAiming(world, facing, matrices, vertexConsumers,
+                    (int) BACKGROUND_WIDTH, (int) BACKGROUND_HEIGHT);
+            matrices.popPose();
+        }
+        matrices.translate(0, BACKGROUND_Y, 0.01);
             drawTexture(matrices, vertexConsumerBackground, startX - 26F / 2, -1.5F, BACKGROUND_WIDTH, BACKGROUND_HEIGHT, facing, ARGB_WHITE, MAX_LIGHT_GLOWING);
 
             /* If the player is too far away from the PIDS that not even the train renders */
@@ -220,12 +236,17 @@ public class RenderRVPIDS<T extends BlockEntityMapper> extends RenderPIDSBase<T>
                 }
 
                 matrices.pushPose();
-                matrices.translate(0.5, 0, 0.5);
-                UtilitiesClient.rotateYDegrees(matrices, (rotate90 ? 90 : 0) - facing.toYRot());
-                UtilitiesClient.rotateZDegrees(matrices, 180);
-                UtilitiesClient.rotateXDegrees(matrices, rotation);
-                matrices.translate((startX - 8) / 16, -startY / 16 + i * maxHeight / maxArrivals / 16, (startZ - 8) / 16 - SMALL_OFFSET * 4);
-                matrices.scale(1F / (scale / 2), 1F / (scale / 2), 1F / (scale / 2));
+        if (projectorMode && entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+            /* A projector's panel is not on the block; see applyProjectorBuiltInTransform. */
+            applyProjectorBuiltInTransform(matrices, entity, world, facing, rotate90, scale / 2);
+        } else {
+                    matrices.translate(0.5, 0, 0.5);
+                    UtilitiesClient.rotateYDegrees(matrices, (rotate90 ? 90 : 0) - facing.toYRot());
+                    UtilitiesClient.rotateZDegrees(matrices, 180);
+                    UtilitiesClient.rotateXDegrees(matrices, rotation);
+                    matrices.translate((startX - 8) / 16, -startY / 16 + i * maxHeight / maxArrivals / 16, (startZ - 8) / 16 - SMALL_OFFSET * 4);
+                    matrices.scale(1F / (scale / 2), 1F / (scale / 2), 1F / (scale / 2));
+        }
 
                 if (useCustomMessage) {
                     renderTextWithOffset(matrices, textRenderer, immediate, destinationString, 0, 0, arrivalMaxWidth - platformMaxWidth, 4, textColor, MAX_LIGHT_GLOWING, HorizontalAlignment.LEFT, VerticalAlignment.TOP, false, textFont);

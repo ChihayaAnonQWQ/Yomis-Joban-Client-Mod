@@ -27,12 +27,14 @@ import mtr.mappings.BlockEntityRendererMapper;
 import mtr.mappings.UtilitiesClient;
 import mtr.render.MoreRenderLayers;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
+import org.joml.Matrix4f;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -239,12 +241,22 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final String font = preset.font == null ? geometry.defaultFont : preset.font;
 
         matrices.pushPose();
-        matrices.translate(0.5, 0, 0.5);
-        UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
-        UtilitiesClient.rotateZDegrees(matrices, 180);
-        UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);
-        matrices.translate((geometry.startX - 8) / 16, -geometry.startY / 16, (geometry.startZ - 8) / 16 - SMALL_OFFSET * 2);
-        matrices.scale(1F / geometry.scale, 1F / geometry.scale, 1F / geometry.scale);
+        if (projectorMode && entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+            /* The chain below puts a panel *on its block* -- those are JCM 2.x's RV panel literals. A
+               projector's panel is not on the block, so a components-array preset used to be drawn
+               inside it and looked like nothing had rendered at all. The scripted chain is the one that
+               knows where a projector's panel goes, so a component preset uses it too; JCM 2.x has one
+               renderer per projector for the same reason, and its preset API does not care whether a
+               preset came from a script or from a components array. */
+            applyScriptPanelTransform(matrices, entity, world, pos, facing, geometry);
+        } else {
+            matrices.translate(0.5, 0, 0.5);
+            UtilitiesClient.rotateYDegrees(matrices, (geometry.rotate90 ? 90 : 0) - facing.toYRot());
+            UtilitiesClient.rotateZDegrees(matrices, 180);
+            UtilitiesClient.rotateXDegrees(matrices, geometry.rotation);
+            matrices.translate((geometry.startX - 8) / 16, -geometry.startY / 16, (geometry.startZ - 8) / 16 - SMALL_OFFSET * 2);
+            matrices.scale(1F / geometry.scale, 1F / geometry.scale, 1F / geometry.scale);
+        }
 
         final MultiBufferSource.BufferSource immediate = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
 
@@ -252,6 +264,11 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
            preset takes over the whole panel, so the background has to be drawn here instead
            or every layout preset would be missing its artwork. */
         drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
+
+        /* JCM 2.x draws this from its renderer, so every kind of preset gets it -- a components-array
+           preset used to be framed by nothing here, because only the scripted path asked for it. */
+        drawProjectorFrameIfAiming(world, facing, matrices, vertexConsumers,
+                Math.round(geometry.panelWidth), Math.round(geometry.panelHeight));
 
         final PIDSGraphics graphics = new PIDSGraphics(matrices, vertexConsumers, immediate, facing,
                 MAX_LIGHT_GLOWING, textColor, font, 1F);
@@ -413,7 +430,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
      * present in the jar, and the loader still refused it. A flag on an existing renderer has no
      * such problem and the same behaviour.</p>
      */
-    private boolean projectorMode = false;
+    protected boolean projectorMode = false;
 
     /**
      * The block type this renderer draws, as the scripting docs name it -- {@code rv_pids},
@@ -719,15 +736,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         if (!projectorMode) {
             return;
         }
-        final net.minecraft.world.entity.player.Player player = net.minecraft.client.Minecraft.getInstance().player;
-        if (player == null) {
-            return;
-        }
-        /* MTR's own test, with the runnable standing in for the answer: it is a held-item check, and
-           running it here is how the mod asks the same question elsewhere. */
-        final boolean[] aiming = {false};
-        IBlock.checkHoldingBrush(world, player, () -> aiming[0] = true);
-        if (!aiming[0]) {
+        if (!aimingWithBrush(world)) {
             return;
         }
         /* Four thin strips rather than one quad of a glow texture.
@@ -745,6 +754,83 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         drawFrameStrip(matrices, consumer, facing, 0F, height - thickness, width, thickness);
         drawFrameStrip(matrices, consumer, facing, 0F, thickness, thickness, height - thickness * 2F);
         drawFrameStrip(matrices, consumer, facing, width - thickness, thickness, thickness, height - thickness * 2F);
+    }
+
+    /**
+     * Whether the player is holding a brush, which is when a projector shows where its panel is.
+     *
+     * <p>MTR's own test, with a runnable standing in for the answer: it is a held-item check, and
+     * running it is how the mod asks the same question elsewhere.</p>
+     */
+    protected boolean aimingWithBrush(Level world) {
+        final net.minecraft.world.entity.player.Player player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player == null) {
+            return false;
+        }
+        final boolean[] aiming = {false};
+        IBlock.checkHoldingBrush(world, player, () -> aiming[0] = true);
+        return aiming[0];
+    }
+
+    /**
+     * The four red lines JCM 2.x draws from a projector while a brush is held: the area the panel will
+     * cover, 1.785 by 1 blocks per unit of scale, in the projector's own space.
+     *
+     * <p>Their numbers, their colour and their condition -- see {@code PIDSProjectorRenderer}'s
+     * {@code QueuedRenderLayer.LINES} block, which draws the same four edges in the same space before
+     * the panel scale is applied.</p>
+     */
+    private void drawProjectorRangeLines(PoseStack matrices, float panelScale) {
+        final MultiBufferSource.BufferSource lines = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
+        final VertexConsumer consumer = lines.getBuffer(RenderType.lines());
+        final Matrix4f pose = matrices.last().pose();
+        final float width = 1.785F * panelScale;
+        final float height = panelScale;
+        rangeLine(consumer, pose, 0F, 0F, width, 0F);
+        rangeLine(consumer, pose, 0F, 0F, 0F, height);
+        rangeLine(consumer, pose, width, 0F, width, height);
+        rangeLine(consumer, pose, 0F, height, width, height);
+        lines.endBatch();
+    }
+
+    /** One edge of {@link #drawProjectorRangeLines}, in the projector's own space. */
+    private static void rangeLine(VertexConsumer consumer, Matrix4f pose, float x1, float y1, float x2, float y2) {
+        consumer.vertex(pose, x1, y1, 0F).color(1F, 0F, 0F, 1F).normal(0F, 0F, 1F).endVertex();
+        consumer.vertex(pose, x2, y2, 0F).color(1F, 0F, 0F, 1F).normal(0F, 0F, 1F).endVertex();
+    }
+
+    /**
+     * A projector's panel placement, for the built-in renderer too.
+     *
+     * <p>The built-in chain puts a panel on its block, which is right for RV, SIL, 1A and LCD and wrong
+     * for a projector whose panel hangs in the air -- a preset with a texture but no components, which is
+     * what a traditional pack contains, was drawn inside the block and looked like nothing had rendered.
+     * This is the same chain the scripted path uses, ending in the caller's own units-per-block so the
+     * built-in element positions stay the numbers they were written as.</p>
+     */
+    protected void applyProjectorBuiltInTransform(PoseStack matrices, T entity, Level world,
+                                                  Direction facing, boolean rotate90, float scale) {
+        final com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector projector =
+                (com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) entity;
+        matrices.translate(0.5, 0.5, 0.5);
+        UtilitiesClient.rotateYDegrees(matrices, (rotate90 ? 90 : 0) - facing.toYRot());
+        UtilitiesClient.rotateZDegrees(matrices, 180);
+
+        final float panelScale = (float) projector.getScale();
+        UtilitiesClient.rotateYDegrees(matrices, 90);
+        matrices.translate(-0.5F + (float) projector.getOffsetX(),
+                -0.5F - (float) projector.getOffsetY(),
+                0.5F + (float) projector.getOffsetZ());
+        matrices.mulPose(Axis.XP.rotationDegrees((float) projector.getRotateX()));
+        matrices.mulPose(Axis.YP.rotationDegrees((float) projector.getRotateY()));
+        matrices.mulPose(Axis.ZP.rotationDegrees((float) projector.getRotateZ()));
+        if (aimingWithBrush(world) && projector.getRotateX() == 0 && projector.getRotateY() == 0
+                && projector.getRotateZ() == 0) {
+            drawProjectorRangeLines(matrices, panelScale);
+        }
+        matrices.scale(com.jsblock.block.PIDSProjector.PROJECTOR_PANEL_SCALE * panelScale,
+                com.jsblock.block.PIDSProjector.PROJECTOR_PANEL_SCALE * panelScale, 1F);
+        matrices.scale(1F / scale, 1F / scale, 1F / scale);
     }
 
     /** One edge of {@link #drawProjectorFrameIfAiming}, in canvas units. */
@@ -790,6 +876,14 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
             matrices.mulPose(Axis.XP.rotationDegrees((float) projector.getRotateX()));
             matrices.mulPose(Axis.YP.rotationDegrees((float) projector.getRotateY()));
             matrices.mulPose(Axis.ZP.rotationDegrees((float) projector.getRotateZ()));
+            /* JCM 2.x's projection rectangle, in the same space and under the same condition: four red
+               lines around the area the panel will cover, drawn only while the projector is unrotated.
+               Their rectangle is a plain axis-aligned one, so once the panel is turned it stops saying
+               anything true -- the frame around the panel itself covers that case. */
+            if (aimingWithBrush(world) && projector.getRotateX() == 0 && projector.getRotateY() == 0
+                    && projector.getRotateZ() == 0) {
+                drawProjectorRangeLines(matrices, panelScale);
+            }
             matrices.scale(com.jsblock.block.PIDSProjector.PROJECTOR_PANEL_SCALE * panelScale,
                     com.jsblock.block.PIDSProjector.PROJECTOR_PANEL_SCALE * panelScale, 1F);
             matrices.scale(1F / 96F, 1F / 96F, 1F / 96F);
