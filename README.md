@@ -25,6 +25,26 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 > - The YJCM-specific code is **NOT open source**. Copying, redistributing, or modifying it without permission is prohibited.
 > - If you fork this repository, you must keep both license files and this notice.
 
+## Version differences
+
+Upstream's Joban Client Mod comes in three variants, and it is worth knowing which one this fork is --
+the answer decides whether a resource pack or a preset written for one of them will work here.
+
+| Variant | For | Game versions | Upstream | This fork |
+|---|---|---|---|---|
+| **v1** | MTR 3 | Fabric / Forge 1.16.5 – 1.20.1 | no longer supported | **the base** — YJCM is a v1 fork |
+| **v2** | MTR 4 | Fabric / Forge 1.16.5 – 1.20.4 | the supported line | its PIDS system is what this fork backports |
+| **neo** | NeoMTR (an MTR 3 derivative) | Fabric / NeoForge 1.21.1 | semi-supported | not what this fork targets |
+
+The JSPIDS in the version number is that backport: **v2's PIDS system running on v1** -- JavaScript
+presets, component layouts, the PIDS Projector, and the scripting API they are written against.
+
+MTR 3 here means the **YMTR** line, on Minecraft 1.20.1. Upstream only develops v2 (MTR 4) now, so if you
+are on MTR 3 this fork is the line that still gets PIDS work.
+
+If you are new to MTR or JCM and have no world yet, upstream's advice is the right one: start from MTR 4
+and JCM v2. This fork is for the worlds, stations and resource packs that are already on MTR 3.
+
 ## What this fork changes
 
 > [!WARNING]

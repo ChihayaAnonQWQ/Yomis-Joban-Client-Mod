@@ -25,6 +25,25 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 > - **YJCM 专有代码并非开源**。未经许可复制、再分发或修改均被禁止。
 > - 如果你 fork 本仓库，必须保留两份许可文件和本声明。
 
+## 版本差异
+
+上游的 Joban 客户端 Mod 有三种变体，先弄清本 fork 属于哪一支，因为它决定了某个资源包或预设能不能在这里跑：
+
+| 变体 | 面向 | 游戏版本 | 上游状态 | 本 fork |
+|---|---|---|---|---|
+| **v1** | MTR 3 | Fabric / Forge 1.16.5 – 1.20.1 | 已停止支持 | **本 fork 的基础** —— YJCM 是 v1 的分支 |
+| **v2** | MTR 4 | Fabric / Forge 1.16.5 – 1.20.4 | 持续支持的那一支 | 本 fork 回移的就是它的 PIDS 体系 |
+| **neo** | NeoMTR（MTR 3 的衍生版） | Fabric / NeoForge 1.21.1 | 半支持 | 不是本 fork 的目标 |
+
+版本号里的 **JSPIDS** 指的就是这次回移：**把 v2 的 PIDS 体系搬到 v1 上** —— JavaScript 预设、组件式布局、
+PIDS 投影仪，以及它们所依赖的那套脚本 API。
+
+这里的 MTR 3 指 **YMTR** 这一支，对应 Minecraft 1.20.1。上游现在只维护 v2（MTR 4），所以如果你在
+MTR 3 上，本 fork 就是还在继续做 PIDS 的那条线。
+
+如果你是 MTR 或 JCM 的新手、还没有存档，上游的建议是对的：从 **MTR 4 + JCM v2** 开始。
+本 fork 是给那些**已经在 MTR 3 上**的存档、车站和资源包用的。
+
 ## 本分支做了什么
 
 > [!WARNING]
