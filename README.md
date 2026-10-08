@@ -1,4 +1,4 @@
-# Yomi's Joban Client Mod
+# Yomi's Joban Client Mod-JSPIDS
 
 **English** | [中文](README_CN.md)
 
