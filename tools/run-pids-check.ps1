@@ -18,6 +18,14 @@
 #                       Texture.texture() must not resolve outside the script's own pack.
 #   ScriptCanvasCheck   checks the runtime canvas: that drawing it paints pixels, that a failure
 #                       to upload it degrades, and that close()/reload release the texture.
+#   ScriptCaseCheck     checks the spelling tolerance for script names: a pack that stored
+#                       Digital_Rail.js has to be reachable, and a capital must not be a way out of
+#                       a pack.
+#   ScriptHkrCheck      runs HKR's terminus rule -- the one that decides "not in service" from the
+#                       panel's own index in the service's calling pattern -- against a real MTR
+#                       world, at both ends of a three-station line. Pass -HkrPack to run the two
+#                       shipped presets through it as well; without it the check runs an embedded
+#                       preset that is that rule and nothing else.
 #
 # ScriptApiCheck is run against every script in -Script (default: the built-in
 # jsblock:scripts/builtin/pids_1a.js) at several arrival counts, because a preset that
@@ -40,6 +48,11 @@ param(
 
     # Extra resource roots, searched in addition to common/src/main/resources.
     [string[]]$ResourceRoot = @(),
+
+    # A directory holding assets/jsblock/scripts/hkr_pids_default.js (an extracted copy of the
+    # HKR pack's "lower" tree). Supplied, ScriptHkrCheck also runs HKR's two shipped presets, so
+    # the pack's own wording is asserted and not only the rule's.
+    [string]$HkrPack = '',
 
     # Skip the Gradle build and reuse the existing classes (useful when iterating on a check).
     [switch]$SkipBuild
@@ -107,7 +120,8 @@ $checkSources = @(
     'tools\checks\com\jsblock\script\ScriptCanvasCheck.java',
     'tools\checks\com\jsblock\script\FilesCheck.java',
     'tools\checks\com\jsblock\script\FilesCheckSupport.java',
-    'tools\checks\com\jsblock\script\ScriptCaseCheck.java'
+    'tools\checks\com\jsblock\script\ScriptCaseCheck.java',
+    'tools\checks\com\jsblock\script\ScriptHkrCheck.java'
 )
 foreach ($source in $checkSources) {
     if (-not (Test-Path $source)) { throw "check source missing: $source" }
@@ -193,6 +207,30 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptCaseCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "ScriptCaseCheck (exit $NativeExitCode)" }
+
+# HKR's terminus rule, on a real MTR world: the same panel preset has to say "not in service" at
+# the last stop of the line and draw the real arrivals at a stop in the middle. Run last, because
+# it is the only check that builds MTR's own client data.
+$hkrScripts = @()
+$hkrRoots = @()
+if ($HkrPack -ne '') {
+    if (-not (Test-Path $HkrPack)) { throw "HKR pack root missing: $HkrPack" }
+    foreach ($name in @('hkr_pids_default.js', 'hkr_pids_platform.js')) {
+        $candidate = Join-Path $HkrPack "assets\jsblock\scripts\$name"
+        if (Test-Path $candidate) { $hkrScripts += $candidate }
+    }
+    $hkrRoots = @($HkrPack)
+    if ($hkrScripts.Count -eq 0) {
+        Write-Host "   no HKR preset found under $HkrPack" -ForegroundColor Yellow
+    }
+}
+Write-Host ''
+Write-Host '== HKR terminus rule (ScriptHkrCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments (@(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptHkrCheck'
+) + $hkrScripts + $hkrRoots + @('common\src\main\resources'))
+if ($NativeExitCode -ne 0) { $failures += "ScriptHkrCheck (exit $NativeExitCode)" }
 
 # The built-in pids_1a.js is the script the mod ships, so it is the one that must never
 # regress. Anything passed through -Script is run in addition to it.

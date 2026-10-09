@@ -698,6 +698,107 @@ v2 语境下这属于「包用了 v2 没有的 API」，但我们既然提供了
 > **不要**为了让某个包不报错去改 `FilesUtil` 的读写语义：本 bug 里 `Files` 全程工作正常，
 > `undefined` 只是上游 `state.stationId` 没赋值的结果。
 
+### 4.14 HKR 的「不載客列車」判定：终点站判真、中间站判假（本次修复）
+
+**规格**（`HKR PIDS.zip` → `assets/jsblock/scripts/hkr_pids_default.js:396-410`，与
+`hkr_pids_platform.js:239-252` **逐字相同**）：
+
+```js
+function isNonPassenger(train, pids) {
+    let route = train.route();
+    if (!route) return true;
+    let platforms = route.getPlatforms();          // ← route().getPlatforms()，即本班次的停靠序列
+    if (!platforms || platforms.size() === 0) return true;
+    let currentStation = pids.station();           // ← 面板自己在哪一站
+    if (!currentStation) return false;
+    let curName = "" + currentStation.name;
+    for (let i = 0; i < platforms.size(); i++) {
+        if ("" + platforms.get(i).getStationName() === curName) {
+            return i >= platforms.size() - 1;      // ← i = 面板站在这条线路站表里的下标
+        }
+    }
+    return false;
+}
+```
+
+`i` 由**面板站名**去 `route().getPlatforms()`（我们这边是 `PIDSWrapper.RouteInfo#getPlatforms()`
+→ `RouteStopList`，每站一个 `RouteStopInfo`，`getStationName()` 读 `PIDSData.stationOf(platformId)`）
+里逐个比对得来；`platforms.size()` 就是 `Route#platformIds` 的长度。**所以这条判定的答案完全取决于
+`pids.station()` 报的是不是面板真正所在的那一站。**
+
+**两套 fixture 的实测**（`ScriptHkrCheck`，线路 `你好 → 测试 → 114514`，三站三站台，
+面板放在站台上、`ScheduleEntry.currentStationIndex = 2` 指向终点）：
+
+| # | 面板位置 | 面板 `platformIds` | 修复前 | 修复后 | 期望 |
+|---|---|---|---|---|---|
+| 1 | 终点站 114514 | `[103]` | 显示「不載客列車」 ✓ | 同左 ✓ | true |
+| 2 | 中间站 测试 | `[102]` | 显示真实班次 ✓ | 同左 ✓ | false |
+| 3 | **终点站 114514** | **空（自动）** | **`pids.station()` = null ⇒ 显示真实班次 ✗** | 显示「不載客列車」 ✓ | true |
+| 4 | 中间站 测试 | 空（自动） | 显示真实班次 ✓ | 同左 ✓ | false |
+| 5 | **中间站 测试** | **`[103]`（过滤器指向终点端）** | **`pids.station()` = "114514" ⇒ 显示「不載客列車」 ✗** | 显示真实班次 ✓ | false |
+| 6 | 终点站 114514 | `[101]`（指向另一端） | 显示真实班次 ✗ | 显示「不載客列車」 ✓ | true |
+
+第 3 行与第 5 行是**同一处缺陷的两个方向**，都不是 fixture 造成的：
+
+1. **自动面板（无过滤器）**：`pids.station()` 过去只从 `platformIds` 推，而自动面板的这个集合**是空的**，
+   于是 `primaryPlatformId()` 返回 0、`stationOf(0)` 返回 null、`pids.station()` 报 null。
+   脚本对 null 的回答是 `return false`（第 402 行），**终点站因此被判为「载客」**，画出一班真实班次。
+2. **多站台过滤器**：集合是 `Set<Long>`，`platformIds.get(0)` 是**哈希顺序**而不是面板自己的站台
+   （`PIDSWrapper#primaryPlatformId` 的 javadoc 早就写着这一点，之前的修法只改了「空间查询优先」那一半）。
+   面板站名被报成线路另一端的站，判定就按**那一站**回答：中间站的面板戴上终点站的名字 ⇒
+   `i == size-1` 成立 ⇒ 每一班都印「不載客列車」。
+
+**MTR 自己的规则**（这是我们该对齐的）：`IPIDS.TileEntityPIDS#getPlatformId` 取的是**离方块最近的站台**，
+**完全不查 `platformIds`**。渲染器在收集本帧到站列表时算的就是这个值（`RenderPIDSBase#renderScripted`
+的 `else` 分支，`RailwayData.getClosePlatformId(...)`），所以修法不是再猜一次，而是**把这个答案交给包装对象**：
+
+- `PIDSWrapper` 新增 `resolvedPlatformId` 字段与一个 12 参构造器（旧的 5 参与 11 参构造器**保留不变**，
+  分别委托给它并传 0，所以既有调用点一个都不用改）；`withLenientArrivals()` 把该字段一并复制，
+  否则「首次渲染抛异常 → 宽松重试」那条路上的面板会丢掉自己的站。
+- `PIDSWrapper#primaryPlatformId()` 的解析顺序改为：**渲染器给的答案**（且它确实能解析出站）→
+  按方块位置现查最近站台（同样要求能解析出站）→ 过滤器首元素（同样要求能解析出站）→ 0。
+  最后一档加了「必须真的指向某个站」这道闸：过去一个解析不出来的 id 会把 `stationOf` 的 null 直接
+  变成 0，现在宁可报 0（脚本本来就要求会处理 null），也不报一个不相干的站名。
+- `RenderPIDSBase#renderScripted` 只在**方块自身没有过滤器**时把 `getClosePlatformId` 的结果传下去；
+  有过滤器的面板传 0，走原来的解析（最近站台优先、过滤器首元素兜底），**行为不变**——
+  这正是不破坏其它 10 个包的那条边界。
+
+**为什么不是改脚本**：`isNonPassenger` 的两行原文在资源包里，资源包只读；脚本没有别的办法知道
+「面板站在哪」，这个答案只能由宿主给。
+
+**「不載客列車」这个字符串的检查口径**：两个预设的文案都走 `TextUtil.cycleString("不載客列車|Not in Service")`，
+哪一半取决于**墙钟**，所以检查断言的是**判定结果**（终点站画徽标 / 中间站不画徽标、
+终点站不画真实班次），而不是某一帧恰好落在哪种语言上——一次运行里同一段文案可能在两次调用间切换语言。
+
+**`Text.marquee(number)` 的核查结论：本来就有，不需要补。** 语料里 55 处带参数的调用
+（`World_PIDS-Pack-200` ×37、`琼岭追加包26.8.3` ×6、`上海地铁-PIDS` ×5、`met transit` ×4、
+`HKR PIDS` ×2、另有 1 处）**全部是数字字面量**：`.marquee(3)` / `(3.0)` / `(10)` / `(12)` / `(20)` / `(25.0)`。
+我们 `ScriptDrawCalls.Text` 同时有 `marquee()` 与 `marquee(double durationTickOverride)`
+（`ScriptDrawCalls.java:327` 与 `:332`），Rhino 把 JS number 归一到 `double` 重载，
+所以 `EvaluatorException: Can't find method …marquee(number)` 在本分支**复现不出来**。
+`ScriptHkrCheck` 里加了一组断言把这条钉住（`marquee(12)` / `marquee(3.0)` / `marquee(25.0)` / `marquee()` 四种写法
+都必须落到包装对象上），并额外核对：**没有任何真实包用字符串调用它**（字符串不会被 Rhino 自动转成 double，
+真要用得自己加重载，但那不是「脚本普遍这么写」）。
+
+**本次没有验证的事（诚实清单）**：
+
+- **没有实机验证**。全部结论来自编译 + 无头检查；`Renderer` 那条路径（`panelPlatformId` 的真实取值）
+  在游戏里才跑得到。无头侧复现的是**同一条规则**——`RailwayData.getClosePlatformId` 的快速查表
+  （fixture 里把站台方块写进 `DataCache.blockPosToPlatformId`）——但「面板方块真的站在站台上的哪个位置」
+  是 fixture 摆出来的，不是从存档里读的。
+- **自动面板（无过滤器）在游戏里能否解析出站台，仍未实测**。这条依赖
+  `getClosePlatformId` 在 5 格内找到一个站台；找不到时本修复**不会**让终点站面板变对
+  （它仍旧报 `null`，脚本仍旧 `return false`）。这是刻意的保守取舍：宁可「终点站画真实班次」
+  也不要「中间站印不載客列車」，但它在很稀疏的站台布置下仍可能复现。
+- **过滤器里混了不同车站的站台**时，有过滤器的面板仍按旧规则解析（最近站台优先、过滤器首元素兜底）。
+  空间查询成功时这没问题（上面第 6 组 fixture 就是：过滤器指向另一端，解析结果照样是面板所在的终点站）；
+  **真正没兜住的是「空间查询也失败、只剩过滤器首元素」那一档**——面板自己的过滤器指向另一站时会再次误报。
+  这一档没改，是为了不破坏另外 10 个包的通过率。
+- **`marquee` 只验证了数字**。字符串参数（`.marquee("12")`）在本分支与真实语料里都不存在；
+  确认过语料里**没有**这种写法，所以没有为它加重载。
+- 检查里用的是自建的三站线路与真实 `Station` / `Platform` / `Route` 对象，
+  **不覆盖 MTR 存档里的环形线路、支线、多站台同站名**这些编组方式。
+
 ---
 
 ## 5. 顺带修复的三个上游缺陷
@@ -808,9 +909,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
       ..\..\yjcm-recon\pids-fixed\assets\nanbin\pids\script\crt_pids_1.js
 ```
 
+`ScriptApiCheck` 那一路是「没崩、有绘制调用」级别的检查。要连 HKR 那两个预设的**文案**一起断言
+（终点站必须画「不載客列車」、中间站不许画），再加 `-HkrPack`：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
+    -HkrPack ..\..\_v2api\packs-all\HKR PIDS\lower
+```
+
+`-HkrPack` 指向的是**解包后的包根**（里面有 `assets/jsblock/scripts/hkr_pids_default.js`），
+不带这个参数时 `ScriptHkrCheck` 仍然会跑，只是改用内嵌的那份「只有这条判定」的预设。
+
 ### 7.3 最近一次验证结果
 
-> **`create()` 拿到真 `pids`（§4.13，本次）**：`.\tools\run-pids-check.ps1`（含完整
+> **HKR 终点站判定（§4.14，本次）**：`.\tools\run-pids-check.ps1 -SkipBuild -HkrPack <HKR PIDS\lower>`
+> 的汇总行 **`RESULT: ALL CHECKS PASSED`**；新增的 `ScriptHkrCheck` 单独跑一遍是
+> **`RESULT: HKR TERMINUS RULE OK`**（6 组 fixture + 2 个真实预设 × 两站 + `marquee` 4 条断言）。
+> 11 个真实包、112 个 `.js` 在修复后**重跑一遍**：**仍是 108 通过 / 4 失败**，
+> 也就是说这次改动**没有让任何一个既有脚本掉出通过**（失败清单与 §2.2 的四条逐条相同）。
+> 反向验证也做了：把 `PIDSWrapper` / `RenderPIDSBase` 两处改动用 `git stash` 暂时退回，
+> 重新编译后**同一条检查在自动面板的终点站 fixture 上失败**（`pids.station()` 读回 `null`），
+> 恢复改动、重编译后再次全绿——即这组 fixture 确实盯住了这个缺陷，而不是恒真。
+>
+> **`create()` 拿到真 `pids`（§4.13）**：`.\tools\run-pids-check.ps1`（含完整
 > `gradle build`）汇总行 `RESULT: ALL CHECKS PASSED`；`gradle :common:compileJava`
 > `BUILD SUCCESSFUL`。另用
 > `-ResourceRoot <解包目录> -Script @('<解包目录>\assets\jsblock\scripts\met_running_board.js')`

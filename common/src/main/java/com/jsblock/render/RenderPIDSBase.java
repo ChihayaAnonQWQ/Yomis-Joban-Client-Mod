@@ -603,13 +603,26 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         }
 
         final List<ScheduleEntry> scheduleList = new ArrayList<>();
+        /* The platform this panel is standing at, resolved the way MTR resolves it -- the one
+           nearest the block (IPIDS.TileEntityPIDS#getPlatformId) -- and handed to the wrapper so
+           that pids.station() names the station these arrivals came from.
+
+           It is only resolved when the block carries no platform filter of its own: then there is
+           nothing else to answer pids.station() with, and it used to answer null. HKR's terminus
+           rule (i >= platforms.size() - 1 over route().getPlatforms()) finds the panel's own i by
+           matching pids.station().name against the stops, so with no name it never matched and a
+           terminus panel drew a real departure where the "not in service" wording belongs. A
+           filtered panel hands 0 and keeps its previous resolution: nearest platform first, the
+           filter's first id as the fallback. */
+        final long panelPlatformId;
         if (!platformIds.isEmpty()) {
             for (long platformId : platformIds) {
                 scheduleList.addAll(ClientData.SCHEDULES_FOR_PLATFORM.getOrDefault(platformId, Collections.emptySet()));
             }
+            panelPlatformId = 0L;
         } else {
-            final long closestPlatformId = RailwayData.getClosePlatformId(ClientData.PLATFORMS, ClientData.DATA_CACHE, pos);
-            scheduleList.addAll(ClientData.SCHEDULES_FOR_PLATFORM.getOrDefault(closestPlatformId, Collections.emptySet()));
+            panelPlatformId = RailwayData.getClosePlatformId(ClientData.PLATFORMS, ClientData.DATA_CACHE, pos);
+            scheduleList.addAll(ClientData.SCHEDULES_FOR_PLATFORM.getOrDefault(panelPlatformId, Collections.emptySet()));
         }
         Collections.sort(scheduleList);
 
@@ -632,7 +645,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final com.jsblock.script.PIDSWrapper wrapper = new com.jsblock.script.PIDSWrapper(
                 scriptType(), hideArrivals == null ? 0 : hideArrivals.length,
                 canvasWidth, canvasHeight, pos, platformIds, customMessages, hideArrivals, scheduleList,
-                isKeyFacing(facing), hidePlatforms);
+                isKeyFacing(facing), hidePlatforms, panelPlatformId);
 
         matrices.pushPose();
         applyScriptPanelTransform(matrices, entity, world, pos, facing, geometry);

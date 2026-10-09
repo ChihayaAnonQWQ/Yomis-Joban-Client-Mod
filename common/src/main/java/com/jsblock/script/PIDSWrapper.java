@@ -32,6 +32,13 @@ public class PIDSWrapper {
 
 	private final BlockPos blockPos;
 	private final List<Long> platformIds;
+	/**
+	 * The platform the panel itself is standing at, as the renderer resolved it when it gathered
+	 * this frame's arrivals; {@code 0} when the caller did not resolve one.
+	 *
+	 * <p>See {@link #station()} for why this is carried rather than looked up on demand.</p>
+	 */
+	private final long resolvedPlatformId;
 	private final String[] customMessages;
 	private final boolean[] rowHidden;
 	private final List<ScheduleEntry> scheduleList;
@@ -47,26 +54,56 @@ public class PIDSWrapper {
 	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
 					   List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
 					   List<ScheduleEntry> scheduleList) {
-		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList, true, false);
+		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList, true, false, 0L);
 	}
 
 	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
 					   List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
 					   List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden) {
 		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList,
-				keyBlock, platformNumberHidden, false);
+				keyBlock, platformNumberHidden, 0L);
+	}
+
+	/**
+	 * The full constructor, which also carries the platform the panel is standing at.
+	 *
+	 * <p>The engine resolves that platform while it gathers the frame's arrivals (MTR's rule:
+	 * the platform nearest the block), and a script's {@code pids.station()} has to name the
+	 * same station the schedule was read from. Re-deriving it from {@code platformIds} cannot:
+	 * that set is a {@code Set<Long>}, and it is empty altogether on an auto-detected panel, so
+	 * the derivation answered {@code null} for every panel that had no filter of its own. See
+	 * {@link #station()}.</p>
+	 *
+	 * @param resolvedPlatformId the platform nearest the block, or {@code 0} when the caller has
+	 *                           none to report
+	 */
+	public PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
+					   List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
+					   List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden,
+					   long resolvedPlatformId) {
+		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList,
+				keyBlock, platformNumberHidden, false, resolvedPlatformId);
 	}
 
 	private PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
 						List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
 						List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden,
 						boolean lenientArrivals) {
+		this(type, rows, width, height, blockPos, platformIds, customMessages, rowHidden, scheduleList,
+				keyBlock, platformNumberHidden, lenientArrivals, 0L);
+	}
+
+	private PIDSWrapper(String type, int rows, int width, int height, BlockPos blockPos,
+						List<Long> platformIds, String[] customMessages, boolean[] rowHidden,
+						List<ScheduleEntry> scheduleList, boolean keyBlock, boolean platformNumberHidden,
+						boolean lenientArrivals, long resolvedPlatformId) {
 		this.type = type;
 		this.rows = rows;
 		this.width = width;
 		this.height = height;
 		this.blockPos = blockPos;
 		this.platformIds = platformIds == null ? new ArrayList<>() : new ArrayList<>(platformIds);
+		this.resolvedPlatformId = resolvedPlatformId;
 		this.customMessages = customMessages == null ? new String[0] : customMessages;
 		this.rowHidden = rowHidden == null ? new boolean[0] : rowHidden;
 		this.scheduleList = scheduleList == null ? new ArrayList<>() : new ArrayList<>(scheduleList);
@@ -84,6 +121,17 @@ public class PIDSWrapper {
 	 * that threw when it indexed past the end. See
 	 * {@link ScriptEngine.Program#adoptLenientArrivals()}.</p>
 	 */
+	public PIDSWrapper withLenientArrivals() {
+		final PIDSWrapper copy = new PIDSWrapper(type, rows, width, height, blockPos, platformIds, customMessages,
+				rowHidden, scheduleList, keyBlock, platformNumberHidden, true, resolvedPlatformId);
+		return copy;
+	}
+
+	/** @return the platform the renderer resolved for this panel, or {@code 0} when it had none. */
+	public long resolvedPlatformId() {
+		return resolvedPlatformId;
+	}
+
 	/**
 	 * The scope the current script call runs in, published by the engine for its duration.
 	 *
@@ -122,12 +170,6 @@ public class PIDSWrapper {
 			}
 		}
 		return new org.mozilla.javascript.NativeArray(array);
-	}
-
-	public PIDSWrapper withLenientArrivals() {
-		final PIDSWrapper copy = new PIDSWrapper(type, rows, width, height, blockPos, platformIds, customMessages,
-				rowHidden, scheduleList, keyBlock, platformNumberHidden, true);
-		return copy;
 	}
 
 	/** @return whether {@code arrivals().get(i)} hands out a placeholder past the end. */
@@ -221,10 +263,50 @@ public class PIDSWrapper {
 		return platformNumberHidden;
 	}
 
-	/** @return the station the panel serves, or {@code null} when it cannot be resolved. */
+	/**
+	 * The station the panel itself serves, or {@code null} when it cannot be resolved.
+	 *
+	 * <h2>Why the renderer's own answer comes first</h2>
+	 * <p>MTR reads a panel's platform from the block: {@code IPIDS.TileEntityPIDS#getPlatformId}
+	 * is the platform nearest the block, and the block entity's {@code platformIds} set is not
+	 * consulted. The renderer resolves exactly that while it gathers the frame's arrivals, and
+	 * hands the result here, so the station a preset reads is the station the schedule was read
+	 * from — one answer, not two.</p>
+	 *
+	 * <p>Deriving it here instead cannot give that answer in two cases that both occur:</p>
+	 * <ul>
+	 *   <li><b>An auto-detected panel</b> — no filtered platforms, so {@code platformIds} is
+	 *       empty and there is nothing to derive from. This answered {@code null}, and HKR's
+	 *       terminus rule ({@code i >= platforms.size() - 1} over
+	 *       {@code route().getPlatforms()}) needs the panel's station name to find its own
+	 *       {@code i}: with no name it never matched, so a terminus panel was told it was in
+	 *       service and drew a real departure where the "not in service" wording belongs.</li>
+	 *   <li><b>A panel filtered to several platforms</b> — {@code platformIds} is a
+	 *       {@code Set<Long>}, and its first element is hash order rather than the panel's own
+	 *       platform, so the name that came out could be a station at the other end of the line.
+	 *       The same rule then read the wrong {@code i} in the other direction: a mid-line panel
+	 *       wearing the terminus's name is "at" the last stop, and every arrival there printed
+	 *       "不載客列車 / Not in Service".</li>
+	 * </ul>
+	 *
+	 * <p>The two fallbacks that follow are for callers with no renderer to resolve one: the
+	 * on-demand nearest-platform lookup, then the filtered set's first id. Both are also what
+	 * this method did before it was passed an answer, so nothing that worked stops working.</p>
+	 */
 	public StationInfo station() {
 		final Station station = PIDSData.stationOf(primaryPlatformId());
 		return station == null ? null : new StationInfo(station);
+	}
+
+	/**
+	 * The station name the panel serves, or an empty string — {@link #station()} as a string.
+	 *
+	 * <p>Kept separate so a caller that only wants the name does not build a view for it, and
+	 * routed through the same resolution for the same reason.</p>
+	 */
+	public String stationName() {
+		final Station station = PIDSData.stationOf(primaryPlatformId());
+		return station == null || station.name == null ? "" : station.name;
 	}
 
 	/**
@@ -286,12 +368,6 @@ public class PIDSWrapper {
 		}
 	}
 
-	/** @return the name of the station the panel serves, or an empty string. */
-	public String stationName() {
-		final Station station = PIDSData.stationOf(primaryPlatformId());
-		return station == null || station.name == null ? "" : station.name;
-	}
-
 	/**
 	 * The platform this panel is standing at.
 	 *
@@ -308,14 +384,30 @@ public class PIDSWrapper {
 	 * current station were wrong in the same way.</p>
 	 *
 	 * <p>The set is still the fallback for the case MTR cannot answer: no platform near enough
-	 * for {@code getClosePlatformId} to pick one.</p>
+	 * for {@code getClosePlatformId} to pick one. The renderer's own resolution, when it has one,
+	 * is consulted before both — see {@link #station()}.</p>
 	 */
 	private long primaryPlatformId() {
+		if (resolvedPlatformId != 0) {
+			final Station resolved = PIDSData.stationOf(resolvedPlatformId);
+			if (resolved != null) {
+				return resolvedPlatformId;
+			}
+		}
 		final long closest = PIDSData.closestPlatformId(blockPos);
 		if (closest != 0) {
-			return closest;
+			final Station found = PIDSData.stationOf(closest);
+			if (found != null) {
+				return closest;
+			}
 		}
-		return platformIds.isEmpty() ? 0 : platformIds.get(0);
+		/* Last resort, and only when the id actually names a station: an unresolvable id answers
+		   0, which is the "no station" answer a preset already has to cope with, rather than an
+		   unrelated station's name. */
+		if (!platformIds.isEmpty() && PIDSData.stationOf(platformIds.get(0)) != null) {
+			return platformIds.get(0);
+		}
+		return 0;
 	}
 
 	// ==================================================================
