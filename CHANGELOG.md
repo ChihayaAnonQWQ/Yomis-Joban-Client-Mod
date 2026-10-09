@@ -32,23 +32,35 @@ What changes for a user is the failure and nothing else: a Fabric instance witho
 now stopped by the loader, which names the dependency that is missing, instead of by a class that fails
 to link later.
 
-### A mid-line panel no longer prints 「不載客列車」
+### HKR's "not in service" rule is answered from the panel's own platform
 
-HKR's preset decides "不載客列車 / Not in Service" from the name `pids.station()` returns: it walks the
+A panel wearing a filtered or an auto-detected platform filter could be told the wrong station by
+`pids.station()`, and HKR decides "不載客列車 / Not in Service" from exactly that name: it walks the
 service's calling pattern for the panel's own index and reports not-in-service when that index is the
-last stop. So the name has to be the station the panel is actually at, and it was not always. A panel
-with no filter of its own had no station to resolve and answered `null` -- HKR, with no index to find,
-answered "in service", which is how **a terminus panel drew a real departure instead of the badge**.
-A panel filtered to several platforms took its name from the first element of a `Set<Long>`, whose
-order is hash order and not the panel's, so the name could be a station at the other end of the line --
-a mid-line panel wearing the terminus's name is "at" the last stop, which is how **「不載客列車」 ended
-up on a panel with real trains on it**.
+last stop. Two ways it went wrong, and both are fixed by the engine resolving the panel's platform
+the way MTR does — nearest the block — and handing that answer to `pids.station()`:
 
-The engine now resolves the panel's platform the way MTR does -- nearest the block -- and hands that
-station to `pids.station()`, so an auto-detected panel and a multi-platform filter both answer with the
-platform the panel is on. `ScriptHkrCheck` pins it against a real MTR world, terminus and mid-line.
+* a panel with no filter of its own had nothing to resolve a station from at all, so
+  `pids.station()` answered `null`. HKR's rule cannot find an index without a name and answers "in
+  service", so **a terminus panel drew a real departure instead of the badge**;
+* a panel filtered to several platforms had its station taken from the filter's first element —
+  and that set is a `Set<Long>`, whose order is hash order, not the panel's — so the name could be a
+  station at the other end of the line. A mid-line panel wearing the terminus's name is "at" the
+  last stop, which printed **"不載客列車" on a panel that has real trains**.
 
-# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.4（未发布）
+`PIDSWrapper` carries the resolved platform now, and a copy made for the lenient-arrivals retry
+carries it too. `Text.marquee(number)` was checked at the same time and needed nothing: all 55
+argumented call sites in the corpus pass a number literal, and Rhino resolves those against the
+existing `double` overload. `ScriptHkrCheck` pins both, and the eleven-pack run is unchanged at
+108/112.
+
+### Checks
+
+| Check | What it pins |
+|---|---|
+| `ScriptHkrCheck` | HKR's terminus rule on a real MTR world: three stations (`你好 → 测试 → 114514`), real `Station`/`Platform`/`Route` objects in MTR's own client caches, and the same preset run at the terminus and mid-line. The terminus has to answer `true` and the mid-line `false`, including for an auto-detected panel (no filter) and for a filter naming a platform at the other end of the line; `-HkrPack` also runs HKR's two shipped presets and asserts the badge and the route-map strip on their own draw calls. Its second half pins `Text.marquee(number)` |
+
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.4
 
 ## Compatible MTR Version
 MTR
@@ -123,28 +135,6 @@ tolerance and what makes `include()` of a capitalised name work.
 and `ScriptCaseCheck` pins the part that matters: `..`, an absolute path and a backslash are still
 refused on both paths. A capital is not a way out of a pack.
 
-### HKR's "not in service" rule is answered from the panel's own station
-
-A panel wearing a filtered or an auto-detected platform filter could be told the wrong station by
-`pids.station()`, and HKR decides "不載客列車 / Not in Service" from exactly that name: it walks the
-service's calling pattern for the panel's own index and reports not-in-service when that index is the
-last stop. Two ways it went wrong, and both are fixed by the engine resolving the panel's platform
-the way MTR does — nearest the block — and handing that answer to `pids.station()`:
-
-* a panel with no filter of its own had nothing to resolve a station from at all, so
-  `pids.station()` answered `null`. HKR's rule cannot find an index without a name and answers "in
-  service", so **a terminus panel drew a real departure instead of the badge**;
-* a panel filtered to several platforms had its station taken from the filter's first element —
-  and that set is a `Set<Long>`, whose order is hash order, not the panel's — so the name could be a
-  station at the other end of the line. A mid-line panel wearing the terminus's name is "at" the
-  last stop, which printed **"不載客列車" on a panel that has real trains**.
-
-`PIDSWrapper` carries the resolved platform now, and a copy made for the lenient-arrivals retry
-carries it too. `Text.marquee(number)` was checked at the same time and needed nothing: all 55
-argumented call sites in the corpus pass a number literal, and Rhino resolves those against the
-existing `double` overload. `ScriptHkrCheck` pins both, and the eleven-pack run is unchanged at
-108/112.
-
 ### Checks
 
 | Check | What it pins |
@@ -152,7 +142,6 @@ existing `double` overload. `ScriptHkrCheck` pins both, and the eleven-pack run 
 | `FilesCheck` | The storage global: save/read round-trip, `null` for a file that was never written, UTF-8 and multi-line values, `saveData` creating its directories, `deleteData` being idempotent, seven escape shapes × all four methods refused with v2's wording, the whole API driven from inside a real script (Rhino, real scope, real sandbox), and the test-only root override being unreachable from one |
 | `ScriptCaseCheck` | Reference spelling: an exact reference is **not** folded, a capital folds into a usable location, six escape shapes stay refused on both paths, the candidate order, and the disk lookup against a temporary pack tree — including that the answer carries the on-disk spelling rather than the requested one, which is the thing a case-insensitive filesystem would otherwise hide |
 | `ScriptApiCheck` | Unchanged assertions; it now accepts several resource roots so a real pack can be run, and its `include` gained the same case tolerance the engine has |
-| `ScriptHkrCheck` | HKR's terminus rule on a real MTR world: three stations (`你好 → 测试 → 114514`), real `Station`/`Platform`/`Route` objects in MTR's own client caches, and the same preset run at the terminus and mid-line. The terminus has to answer `true` and the mid-line `false`, including for an auto-detected panel (no filter) and for a filter naming a platform at the other end of the line; `-HkrPack` also runs HKR's two shipped presets and asserts the badge and the route-map strip on their own draw calls. Its second half pins `Text.marquee(number)` |
 
 ### Real packs, for the record
 
