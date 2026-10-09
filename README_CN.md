@@ -34,7 +34,7 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 | 加载器 | **Forge 与 Fabric，同一颗 jar 都能装** |
 | MTR | MTR 3，也就是 **YMTR** 这一支 —— 1.20.1 上对应 3.6.3 —— 而且必须是**你那个平台**的那一份 |
 
-**「同一颗 jar」是当场可以验证的。** `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` 是合并产物：
+**「同一颗 jar」是当场可以验证的。** `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` 是合并产物：
 把它打开，两份清单并排躺在根目录，各自带着自己的 mixin 配置。
 
 | jar 里面 | Forge | Fabric |
@@ -51,9 +51,9 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 
 | 平台 | 需要装什么 | 说明 |
 |---|---|---|
-| **两边都要** | 本模组：`MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` 放进 `mods/` | 合并包；两个加载器装的是同一个文件 |
+| **两边都要** | 本模组：`MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` 放进 `mods/` | 合并包；两个加载器装的是同一个文件 |
 | **两边都要** | MTR 3 / YMTR 3.6.3 —— **对应你平台的那一份** | Forge 用 `MTR-forge-1.20.1-3.6.3.jar`，Fabric 用 `MTR-fabric-1.20.1-3.6.3.jar`。MTR 每个加载器各一个 jar，两者不能互换；两份清单都把 `mtr` 列为必需依赖 |
-| **两边都要** | Architectury API `9.2.14` | Forge 侧：`META-INF/mods.toml` 把 `architectury` `[1.26.37,)` 标成 **mandatory**。Fabric 侧：`fabric.mod.json` 没有列它，但模组自己的类链接了 `dev.architectury.event.Event`、`ClientGuiEvent`、`ClientTickEvent`（在 `com.jsblock.JobanClient`，一个声明过的入口），而 jar 里并没有打包它们 —— 所以 Fabric 也必须装。版本取自 `gradle.properties` 的 `architectury_version` |
+| **两边都要** | Architectury API `9.2.14` | Forge 侧：`META-INF/mods.toml` 把 `architectury` `[1.26.37,)` 标成 **mandatory**。Fabric 侧：`fabric.mod.json` 现在也列上了它 —— `architectury` `>=9`，9.x 就是这个构件在自己的 `fabric.mod.json` 里写的版本号 —— 所以缺依赖时是**加载器在启动时报出缺的是哪一个**，而不是等到已通过检查的类被载入时才 `NoClassDefFoundError`。模组自己的类链接了 `dev.architectury.event.Event`、`ClientGuiEvent`、`ClientTickEvent`（在 `com.jsblock.JobanClient`，一个声明过的入口），而 jar 里并没有打包它们。版本取自 `gradle.properties` 的 `architectury_version` |
 | **Forge** | 1.20.1 的 Forge，build 36 或更高 | `META-INF/mods.toml` 写的是 `forge` `[36,)`。Forge 侧没有别的必需项 |
 | **Fabric** | Fabric Loader | `fabric.mod.json` 写的是 `fabricloader: *`；本构建编译与运行所用的是 `0.19.5`（`gradle.properties`） |
 | **Fabric** | Fabric API `0.83.0+1.20` | `fabric.mod.json` 里写作 `fabric: *`；版本取自 `gradle.properties` 的 `fabric_api_version` |
@@ -71,9 +71,9 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 
 | 路径 | 是什么 |
 |---|---|
-| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.4.jar` | Fabric 侧、重映射后的 jar，合并步骤的输入 |
-| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | Forge 侧，合并步骤的输入 |
-| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | 合并包，要装的是这一个 |
+| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.5.jar` | Fabric 侧、重映射后的 jar，合并步骤的输入 |
+| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.5.jar` | Forge 侧，合并步骤的输入 |
+| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` | 合并包，要装的是这一个 |
 
 这次 Fabric 侧是「能启动、能正常用」这一级的确认，不是 Forge 那份逐项过一遍的清单 —— 逐项验证过的仍然
 只有 Forge 侧。上面那张平台表的读法仍然是「清单和字节码要求这样」，Fabric 1.20.1 实例就是照它装起来的。
@@ -87,15 +87,15 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 1. 1.20.1 的 Forge —— build 36 或更高（`META-INF/mods.toml` 里的 `forge` `[36,)`）。
 2. `mods/` —— MTR 3 / YMTR 的 **Forge** 版：`MTR-forge-1.20.1-3.6.3.jar`。
 3. `mods/` —— Architectury API。`META-INF/mods.toml` 把它标成必需，缺了 Forge 会直接拒绝启动。
-4. `mods/` —— `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar`。
+4. `mods/` —— `MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar`。
 
 ### Fabric
 
 1. 1.20.1、带 Fabric Loader 的 Fabric 档案。
 2. `mods/` —— MTR 3 / YMTR 的 **Fabric** 版：`MTR-fabric-1.20.1-3.6.3.jar`。
 3. `mods/` —— Fabric API。
-4. `mods/` —— Architectury API。`fabric.mod.json` 没有声明它，但模组的类链接了它，理由见上表。
-5. `mods/` —— `MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar`。
+4. `mods/` —— Architectury API。`fabric.mod.json` 现在声明了它（`architectury` `>=9`），和 Forge 侧一样是必需依赖，理由见上表。
+5. `mods/` —— `MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar`。
 6. 可选 —— ModMenu，想让配置界面出现在模组列表里就装。
 
 ### 容易装错的几种情况
@@ -104,7 +104,7 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 |---|---|
 | Fabric 实例里放了 MTR 的 **Forge** 版（或反过来） | MTR 每个加载器各一个 jar，放错的那颗对该加载器来说根本不是模组。装与档案匹配的那一份 |
 | 没装 MTR，或装了别的 Minecraft 版本的那份 | 两份清单都把 `mtr` 列为必需依赖，模组不会加载 |
-| Fabric 上缺 Fabric API 或缺 Architectury API | `fabric.mod.json` 里写了 `fabric: *`；Architectury 则是模组自己的类链接的对象 |
+| Fabric 上缺 Fabric API 或缺 Architectury API | 两者都写在 `fabric.mod.json` 的 `depends` 里（`fabric: *`、`architectury: >=9`），加载器会直接拒绝加载，并点名缺的是哪一个 |
 | 1.20.2 以上，或 1.19.x 的档案 | 清单会拒绝：Forge 侧 `[1.20,1.20.2)`，Fabric 侧 `>=1.20 <=1.20.1` |
 | 往 `mods/` 里放了 `fabric/build/libs/fabric-1.20-….jar` 或 `forge/build/libs/forge-1.20-….jar` | 那是合并步骤的**输入**，不是发布件。要装的是合并后的 `build/MTR-YJCM-1.20-….jar` |
 
@@ -404,7 +404,7 @@ const raining = MinecraftClient.worldIsRaining();     // 世界状态
 如果您遇到有资源包的 PIDS 无法正常工作，可以把**游戏版本信息**、**游戏日志**、**资源包下载链接**
 发给我，或者直接提 [Issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new)。
 
-- **游戏版本信息**：Minecraft 版本、MTR / YMTR 版本、本模组版本（当前 `1.2.12-JSPIDS-2.4`）
+- **游戏版本信息**：Minecraft 版本、MTR / YMTR 版本、本模组版本（当前 `1.2.12-JSPIDS-2.5`）
 - **游戏日志**：`logs/latest.log`。面板报错会写成一行
   `[Joban Client] PIDS script "..." threw in render(): ...`，
   它直接写明是哪个预设、脚本哪一行、缺的是哪个 API —— 多数情况下不用复现就能定位
@@ -474,13 +474,13 @@ $env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
 gradle build --no-daemon --console=plain --max-workers=1
 ```
 
-产物如下（`mod_version` 为 `1.2.12-JSPIDS-2.4` 时，文件名里的版本就是它）：
+产物如下（`mod_version` 为 `1.2.12-JSPIDS-2.5` 时，文件名里的版本就是它）：
 
 | 路径 | 是什么 |
 |---|---|
-| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.4.jar` | 合并包：Forge 与 Fabric 在同一颗文件里。要装的是这一个 |
-| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.4.jar` | 合并用的 Fabric 侧 jar |
-| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.4.jar` | 合并用的 Forge 侧 jar |
+| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` | 合并包：Forge 与 Fabric 在同一颗文件里。要装的是这一个 |
+| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.5.jar` | 合并用的 Fabric 侧 jar |
+| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.5.jar` | 合并用的 Forge 侧 jar |
 | 名字里带 `-dev-shadow` 的 `fabric/build/libs/fabric-1.20-….jar`、`forge/build/libs/forge-1.20-….jar` | 重映射之前的中间 shadow jar |
 
 构建需要 `checkouts/1.20/` 下的 MTR 开发 jar（已被 git 忽略），而 MTR 3 已经不在 Maven 上了 ——

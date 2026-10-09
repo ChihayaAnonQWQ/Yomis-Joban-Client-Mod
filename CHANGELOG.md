@@ -1,3 +1,53 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.5
+
+## Compatible MTR Version
+MTR
+
+## The Fabric manifest declares the dependency the classes always had, and HKR's terminus rule reads the panel's own platform
+
+Nothing here adds anything to look at: 2.5 draws what 2.4 draws. The first item is a manifest catching
+up with the classes the jar already ships; the second is a station name catching up with the platform
+the panel is standing on.
+
+### `fabric.mod.json` declares `architectury`
+
+Count the `dev/architectury/**` entries in the merged jar: zero. The API is not bundled. But
+`fabric/com/jsblock/JobanClient.class` links `dev.architectury.event.Event`, `ClientGuiEvent` and
+`ClientTickEvent` directly -- it registers a HUD renderer and a client tick on them -- and the class is
+reached from the declared client entry point (`JobanFabricClient` calls `JobanClient.init()`), so on
+Fabric without Architectury API it cannot be linked at all: a `NoClassDefFoundError` raised from inside
+a mod the loader had already accepted. Forge never had this shape, because `META-INF/mods.toml` has
+marked `architectury` mandatory from the start. The Fabric manifest simply never mentioned it, and a
+dependency a manifest does not declare is not one the loader checks.
+
+`depends` now carries `"architectury": ">=9"`, and the range comes from the Fabric artifact's own
+version scheme rather than Forge's. `dev.architectury:architectury-fabric:9.2.14` -- the version
+`gradle.properties` pins as `architectury_version` -- opens with `"id": "architectury"` and
+`"version": "9.2.14"` in its own `fabric.mod.json`, so Fabric-side Architectury versions are plain
+semver and the 1.20.x line is 9.x. The `[1.26.37,)` in `mods.toml` is FML's version for the same
+dependency and means nothing to the Fabric loader; copied across, it would demand a version that does
+not exist there and refuse every Fabric install.
+
+What changes for a user is the failure and nothing else: a Fabric instance without Architectury API is
+now stopped by the loader, which names the dependency that is missing, instead of by a class that fails
+to link later.
+
+### A mid-line panel no longer prints 「不載客列車」
+
+HKR's preset decides "不載客列車 / Not in Service" from the name `pids.station()` returns: it walks the
+service's calling pattern for the panel's own index and reports not-in-service when that index is the
+last stop. So the name has to be the station the panel is actually at, and it was not always. A panel
+with no filter of its own had no station to resolve and answered `null` -- HKR, with no index to find,
+answered "in service", which is how **a terminus panel drew a real departure instead of the badge**.
+A panel filtered to several platforms took its name from the first element of a `Set<Long>`, whose
+order is hash order and not the panel's, so the name could be a station at the other end of the line --
+a mid-line panel wearing the terminus's name is "at" the last stop, which is how **「不載客列車」 ended
+up on a panel with real trains on it**.
+
+The engine now resolves the panel's platform the way MTR does -- nearest the block -- and hands that
+station to `pids.station()`, so an auto-detected panel and a multi-platform filter both answer with the
+platform the panel is on. `ScriptHkrCheck` pins it against a real MTR world, terminus and mid-line.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.4（未发布）
 
 ## Compatible MTR Version
