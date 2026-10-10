@@ -1196,19 +1196,46 @@ to replace it with
 
 `tools/run-pids-check.ps1` 整体仍是 `RESULT: ALL CHECKS PASSED`；HKR 的
 `_hkr_split/assets/jsblock/scripts/next_train.js` 在 0/2/4 班次下仍是 `RESULT: SCRIPT OK`；十一包
-回归仍是 112 支脚本 **108 通过**（那些包自己的脚本在无头环境里**读不到** `mtr:` 资源，走的就是
-「软失败返回替换字体」那条路，因此这次改动对它们逐字不变）。
-
-`tools/run-pids-check.ps1` 整体仍是 `RESULT: ALL CHECKS PASSED`；HKR 的
-`_hkr_split/assets/jsblock/scripts/next_train.js` 在 0/2/4 班次下仍是 `RESULT: SCRIPT OK`；十一包
-回归仍是 112 支脚本 **108 通过**（那些包自己的脚本在无头环境里**读不到** `mtr:` 资源，走的就是
-「软失败返回替换字体」那条路，因此这次改动对它们逐字不变）。
+回归仍是 112 支脚本 **108 通过**。这 112 支脚本里**一支都没有**按名字取过字体
+（`getSystemFont` 在十一包里 **0 处命中**），唯一用它的是 HKR 翻牌屏，所以这次改动碰不到它们；
+那 4 个失败也与字体无关——`tools.js` / `pids_util.js` 是**没有 `render()`** 的工具模块，
+`pids_ql.js` / `sound_transit.js` 在无头环境下分别取不到平台数据与钟表分支上的对象。
 
 ---
 
 ## 5. 顺带修复的三个上游缺陷
 
 移植过程中发现 YJCM 公开仓库本身**编不过**，以下问题与本分支的功能无关，但必须修复。
+
+
+### 4.20 更正：字体回退的最终规则（前面那节记录的是被推翻的两次尝试）
+
+§4.19 里那段实测输出属于**第二次尝试**（"替换字体能画就用它"），它已经被推翻。推翻它的证据是像素级的：
+
+```
+Dialog       下/班: 198 / 443 px   hash 0da9f560 / 63f5bfb0
+SimSun       下/班: 198 / 443 px   hash 0da9f560 / 63f5bfb0     ← 与 Dialog 完全同源
+Noto Sans SC 下/班: 459 / 882 px   hash cb30eb8b / 7b6aa33d
+```
+
+也就是说本机上 `Dialog` 的中文是 **SimSun（宋体）**：面板会出现"无衬线拉丁 + 宋体中文"的混搭，
+这是用户明确否掉的观感。而 MTR 自带的 `noto-serif-cjk-tc-semibold.ttf` 同样是**衬线**，
+所以它也只能算最后手段，不能算答案。
+
+**最终规则**（2.7 起）：CJK 名字 → 先按顺序在**真实安装**的族名里找无衬线 CJK
+（Noto Sans SC/TC/HK/JP/KR 及其 Medium/SemiBold、Source Han Sans、Microsoft YaHei/JhengHei、
+PingFang SC/TC、Hiragino Sans、Meiryo、Yu Gothic、Malgun Gothic），并优先匹配请求里的字重；
+都没有才用内置衬线。拉丁名字 → 内置 Noto Sans。**逻辑字体原样返回**（`Monospaced` 等，翻牌钟点
+的等宽对齐靠它；实测逻辑字体确实出现在 `getAvailableFontFamilyNames()` 里）。真装了的族名不受影响。
+
+三条走错的路，各错在哪（下一个接手者不必重走）：
+
+| 尝试 | 错在哪 |
+|---|---|
+| ① CJK 交给 Java 逐字回退 | 只对**逻辑字体**成立；`createFont` 的物理字体缺字画 .notdef 豆腐块 |
+| ② 替换字体能画就保留 | 把 CJK 交给了 `Dialog` = 宋体（本机） |
+| ③ CJK 一律用内置衬线 | 内置那份也是衬线，用户否掉的就是这个观感 |
+| ④（最终）无衬线 CJK 优先，内置衬线兜底 | 本机 → `Noto Sans SC Medium` ✓ |
 
 ### 5.1 缺失 `ForgeConfig.java`
 

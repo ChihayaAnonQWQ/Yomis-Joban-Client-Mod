@@ -28,7 +28,7 @@
 #   ScriptFontFallbackCheck  checks the font a preset gets when it asks for one by name: a name the
 #                       machine has comes back untouched; a name it does not have is decided by the
 #                       script the name marks -- a CJK name keeps AWT's substitution when that
-#                       substitution already draws the script, and falls back to MTR's bundled CJK
+#                       name takes an installed sans CJK family, and falls back to MTR's bundled CJK
 #                       face when it cannot, while a Latin or serif name is served from the bundled
 #                       Latin / serif file (HKR's "Noto Sans SemiBold" used to come back as Dialog
 #                       instead). The decision logs once per name, the rule's evidence is asserted in
@@ -243,7 +243,7 @@ if ($NativeExitCode -ne 0) { $failures += "ScriptCaseCheck (exit $NativeExitCode
 # both came back as Dialog on a machine without them, which is a panel in the wrong typeface and
 # nothing in the log. This check asserts the port's answer instead: the machine's own font when it
 # has one; for a name it does not have, a CJK name KEEPS AWT's substitution when that substitution
-# already draws the script the name marks and falls back to MTR's bundled CJK face when it cannot,
+# name takes the first installed sans CJK family, and falls back to MTR's bundled CJK face only when none is installed,
 # while a Latin or serif name is served from the bundled Latin / serif file; one INFO line per name
 # naming the trade; and no throw when there is no resource manager at all. It also carries the
 # evidence for the rule's two halves, in pixels: the decision is one package-private function of

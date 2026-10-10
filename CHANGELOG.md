@@ -1,3 +1,8 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.7
+
+## Compatible MTR Version
+MTR
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.5
 
 ## Compatible MTR Version
@@ -88,9 +93,27 @@ consequences are in the rule above:
 |---|---|
 | `ScriptFontFallbackCheck` (**new**) | `"Noto Sans SemiBold"` is the bundled Latin face rather than `Dialog`, and scales with the pack's own `deriveFont(BOLD, 40)`; `"Noto Sans CJK TC Medium"` is answered with a face whose `下` and `班` are two different drawings (not the same tofu box), whichever of the two paths this machine takes — and the check calls the decision function **directly with a Latin-only font**, so the branch this machine does *not* take is asserted anyway: it selects MTR's bundled CJK face, that face draws `下`, and the reason names the character the substitute lacks. The bundled Latin file is pinned as the tofu control (identical 246 px for both characters) and the bundled CJK file as the real-glyph side (293 vs 611 px). `"Noto Sans"` / `"Noto Serif"` are unchanged, still `Font.createFont` at size 1 out of their own files; `"Noto Sans SC"`, the face-spelling `"Noto Sans SC Bold"`, the logical `Dialog` and `Monospaced` all still come back as the machine's own fonts; the per-name cache is dropped by `resetFonts()`; **one** INFO line per name says which path was taken, what AWT substituted and why (captured through log4j, which the check raises to INFO for the duration); and with no resource manager the whole thing still soft-fails to the JVM's substituted font instead of throwing — including a CJK name, which needs no file at all |
 
-The eleven-pack regression is unchanged at **108/112** — the packs' own scripts reach the bundled
-fonts only in game (the headless pack run has no `mtr` assets), which is the soft-failure path this
-change leaves exactly as it was.
+The eleven-pack regression is unchanged at **108/112**, and nothing in this change can move it: none
+of those 112 scripts asks for a font by name at all — `Resources.getSystemFont` has no call site in
+any of the eleven packs. The one shipped preset that does use it is HKR Split-Flap Display's, and it
+is run separately (`_hkr_split/assets/jsblock/scripts/next_train.js`, `RESULT: SCRIPT OK` at 0/2/4
+arrivals). The four failures it does report are pre-existing and have nothing to do with typefaces:
+two are helper modules with no `render()` at all, and two are presets that reach for platform or
+clock data a headless run has none of.
+
+
+**更正（2.7 最终规则）**：本节上面两段描述的是前两条规则 —— "把 CJK 交给逐字回退" 与
+"替换字体能画就保留它"。**两条都已被推翻**，保留在此仅作记录：
+
+- 逐字回退对 `Font.createFont` 出来的**物理字体无效**（缺字画 .notdef 豆腐块，四个不同汉字像素完全相同）；
+- 本机上 AWT 给 CJK 名字的替换字体是 `Dialog`，而 **Dialog 的汉字来自 SimSun（宋体）**（像素级同源：
+  `Dialog/下` 与 `SimSun/下` 都是 198 px，哈希相同），配无衬线的拉丁半边就是用户否掉的那种观感。
+
+**最终规则**：CJK 名字 → 优先取机器上真实安装的**无衬线 CJK**（Noto Sans SC/TC/HK/JP/KR 及其
+Medium/SemiBold 变体、Source Han Sans、Microsoft YaHei/JhengHei、PingFang SC/TC、Hiragino Sans、
+Meiryo、Yu Gothic、Malgun Gothic），并优先匹配请求里的字重；都没有才用 MTR 内置的衬线 CJK。
+拉丁名字 → 内置 `noto-sans-semibold.ttf`。逻辑字体（`Monospaced` 等）原样返回。真装了的族名不受影响。
+本机实测：`"Noto Sans CJK TC Medium"` → `Noto Sans SC Medium`。
 
 ## The Fabric manifest declares the dependency the classes always had, and HKR's terminus rule reads the panel's own platform
 
