@@ -7,6 +7,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
 import org.mozilla.javascript.BaseFunction;
 import org.mozilla.javascript.Context;
+import org.mozilla.javascript.ImporterTopLevel;
 import org.mozilla.javascript.NativeJavaClass;
 import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
@@ -159,6 +160,8 @@ public final class ScriptEngine {
 		GraphicsTexture.releaseAll();
 		/* Script textures are keyed by the identifiers the old pack used, so they must go too. */
 		ScriptTextures.reset();
+		/* The fonts are read out of the packs that are being replaced. */
+		Resources.resetFonts();
 		/* Which refusals have been reported describes scripts that no longer exist, and the
 		   canvases those scripts made are released with them. */
 		ScriptPaths.reset();
@@ -172,13 +175,55 @@ public final class ScriptEngine {
 	 * <p>Exposed so the headless script check can compile a real preset script through exactly
 	 * the same globals the game registers, and therefore fail on the same missing-API mistakes
 	 * a player would hit.</p>
+	 *
+	 * <h2>The scope is an {@code ImporterTopLevel}, not {@code initStandardObjects()}</h2>
+	 * <p>JCM 2.x builds its script scope with Rhino's <b>importer</b> top level. Its bytecode says so
+	 * outright: {@code ParsedScript.<init>} is
+	 * {@code invokestatic Context.enter}, {@code setLanguageVersion(200)}, {@code setClassShutter(...)},
+	 * then {@code new ImporterTopLevel} / {@code invokespecial ImporterTopLevel.<init>(Context)} and
+	 * {@code putfield scope} — javap, this branch's reference jar. That global is what a pack's first
+	 * two lines reach for:</p>
+	 *
+	 * <pre>{@code
+	 * importPackage(java.awt);
+	 * importPackage(java.awt.geom);
+	 * }</pre>
+	 *
+	 * <p>{@code initStandardObjects()} answers a scope of pure <em>standard</em> objects — ECMAScript
+	 * built-ins and nothing else. It has no {@code importPackage}, no {@code importClass}, no
+	 * {@code Packages} and none of the {@code java} / {@code javax} / {@code org} / {@code com} /
+	 * {@code edu} / {@code net} package roots, so a script that begins with an import dies of a
+	 * {@code ReferenceError} <b>while it is being loaded</b> — before {@code create()} exists, and
+	 * therefore before anything is drawn. That is the whole of the HKR Split-Flap Display preset's
+	 * "the panel is transparent" report: see {@code next_train.js#27}.</p>
+	 *
+	 * <p>{@code ImporterTopLevel.initStandardObjects(cx, false)} is the same call
+	 * {@code Context.initStandardObjects()} makes internally — javap shows it as
+	 * {@code Context.initStandardObjects(ScriptableObject, Z)} followed by
+	 * {@code exportAsJSClass(3, this, false)} and {@code delete("constructor")} — so this is that
+	 * scope plus the importer, and not a different set of built-ins. The importer is inert until a
+	 * script calls it: {@code importPackage} only records the package on the scope, and resolution
+	 * happens later, per name.</p>
+	 *
+	 * <h2>The importer does not open a hole in the sandbox</h2>
+	 * <p>The importer resolves a name through {@code ImporterTopLevel.get} →
+	 * {@code NativeJavaPackage.getPkgProperty}, which calls
+	 * {@code Context.getClassShutter().visibleToScripts(fullName)} <b>before</b> it loads the class —
+	 * javap of {@code org.mozilla.javascript.NativeJavaPackage} shows the shutter read and the
+	 * branch that follows it, four instructions ahead of {@code Kit.classOrNull}. So
+	 * {@code java.lang.System} resolves to a package rather than a class, and
+	 * {@code importClass(java.lang.System)} is refused outright. {@link ScriptClassShutter} stays
+	 * the single gate, which is why this port needs no importer of its own; {@code ScriptShutterCheck}
+	 * asserts it from the script side, and the allow-list is unchanged.</p>
 	 */
 	public static Scriptable newScope(Context cx) {
 		cx.setLanguageVersion(Context.VERSION_ES6);
 		cx.setOptimizationLevel(-1); // Rhino's interpreter: avoids class generation issues on a mod classloader.
-		/* The shutter has to be in place before a single line of pack-provided script runs. */
+		/* The shutter has to be in place before a single line of pack-provided script runs, and
+		   before the importer can resolve anything: NativeJavaPackage reads it off the context at
+		   resolution time. This is also JCM 2.x's own order -- setClassShutter, then the scope. */
 		ScriptClassShutter.install(cx, SHUTTER);
-		final Scriptable scope = cx.initStandardObjects();
+		final Scriptable scope = new ImporterTopLevel(cx);
 		registerGlobals(cx, scope);
 		return scope;
 	}
@@ -543,6 +588,94 @@ public final class ScriptEngine {
 				}
 			}
 			return ScriptTextures.readImage(location);
+		}
+
+		/**
+		 * {@code Resources.getSystemFont(name)} — an AWT {@code Font} for a name JCM knows.
+		 *
+		 * <h2>The two names, from the reference jar</h2>
+		 * <p>{@code javap -p -c com.lx862.mtrscripting.util.ScriptResourceUtil} gives the whole
+		 * method, and it is three branches:</p>
+		 * <ul>
+		 *   <li>{@code "Noto Sans"} → a cached {@code Font.createFont} of
+		 *       {@code mtr:font/noto-sans-cjk-tc-medium.otf} when the class's
+		 *       {@code hasNotoSansCjk} flag is set, otherwise of
+		 *       {@code mtr:font/noto-sans-semibold.ttf}. A read failure logs
+		 *       {@code "[Scripting] Failed to load font"} and leaves the cache {@code null}, so the
+		 *       method answers {@code null}.</li>
+		 *   <li>{@code "Noto Serif"} → a cached {@code Font.createFont} of
+		 *       {@code mtr:font/noto-serif-cjk-tc-semibold.ttf}; a failure logs
+		 *       {@code "[Scripting] Failed loading font"} and answers {@code null} immediately.</li>
+		 *   <li><b>anything else</b> → {@code new Font(name, Font.PLAIN, 1)}. Note the size: the
+		 *       caller is expected to scale it, and every pack does — HKR's {@code mk()} is
+		 *       {@code base.deriveFont(style, size * T.k)}.</li>
+		 * </ul>
+		 *
+		 * <p>The {@code hasNotoSansCjk} branch is <b>not</b> reproduced, and that is a deliberate
+		 * reading of the reference rather than an omission: {@code javap -p -c} shows the field
+		 * assigned in exactly one place in the whole class, its static initialiser, and the value
+		 * there is {@code iconst_0} — it is {@code false} for the life of the process, so the
+		 * {@code .otf} branch is unreachable in the jar this port is measured against. MTR 3.6.3
+		 * does not ship that file either (listing {@code libs/mtr-common.jar}: the {@code mtr/font/}
+		 * directory holds {@code mtr.json}, {@code noto-sans-semibold.ttf} and
+		 * {@code noto-serif-cjk-tc-semibold.ttf} and nothing else), so a port that took the branch
+		 * would only ever warn. The observable behaviour is identical.</p>
+		 *
+		 * <h2>What this means for a pack</h2>
+		 * <p>The names the packs actually write are <em>not</em> these two. HKR asks for
+		 * {@code "Noto Sans CJK TC Medium"}, {@code "Noto Sans SemiBold"} and {@code "Monospaced"},
+		 * and all three fall through to {@code new Font(name, PLAIN, 1)} — a lookup in the JVM's
+		 * font registry, where an unknown family resolves to the platform's default. That is JCM
+		 * 2.x's behaviour as well, so it is kept exactly: a port that quietly upgraded those names
+		 * to MTR's bundled Noto would draw a different typeface from the one the pack's author saw.</p>
+		 *
+		 * <p>Cached per name in the reference implementation with a plain static field, which is
+		 * also what happens here ({@code volatile} and this method {@code synchronized} only so a
+		 * {@code BackgroundWorker} thread cannot race the render thread into loading the same
+		 * 515 KB file twice; the value cached is the same one).</p>
+		 */
+		public static java.awt.Font getSystemFont(String name) {
+			if (name == null) {
+				return null;
+			}
+			if (name.equals("Noto Sans")) {
+				if (notoSans == null) {
+					synchronized (Resources.class) {
+						if (notoSans == null) {
+							notoSans = ScriptFonts.read(NOTO_SANS);
+						}
+					}
+				}
+				return notoSans;
+			}
+			if (name.equals("Noto Serif")) {
+				if (notoSerif == null) {
+					synchronized (Resources.class) {
+						if (notoSerif == null) {
+							notoSerif = ScriptFonts.read(NOTO_SERIF);
+						}
+					}
+				}
+				return notoSerif;
+			}
+			return new java.awt.Font(name, java.awt.Font.PLAIN, 1);
+		}
+
+		/** {@code mtr:font/noto-sans-semibold.ttf} — see {@link #getSystemFont(String)}. */
+		private static final ResourceLocation NOTO_SANS = new ResourceLocation("mtr", "font/noto-sans-semibold.ttf");
+		/** {@code mtr:font/noto-serif-cjk-tc-semibold.ttf} — see {@link #getSystemFont(String)}. */
+		private static final ResourceLocation NOTO_SERIF =
+				new ResourceLocation("mtr", "font/noto-serif-cjk-tc-semibold.ttf");
+
+		/** The cached fonts; {@code null} until asked for, and left {@code null} when unreadable. */
+		private static volatile java.awt.Font notoSans;
+		private static volatile java.awt.Font notoSerif;
+
+		/** Drops the font caches; called when the resource manager reloads. */
+		static void resetFonts() {
+			notoSans = null;
+			notoSerif = null;
+			ScriptFonts.reset();
 		}
 	}
 

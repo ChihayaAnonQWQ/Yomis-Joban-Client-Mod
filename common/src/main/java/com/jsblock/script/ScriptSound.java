@@ -36,6 +36,28 @@ public final class ScriptSound {
 		}
 
 		/**
+		 * The same call without the category — the form packs actually write.
+		 *
+		 * <p>Found by running HKR Split-Flap Display's {@code next_train.js}, which plays its
+		 * flip-board click as {@code sm.playLocalSound(id, FLIP_SOUND_VOLUME, pitch)}. Rhino matches
+		 * a Java overload by <b>exact arity</b> — measured, not assumed: calling the five-parameter
+		 * {@code playSound} with four arguments answers
+		 * {@code EvaluatorException: Can't find method ...playSound(string,null,number,number)} — so
+		 * the four-parameter method alone resolved nothing and the preset's sound was silently
+		 * dropped by its own {@code catch (e) {}}.</p>
+		 *
+		 * <p>The category is the documented optional argument, and the default applied here is the
+		 * one {@link #toCategory} already gives an unnamed category: MASTER. The reference jar has no
+		 * {@code SoundManager} at all — a whole-jar scan for {@code getSoundManager} and
+		 * {@code playLocalSound} returns zero hits — so there is no bytecode to follow for this
+		 * class; these two overloads are the documented signature's shorter spellings and nothing
+		 * beyond it.</p>
+		 */
+		public void playLocalSound(Object id, double volume, double pitch) {
+			play(id, volume, pitch, null, 0.0, 0.0, 0.0, true);
+		}
+
+		/**
 		 * {@code SoundManager.play(instance)} -- starts a script-steerable sound.
 		 *
 		 * <p>One instance plays once; the docs say to stop it before playing it again, and
@@ -70,6 +92,16 @@ public final class ScriptSound {
 				z = vector.z();
 			}
 			play(id, volume, pitch, soundCategory, x, y, z, false);
+		}
+
+		/**
+		 * {@code playSound(id, pos, volume, pitch)} — the four-argument form, which is HKR's and
+		 * which is the documented one with its optional category left out. See
+		 * {@link #playLocalSound(Object, double, double)} for why the overload is required rather
+		 * than merely convenient.
+		 */
+		public void playSound(Object id, Object pos, double volume, double pitch) {
+			playSound(id, pos, volume, pitch, null);
 		}
 
 		/**

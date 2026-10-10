@@ -38,6 +38,7 @@ public final class ScriptCanvasCheck {
 		System.out.println("== script canvas (GraphicsTexture) ==");
 
 		checkColourRules();
+		checkAbgrSwap();
 		checkImageCopy();
 		checkSizeRules();
 		checkLeakBound();
@@ -60,6 +61,37 @@ public final class ScriptCanvasCheck {
 				"0 means transparent, so a canvas can be emptied");
 		expect(GraphicsTexture.argb(0xFF000000) == 0xFF000000,
 				"opaque black is still reachable");
+	}
+
+	/**
+	 * The ARGB → ABGR swap the upload performs, asserted on its own.
+	 *
+	 * <p>This is as far as the pixel path can be followed without a GPU. Everything after it —
+	 * {@code new NativeImage}, {@code setPixelRGBA}, {@code DynamicTexture.upload()} — needs a GL
+	 * context, so the only half of "the canvas shows the colours the script painted" that can be
+	 * proved here is that the bytes are in the order {@code NativeImage} wants. Get this wrong and
+	 * red and blue trade places: a red route bar comes out blue, which reads as a resource pack
+	 * problem. {@code GraphicsTexture.abgr} is JCM 2.x's own function, and the whole of the upload
+	 * loop is this function applied to every pixel of the image.</p>
+	 */
+	private static void checkAbgrSwap() {
+		expect(GraphicsTexture.abgr(0xFF112233) == 0xFF332211,
+				"abgr() puts blue where the native image reads it: FF112233 -> "
+						+ String.format("%08X", GraphicsTexture.abgr(0xFF112233)));
+		expect(GraphicsTexture.abgr(0x80123456) == 0x80563412,
+				"abgr() keeps the alpha channel in place: 80123456 -> "
+						+ String.format("%08X", GraphicsTexture.abgr(0x80123456)));
+		expect(GraphicsTexture.abgr(0x00000000) == 0x00000000,
+				"abgr() leaves a fully transparent pixel transparent");
+		expect(GraphicsTexture.abgr(0xFFFFFFFF) == 0xFFFFFFFF,
+				"abgr() leaves white alone, so the common case cannot go wrong quietly");
+		boolean roundTrips = true;
+		for (int value : new int[]{0x00112233, 0x7F445566, 0xFE010203, 0x80AABBCC}) {
+			if (GraphicsTexture.abgr(GraphicsTexture.abgr(value)) != value) {
+				roundTrips = false;
+			}
+		}
+		expect(roundTrips, "the swap is its own inverse on every channel order it can be given");
 	}
 
 	/** The ARGB copy a pack image goes through before it is drawn onto a canvas. */

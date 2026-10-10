@@ -300,14 +300,15 @@ inherited members included), and the two are diffed.
 |---|---|
 | Drawing | `Text` `Texture` `Rectangle` `Vector3f` `Matrices` |
 | Timing & state | `Timing` `StateTracker` `CycleTracker` `RateLimit` |
-| Resources | `Resources` (incl. `getMTRVersion`, `getAddonVersion`, `readBufferedImage`) `TextUtil` |
+| Resources | `Resources` (incl. `getMTRVersion`, `getAddonVersion`, `readBufferedImage`, `getSystemFont`) `TextUtil` |
+| Rhino importer | `importPackage(pkg)` `importClass(cls)` `Packages` `java` `javax` `org` `com` `edu` `net` -- every JCM 2.x script already runs in this scope in v2 (`ParsedScript` builds it with `new ImporterTopLevel(cx)`); this branch used `initStandardObjects()`, which has none of them, so HKR Split-Flap Display's script died of a `ReferenceError` **while loading** and its panel was never painted at all. Resolution is lazy and still goes through the class shutter -- **no allow-list entry was widened** |
 | World | `MinecraftClient` `MinecraftClient.localPlayer()` `PlayerEntity` |
 | MTR client data | `MTRClientData` (= `mtr.client.ClientData`: `STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`. **Not** a second name for `MinecraftClient` — see below) |
 | Declarative components | `ctx.parseComponent(json)` -> `render(ctx)` / `canRender()` / `x()` / `y()` / `width()` / `height()` / `type()`, or `ctx.draw(component)` |
 | Runtime canvas | `GraphicsTexture(w, h)`: `graphics` / `bufferedImage` / `identifier`, `upload()`, `close()`, `clear` / `fillRect` / `drawText` / `measureText` / `drawTexture` |
 | Slow work | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
 | Persistent state | `Files`: `read` / `readData` / `saveData` / `deleteData` / `hasData` — v2's `FilesUtil`, same names, same signatures, same two roots (`<game dir>` and `<game dir>/data/mtrscripting`) |
-| Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
+| Sound | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` -- `playSound(id, pos, volume, pitch)` and `playLocalSound(id, volume, pitch)` are the forms packs write; Rhino matches a Java overload by **exact arity**, so each has its own overload rather than a defaulted parameter |
 | Misc | `console` `print` `include` `SCRIPT_INPUT` |
 | The panel | `pids.*`, `arrivals().*`, `arrival.*`, `pids.station()`, `route().getPlatforms()`, `ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
 | Fork-only | `arrival.routeType` and `arrival.isLightRailRoute` (MTR 3's `Route.routeType`: `NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`). MTR 4 has no route type, and **neither version has express versus local as a flag** — the packs that care put the service type in the route's **number** and keyword-match it (see HKR's `getColorByKeyword`). On MTR 3 a route's number is gated behind the checkbox MTR labels *Has Route Number*, so that checkbox is what makes those colours appear here |
@@ -322,7 +323,7 @@ zero. See [`V2-API-覆盖表.md`](V2-API-覆盖表.md).
 
 | Class | Missing |
 |---|---|
-| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
+| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` (`getSystemFont` used to be listed here too; it is **implemented now**, because HKR Split-Flap Display calls it three times) |
 | `Station` | `getZone1/2/3`, `getMinX/Y/Z`, `getMaxX/Y/Z`, `getExits`, `inArea`, `isTransportMode`, `getCenter` -- needs the station's geometry, which the wrapper does not carry |
 | `Stop` | `distance` `dwellTime` `dwellTimeMillis` `platform` `destinationName` `destinationStation` `customDestination` and 6 more |
 | `PlayerEntity` | `activeItem` `mainHandItem` `offHandItem` `yaw` `pitch` `bodyYaw` `isSneaking` `isSprinting` `isSwimming` `isHoldingItem` `playerName` |
@@ -332,7 +333,7 @@ zero. See [`V2-API-覆盖表.md`](V2-API-覆盖表.md).
 | `SimplifiedRoute` | `getId` `getColor` `getCircularState` `getPlatformIndex` |
 | `NetworkResponse` | `success` `exception` `getHeaders` |
 | `SimplifiedRoutePlatform` | `getDestination` `getStationId` |
-| `PIDSScriptContext` | `getRenderManager()` (3D model rendering), `setDebugInfo()` |
+| `PIDSScriptContext` | `getRenderManager()` (3D model rendering), `setDebugInfo()` -- the latter is **not in the reference jar at all** (a whole-jar scan for the string returns zero hits), and HKR Split-Flap Display only reaches it behind its own `DEBUG_INFO = false` flag inside a `try {} catch {}`. Recorded as **not applicable** (the pack's JCM is newer than the reference build), not as a gap |
 
 *Classes not implemented at all (68 entries):*
 

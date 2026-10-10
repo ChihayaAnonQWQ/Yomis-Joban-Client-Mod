@@ -14,6 +14,10 @@
 #                    Text/Texture/Rectangle builder chain — so a wrapper method this port
 #                    is missing fails here exactly as it would in game.
 #   ScriptShutterCheck  checks which Java classes a script may reach.
+#   ScriptImporterCheck checks the Rhino importer globals (importPackage / importClass / Packages /
+#                       java / javax / org / com / edu / net) a JCM 2.x preset's first lines use,
+#                       that the same sandbox still refuses java.lang.System through them, and the
+#                       AWT canvas path a pack like HKR's next_train.js draws its whole screen with.
 #   ScriptPathCheck     checks which files a script may reach: include() and
 #                       Texture.texture() must not resolve outside the script's own pack.
 #   ScriptCanvasCheck   checks the runtime canvas: that drawing it paints pixels, that a failure
@@ -116,6 +120,7 @@ $checkSources = @(
     'tools\checks\com\jsblock\pids\PixelationCheck.java',
     'tools\checks\com\jsblock\script\ScriptApiCheck.java',
     'tools\checks\com\jsblock\script\ScriptShutterCheck.java',
+    'tools\checks\com\jsblock\script\ScriptImporterCheck.java',
     'tools\checks\com\jsblock\script\ScriptPathCheck.java',
     'tools\checks\com\jsblock\script\ScriptCanvasCheck.java',
     'tools\checks\com\jsblock\script\FilesCheck.java',
@@ -163,6 +168,21 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptShutterCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "ScriptShutterCheck (exit $NativeExitCode)" }
+
+# The importer globals, and the same sandbox asked through them. Checked next to the shutter
+# because it is the second route to a class: importPackage/importClass/Packages resolve through
+# NativeJavaPackage, and a route that skipped the ClassShutter would hand every pack the whole JVM.
+# This is also the check that covers the AWT canvas path a real preset draws its whole screen with
+# -- HKR Split-Flap Display's next_train.js opens with importPackage(java.awt) and paints a
+# GraphicsTexture, and with no importer global in the scope it died of a ReferenceError while
+# loading, which is a transparent panel and nothing in the log.
+Write-Host ''
+Write-Host '== script importer (ScriptImporterCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptImporterCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptImporterCheck (exit $NativeExitCode)" }
 
 # What a script can make the engine read. The sandbox check above covers Java classes; this
 # covers the files, which a script reaches through include() and Texture.texture(...) instead.

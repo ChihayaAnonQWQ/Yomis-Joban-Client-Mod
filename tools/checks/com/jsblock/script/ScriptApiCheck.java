@@ -102,6 +102,7 @@ public final class ScriptApiCheck {
 
 			failures += checkCreateContract(cx, scope, state, pids);
 			failures += checkClientDataGlobals(cx, scope);
+			failures += checkOptionalArgumentForms(cx, scope);
 			failures += checkParseComponent(cx, scope);
 			failures += checkArrivalsContract(pids);
 			failures += checkLenientRetryRenders(cx, scope, state, pids);
@@ -210,6 +211,61 @@ public final class ScriptApiCheck {
 			}
 		}
 		return failures;
+	}
+
+	/**
+	 * Calls the API shapes a pack writes with an argument left out.
+	 *
+	 * <p>Rhino resolves a Java overload by <b>exact arity</b> — a five-parameter method called with
+	 * four arguments answers {@code Can't find method}, it does not fill in a default — so every
+	 * optional argument in the documented surface needs its own overload or the call dies. That is
+	 * an easy thing to miss, because a preset that plays a sound wraps it in a {@code try} and the
+	 * only symptom is silence.</p>
+	 *
+	 * <p>The two shapes here are HKR Split-Flap Display's, verbatim: its flip-board click is
+	 * {@code sm.playSound(id, origin, volume, pitch)} and its fallback is
+	 * {@code sm.playLocalSound(id, volume, pitch)}, both reached through
+	 * {@code ctx.getSoundManager()}. The full-arity spellings are called too, so an overload added
+	 * for the short form cannot have broken the long one.</p>
+	 *
+	 * <p>There is no sound engine here and no client, so nothing is played; what is asserted is that
+	 * the call <em>resolves</em> and returns, which is exactly what fails when the overload is
+	 * missing.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkOptionalArgumentForms(Context cx, Scriptable scope) {
+		final ScriptRenderContext ctx = ScriptRenderContext.dryRun(136, 76, 1F);
+		final Object fn = cx.evaluateString(scope,
+				"(function(c) {"
+						+ "  var sm = c.getSoundManager();"
+						+ "  if (sm == null) return 'no sound manager';"
+						+ "  var id = Resources.id('minecraft:block.lever.click');"
+						+ "  var origin = new Vector3f(0, 0, 0);"
+						+ "  sm.playLocalSound(id, 0.55, 1.70);"
+						+ "  sm.playSound(id, origin, 0.55, 1.70);"
+						+ "  sm.playLocalSound(id, 0.55, 1.70, 'master');"
+						+ "  sm.playSound(id, origin, 0.55, 1.70, 'master');"
+						+ "  return 'ok';"
+						+ "})", "sound-shape-check", 1, null);
+		if (!(fn instanceof Function)) {
+			System.out.println("FAIL the sound-shape probe did not compile");
+			return 1;
+		}
+		try {
+			final Object result = ((Function) fn).call(cx, scope, scope, new Object[]{ctx});
+			if ("ok".equals(String.valueOf(result))) {
+				System.out.println("OK   the sound API resolves in both spellings a pack writes:"
+						+ " playLocalSound(id, volume, pitch) and playSound(id, pos, volume, pitch)");
+				return 0;
+			}
+			System.out.println("FAIL the sound API did not resolve: " + result);
+			return 1;
+		} catch (Exception e) {
+			System.out.println("FAIL a sound call a pack writes did not resolve, so the preset plays"
+					+ " nothing and its own catch hides it: " + e);
+			return 1;
+		}
 	}
 
 	/**
@@ -616,7 +672,44 @@ public final class ScriptApiCheck {
 		System.out.println("     state keys create() left behind: " + (written == null || "".equals(written)
 				? "(none -- this preset keeps nothing between frames)" : written));
 
+		failures += checkCreateReportedNoError(cx, scope, state);
+
 		return failures;
+	}
+
+	/**
+	 * A preset that catches its own failure and paints an error panel must not report green.
+	 *
+	 * <p>Some presets wrap their setup in a {@code try} and, when it throws, record the message on
+	 * {@code state} and draw it into the panel instead of leaving the screen blank — HKR's
+	 * {@code next_train.js} does exactly that ({@code state.err = errText(e); drawErrorScreen(state)}),
+	 * and it is a good thing for a pack to do. It is not a good thing for a check to miss: the script
+	 * ran, every lifecycle call returned, a texture draw call was recorded, and the panel on screen
+	 * says "PIDS script error". That is the HKR report this port was chasing, one layer further in,
+	 * so it fails here and names the message.</p>
+	 *
+	 * <p><b>Deliberately narrow,</b> so it cannot fire on a preset that merely uses a similar word:
+	 * the key has to contain {@code err} and the value has to be a non-empty <em>string</em>. A
+	 * counter ({@code state.errCount = 0}), a flag, a function or an object is left alone, and so is
+	 * an empty message.</p>
+	 *
+	 * @return the number of failures
+	 */
+	private static int checkCreateReportedNoError(Context cx, Scriptable scope, ScriptableObject state) {
+		final Object reported = callProbe(cx, scope,
+				"(function(s){ for (var k in s) {"
+						+ " if (!/err/i.test(k)) continue;"
+						+ " var v = s[k];"
+						+ " if (typeof v === 'string' && v.length > 0) return k + ' = ' + v;"
+						+ " } return ''; })",
+				state);
+		if (reported == null || "".equals(String.valueOf(reported))) {
+			System.out.println("OK   the preset's own create() recorded no error on state");
+			return 0;
+		}
+		System.out.println("FAIL the preset's create() caught a failure and recorded it on state, so the"
+				+ " panel is drawing that preset's error screen: " + reported);
+		return 1;
 	}
 
 	/**

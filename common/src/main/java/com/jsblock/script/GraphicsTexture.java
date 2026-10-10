@@ -109,6 +109,10 @@ public final class GraphicsTexture implements java.io.Closeable {
 	private volatile boolean failed;
 	/** Set by {@link #close()}, so a late upload cannot resurrect a released texture. */
 	private volatile boolean closed;
+	/** How many times {@link #degrade} has reported; see {@link #degradeReports()}. */
+	private volatile int degradeReports;
+	/** Set once the pixels have reached the GPU, so the upload is announced once. */
+	private volatile boolean uploaded;
 
 	public GraphicsTexture(int width, int height) {
 		if (width < 1 || height < 1) {
@@ -284,6 +288,16 @@ public final class GraphicsTexture implements java.io.Closeable {
 				}
 			}
 			texture.upload();
+			if (!uploaded) {
+				uploaded = true;
+				/* Said once per canvas, and the only trace the upload leaves: the GPU half cannot be
+				   exercised off the game, so this is what an in-game report is checked against. It
+				   names the size and the identifier, which is everything needed to tell "the canvas
+				   never reached the GPU" apart from "the canvas reached it and the panel did not
+				   draw it". */
+				Joban.LOGGER.info("[Joban Client] PIDS script canvas {}x{} uploaded as texture {}.", width,
+						height, identifier);
+			}
 		} catch (Throwable t) {
 			degrade(t.toString());
 		}
@@ -334,6 +348,19 @@ public final class GraphicsTexture implements java.io.Closeable {
 	}
 
 	/**
+	 * @return how many times this canvas has reported a failed upload.
+	 *
+	 * <p>For the headless check, and the observable that makes "reported once" mean something. The
+	 * upload happens on every frame a preset draws, so a canvas that cannot be uploaded would fill
+	 * a player's log at 60 lines a second; {@link #failed} is what stops it, and a boolean cannot
+	 * be told apart from "never called". The check calls {@code upload()} twice and asserts this is
+	 * one.</p>
+	 */
+	public int degradeReports() {
+		return degradeReports;
+	}
+
+	/**
 	 * Releases every canvas that is still open; called when the resource manager reloads, which is
 	 * also when every compiled program is dropped.
 	 *
@@ -365,6 +392,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 			return;
 		}
 		failed = true;
+		degradeReports++;
 		Joban.LOGGER.warn("[Joban Client] A PIDS script canvas ({}x{}) cannot be uploaded to the GPU: {}."
 				+ " It is drawn on but never appears; the script continues.", width, height, reason);
 	}
@@ -394,8 +422,16 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * <p>JCM 2.x's own conversion, kept because it is the one that makes red and blue come out the
 	 * right way round on this platform's native image format. A canvas whose colours came out swapped
 	 * is the kind of bug that looks like a resource pack problem for a week.</p>
+	 *
+	 * <p>Package-private rather than private so {@code ScriptCanvasCheck} can assert the byte order
+	 * directly. This is the last step that can be verified without a GPU: past it the value goes
+	 * into a {@code NativeImage}, which needs a GL context to exist. The whole of
+	 * {@link #applyUpload}'s loop is this function applied to every pixel of the image, in the
+	 * canvas's own coordinates — {@code javap -p -c} of JCM 2.x's {@code GraphicsTexture.upload}
+	 * shows the identical double loop and the identical swap,
+	 * {@code (a<<24)|(b<<16)|(g<<8)|r}.</p>
 	 */
-	private static int abgr(int argb) {
+	static int abgr(int argb) {
 		final int alpha = (argb >> 24) & 0xFF;
 		final int red = (argb >> 16) & 0xFF;
 		final int green = (argb >> 8) & 0xFF;

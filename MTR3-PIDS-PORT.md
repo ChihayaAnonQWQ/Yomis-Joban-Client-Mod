@@ -203,11 +203,14 @@ function dispose(ctx, state, pids) { }   // 面板消失时调用
 | `Text` / `Texture` / `Rectangle` | 三条绘制构建链，见 §4.3 |
 | `Resources.id("namespace:path")` | 引用资源 |
 | `Resources.readBufferedImage(id)` | 读一张资源包图片为 ARGB `BufferedImage`（v2 同名方法，画布贴图用；见 §4.9） |
+| `Resources.getSystemFont(name)` | AWT `Font`：`"Noto Sans"` / `"Noto Serif"` 读 MTR 自带字体文件，其余名字走 `new Font(name, PLAIN, 1)`（v2 同名方法；见 §4.16） |
+| `importPackage(pkg)` / `importClass(cls)` | Rhino importer：把包/类引入作用域（**惰性解析，仍过沙箱**；见 §4.15） |
+| `Packages` / `java` / `javax` / `org` / `com` / `edu` / `net` | Rhino importer 的包根，可逐段走类名（同上） |
 | `include(Resources.id("...:....js"))` | 把另一份脚本并入当前作用域（JCM 2.x 的依赖写法），受 §4.7 的路径防护约束 |
 | `TextUtil` | `cycleString(text[, ticks])`、`getCjkParts` / `getNonCjkParts` / `getExtraParts` / `getNonExtraParts` / `getNonCjkAndExtraParts`、`isCjk` |
 | `MinecraftClient` | `worldDayTime()`、`worldIsRaining()`、`worldIsThundering()` |
 | `MTRClientData` | **MTR 自己的客户端数据** `mtr.client.ClientData`：`STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`（与 `MinecraftClient` 不是同一个对象，见 §4.10） |
-| `GraphicsTexture(w, h)` | 运行时画布：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`fillRect` / `drawText` / `drawTexture` / `clear`（见 §4.9） |
+| `GraphicsTexture(w, h)` | 运行时画布：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`fillRect` / `drawText` / `drawTexture` / `clear`（见 §4.9、§4.18） |
 | `RateLimit(seconds)` | 新建一个限流器：`shouldUpdate()` / `resetCoolDown()` |
 | `print(...)` | 输出到游戏日志（`[PIDS script]` 前缀） |
 
@@ -801,6 +804,248 @@ function isNonPassenger(train, pids) {
 
 ---
 
+### 4.15 Rhino importer 全局：`importPackage` / `importClass` / `Packages` / 包根（本次新增；这就是「面板透明」的根因）
+
+#### 现象与根因链
+
+`HKR-Split-Flap-Display`（预设 id `next_train`，「HKR Split-Flap Display」）在我们这里是**一块透
+明的面板**。这个包只有 1 个预设、1 个 81 KB 的脚本（`next_train.js`），除缩略图外**没有任何贴图**：
+整屏——标题、种别徽章、目的地、月台圆圈、停靠站线路图、翻牌动画——全部由 AWT 画进一张
+`GraphicsTexture` 再当贴图铺满。用 `tools/run-pids-check.ps1` 的 `ScriptApiCheck` 单跑，拿到的是：
+
+```
+FAIL org.mozilla.javascript.EcmaError: ReferenceError: "importPackage" is not defined. (next_train.js#27)
+```
+
+脚本第 27 行是 `importPackage(java.awt);`。我们的引擎在 `ScriptEngine.newScope(cx)` 里用
+`cx.initStandardObjects()` 建作用域——那是**纯标准对象**（ECMAScript 内建），
+**没有** `importPackage` / `importClass` / `Packages`，也没有 `java` / `javax` / `org` / `com` /
+`edu` / `net` 六个包根。所以脚本在**加载阶段**就抛了 `ReferenceError`：`create()` 从未被定义，
+一帧都没画过，面板自然是透明的。日志里只有一行「脚本抛了异常」——而**加载期就抛的脚本**与
+**故意什么都不画的预设**在现象上完全一样，这正是它难判的原因。
+
+#### 依据：v2 用的就是 `ImporterTopLevel`
+
+```
+// javap -p -c com.lx862.mtrscripting.core.ParsedScript
+  49: invokestatic   Context.enter:()L.../Context;
+  54: aload 4
+  56: sipush 200                                   // VERSION_ES6
+  59: invokevirtual  Context.setLanguageVersion:(I)V
+  62: aload 4
+  64: aload_1
+  65: invokevirtual  ScriptManager.getClassShutter:()L.../MTRClassShutter;
+  68: invokevirtual  Context.setClassShutter:(L.../ClassShutter;)V
+  71: aload_0
+  72: new            class .../ImporterTopLevel          <-- 就是它
+  75: dup
+  76: aload 4
+  78: invokespecial  ImporterTopLevel."<init>":(L.../Context;)V
+  81: putfield       ParsedScript.scope:L.../Scriptable;
+```
+
+`ImporterTopLevel.initStandardObjects(cx, sealed)` 的字节码与
+`Context.initStandardObjects()` 内部做的是**同一次调用**（`Context.initStandardObjects(ScriptableObject, Z)`），
+之后才是 `exportAsJSClass(3, this, false)` 与 `delete("constructor")`。所以换成
+`new ImporterTopLevel(cx)` 加的是 importer，**不是另一套内建对象**；
+`getClassName()` 仍是 `"global"`（`topScopeFlag` 为 true）。
+
+`ScriptEngine.newScope()` 现在是：
+
+```java
+cx.setLanguageVersion(Context.VERSION_ES6);
+cx.setOptimizationLevel(-1);
+ScriptClassShutter.install(cx, SHUTTER);   // v2 也是先 setClassShutter 再建作用域
+final Scriptable scope = new ImporterTopLevel(cx);
+registerGlobals(cx, scope);
+```
+
+`newScope()` 是**唯一的建作用域入口**：引擎的编译路径（`ScriptEngine.compile`）与 8 个无头检查
+全部走它，所以「游戏里」和「检查里」拿到的作用域在构造上就是同一个。
+
+#### 沙箱：importer 没有绕过 `ClassShutter`（先验证，再依赖）
+
+这是本次唯一需要警惕的地方——importer 是**第二条**够到 Java 类的路。结论是**没有绕过**，
+两条字节码证据 + 七条实跑证据：
+
+1. **`importPackage` 是惰性的。** `javap -p -c` 的
+   `ImporterTopLevel.importPackage(ScriptableObject, NativeJavaPackage)` 里**一个类都没解析**：
+   它只把包对象记进挂在 scope 上的 `ObjArray`（`associateValue("importedPackages", ...)`），
+   重复导入同一个包直接返回。所以这一步本来就不需要检查。
+2. **解析发生在按名字取值时，而那里就查沙箱。** `ImporterTopLevel.get` → `getPackageProperty`
+   依次问每个已导入的包；`javap -p -c org.mozilla.javascript.NativeJavaPackage` 的
+   `getPkgProperty` 里：
+   ```
+    90: invokevirtual  Context.getClassShutter:()L.../ClassShutter;
+   105: invokeinterface ClassShutter.visibleToScripts:(Ljava/lang/String;)Z
+   112: ifeq 184                                   <-- 不在白名单就跳过
+   ...
+   131: invokestatic   Kit.classOrNull:(...)Ljava/lang/Class;   <-- 四十几条指令之后才加载类
+   ```
+   即**先问白名单，再加载类**；被拒时 `getPkgProperty` 退化成一个 `NativeJavaPackage`（不是 `Class`）。
+
+实跑（`ScriptImporterCheck`，真 `newScope` 作用域）：
+
+| 脚本写法 | 结果 |
+|---|---|
+| `importPackage(java.lang); System.nanoTime()` | `ReferenceError: "System" is not defined` |
+| `java.lang.System.nanoTime()` | `TypeError: Cannot call property nanoTime in object [JavaPackage java.lang.System]` |
+| `Packages.java.lang.System.nanoTime()` | 同上 |
+| `importClass(java.lang.System)` | `EvaluatorException: Function importClass must be called with a class; had "[JavaPackage java.lang.System]"` |
+| `importPackage(java.io); new File(".").getName()` | `ReferenceError: "File" is not defined` |
+| `importPackage(java.lang.reflect); Method.class.getName()` | `ReferenceError: "Method" is not defined` |
+| `importPackage(java.lang)` 后 `typeof System / Class / Runtime` | `undefined,undefined,undefined` |
+
+**白名单一个字都没放宽。** `java.awt.*` / `java.awt.geom.*` 早在 2.3 做运行时画布时就在
+`ScriptClassShutter` 的放行表里，`importPackage` 走的是同一条规则。反过来说一句有对照价值的：
+**JCM 2.x 自己的 `MTRClassShutter` 并不放行 `java.awt.*`**——它的构造器只 `allowClass` 了
+`net.minecraft.*`、`java.lang.*`、`java.util.*`、`sun.java2d.*`、`java.io.Closeable`、
+`java.io.InputStream`、`java.io.OutputStream`、`jdk.proxy1.*`，`denyClass` 了
+`java.lang.reflect.*` 与 `java.io.*`；`JCMScripting.register` 另外放行 `org.mtr.*`、`mtr.*` 和它自己的两个包
+（javap）。也就是说**需要 AWT 的包在 v2 上要靠玩家关掉脚本限制才能跑**。本分支当初为画布做的
+决定正好相反，这里沿用，并把它写成一条对照记录。
+
+#### 新增检查：`ScriptImporterCheck`
+
+见 §7.1 的表。它同时覆盖「importer 全局可用」「沙箱经 importer 仍拒 `java.lang.System` 等」
+「`next_train.js` 级别的 AWT 画布路径」三件事，与 `ScriptShutterCheck`（直接拼写那条路）互补。
+
+---
+
+### 4.16 `Resources.getSystemFont(name)`（本次新增）
+
+脚本第二件依赖的事是字体。它按 v2 文档的写法用 `base.deriveFont(style, size * k)`，
+**从不** `new Font(family, ...)`——因为 `Font.createFont` 载入的字体**不注册进
+`GraphicsEnvironment`**，没有别人找得到的 family，而且只有一面。包自己的头注释把这条列为「踩过的坑」。
+
+`javap -p -c com.lx862.mtrscripting.util.ScriptResourceUtil` 给出完整语义（三个分支）：
+
+| `name` | 参考实现 |
+|---|---|
+| `"Noto Sans"` | 缓存的 `Font.createFont`，来源是 `mtr:font/noto-sans-cjk-tc-medium.otf`（当类字段 `hasNotoSansCjk` 为真）或 `mtr:font/noto-sans-semibold.ttf`；失败记日志、缓存仍为 `null`，于是返回 `null` |
+| `"Noto Serif"` | 缓存的 `Font.createFont`，来源 `mtr:font/noto-serif-cjk-tc-semibold.ttf`；失败记日志并**立即**返回 `null` |
+| 其余全部 | `new Font(name, Font.PLAIN, 1)`——**JVM 字体注册表查询**，字号 1，由调用方缩放 |
+
+`hasNotoSansCjk` 那个分支**没有照搬**，这是读字节码的结果而不是漏掉：`javap -p -c` 显示该字段在
+整个类里**只有一处赋值**，在静态初始化块里，值是 `iconst_0`——它在一整个进程生命周期里恒为
+`false`，所以 `.otf` 那条分支在「本移植的参照 jar」里**不可达**。MTR 3.6.3 也没有这个文件
+（列 `libs/mtr-common.jar`：`assets/mtr/font/` 下只有 `mtr.json`、`noto-sans-semibold.ttf`
+(515204 B)、`noto-serif-cjk-tc-semibold.ttf` (28120132 B)）。照搬只会多一条永远打的警告，
+可观测行为完全一致；这一点写在 `Resources#getSystemFont` 的 javadoc 里。
+
+字体读取放在新的 `ScriptFonts`（与 `ScriptTextures` 同构）：走资源管理器、按
+`Font.createFont(Font.TRUETYPE_FONT, stream)`、**失败返回 `null` 并只报一次**（v2 也是软失败，
+包也是这么写的：HKR 的 `sysFont()` 外面套 `try`，兜底 `new Font("SansSerif", PLAIN, 12)`）。
+资源重载时随 `ScriptEngine.reset()` 一起清缓存。
+
+**HKR 实际写的三个名字——`"Noto Sans CJK TC Medium"`、`"Noto Sans SemiBold"`、`"Monospaced"`——
+全部落到第三个分支**，在 v2 上也是一样。所以那块屏用的是 JVM 的默认字面。这一点**刻意保持一致**：
+偷偷把这三个名字升级成 MTR 自带的 Noto，画出来的字面就和包作者看到的不一样了。文档里照实写。
+
+无头环境没有客户端、也就没有资源管理器，`ScriptFonts` 因此留了一个**包私有**的读取口
+（`headlessSource`），由 `ScriptImporterCheck` 接上 `assets/mtr/font/...` 的 classpath 资源——
+与 `ScriptApiCheck` 给 `include()` 接一个「读真实目录」的实现是同一手法。游戏里有客户端时这个口
+**永远不会被用到**（先问资源管理器）。这样 `Font.createFont` 与
+`deriveFont(int, float)` 这两条**在无头下也能真验证**，而不是只跑通「返回 null 也不崩」。
+
+---
+
+### 4.17 `SoundManager` 的可选参数：Rhino 按**参数个数精确匹配**（本次修复）
+
+同一个脚本顺带查出来的第二个真缺口。HKR 的翻牌声是：
+
+```js
+sm.playSound(id, state.soundOrigin, FLIP_SOUND_VOLUME, pitch);   // 4 个参数
+sm.playLocalSound(id, FLIP_SOUND_VOLUME, pitch);                 // 3 个参数（退路）
+```
+
+而我们的 `SoundManager.playSound` 是 5 参（末位 `String soundCategory`）、
+`playLocalSound` 是 4 参。**Rhino 不会补默认值，它按参数个数精确匹配**——实测（一个独立的最小
+复现程序，不依赖本仓库）：
+
+```
+ERR  SM.playSound('id', null, 0.5, 1.2)        =>  EvaluatorException: Can't find method ArityProbe$SM.playSound(string,null,number,number).
+OK   SM.playSound('id', null, 0.5, 1.2, 'block')  =>  5
+ERR  SM.playLocalSound('id', 0.5, 1.2)         =>  EvaluatorException: Can't find method ArityProbe$SM.playLocalSound(string,number,number).
+OK   SM.playLocalSound('id', 0.5, 1.2, 'block')   =>  4
+```
+
+于是两次调用都解析失败，而脚本把整个播放包在 `try { ... } catch (e) { /* 静默失败 */ }` 里——
+**现象是没声音，日志里什么都没有**。
+
+修法是补两个少参数的重载（`playSound(id, pos, volume, pitch)`、`playLocalSound(id, volume, pitch)`），
+把 `soundCategory` 传 `null`，交给**现有的** `toCategory(null)` → `Source.MASTER`——也就是这个类
+javadoc 里早就写着的「默认 MASTER」，没有新语义。
+
+依据说明：参考 jar 里**根本没有 `SoundManager`**（全 jar 扫描 `getSoundManager` /
+`playLocalSound` 字符串均为 0 命中），所以这个类没有字节码可依，只能依官方文档的签名；而包的调用
+本身就是「签名允许省略类别」的证据。这一点在 `ScriptSound` 的 javadoc 里写清楚了。
+
+`ScriptApiCheck` 新增 `checkOptionalArgumentForms`：两种拼写都从真实作用域里调一遍——短的那个是
+包在用的，长的那个是防止为重载而改坏原有形式。无头没有声音引擎也没有客户端，断言的是**解析**与
+**返回**（这正是缺重载时会失败的东西）。
+
+---
+
+### 4.18 画布贴图到 GL 的整链复核，以及**必须实机确认的那一条**（本次复核）
+
+HKR 这块屏的核心就是「用 AWT 画进 `GraphicsTexture` 再铺满屏幕」，而 2.3 交付时
+`GraphicsTexture.upload()` 的**真实 GL 路径从未在实机验证过**（当时只验证了降级分支）。本次把
+`javap -p -c com.lx862.mtrscripting.util.GraphicsTexture` 与我们的实现逐行对照了一遍：
+
+| 步骤 | 参考实现（javap -c） | 本分支 |
+|---|---|---|
+| `BufferedImage` | `new BufferedImage(w, h, 2)` = `TYPE_INT_ARGB` | 相同 |
+| 渲染提示 | `KEY_TEXT_ANTIALIASING = VALUE_TEXT_ANTIALIAS_ON`、`KEY_STROKE_CONTROL = VALUE_STROKE_PURE` | 相同 |
+| 上传循环 | `for x∈[0,w) for y∈[0,h) pixels.setPixelRGBA(x, y, toAbgr(image.getRGB(x, y)))` | 同一双重循环，上下界与两个下标都一致 |
+| `toAbgr` | `(a<<24)\|(b<<16)\|(g<<8)\|r` | 逐条一致（`GraphicsTexture.abgr`） |
+| `NativeImage` | `new NativeImage(w, h, false)` | 相同 |
+| `DynamicTexture` | 构造器里 `new DynamicTexture(image)`，其构造器设 `setFilter(false, false)` → **最近邻、无 mipmap** | 相同；只是**改到第一次 `upload()` 才建**，这样「创建→画→关」在没有游戏时也能跑 |
+| 注册 | 构造器里 `Minecraft.execute(() -> getTextureManager().register(id, tex))` | 第一次 upload 时 `register(id, tex)` |
+| 真上传 | `RenderSystem.recordRenderCall(dynamicTexture::upload)`（**延迟到帧末**） | 已在渲染线程时**就地上传** `texture.upload()`；不在（BackgroundWorker）时 `Minecraft.execute` 排到主线程 |
+
+两处差异都是「把 GPU 侧延后」的连带结果，脚本能观察到的语义没有变化。
+
+**无头能验到哪一步，这里说清楚**：
+
+| 环节 | 无头可验？ | 由谁验 |
+|---|---|---|
+| AWT 画布真的画上了像素 | ✅ | `ScriptCanvasCheck`（`fillRect` / `clear` 的像素读回比对）、`ScriptImporterCheck`（1088×608 画布 + 背景 + 色块 + `drawString` 的白色像素计数） |
+| ARGB→ABGR 字节序 | ✅ **本次新增** | `ScriptCanvasCheck.checkAbgrSwap`：`FF112233 → FF332211`、alpha 位保持、`0` 仍透明、`FFFFFFFF` 不变、自反 |
+| 色彩简写 `0xRRGGBB` → 不透明 | ✅ | `ScriptCanvasCheck.checkColourRules` |
+| identifier 作为贴图进入绘制调用 | ✅ | 两个检查都断言了 `Texture(... texture=jsblock:dynamic/graphics/<uuid> ...)` |
+| 无 GL 时降级且**只报一次** | ✅ **本次新增断言** | `GraphicsTexture.degradeReports()`：连续 `upload()` 两次必须仍是 1 |
+| 创建 / 释放 / 资源重载回收 | ✅ | `ScriptCanvasCheck`（含第 65 张被拒） |
+| `new NativeImage` → `setPixelRGBA` → `DynamicTexture.upload()` → 屏幕上出现图像 | ❌ **必须实机** | 见下 |
+
+**实机自检方法（本次为它加了一条日志）**：第一次成功上传时打一行 INFO
+
+```
+[Joban Client] PIDS script canvas 1088x608 uploaded as texture jsblock:dynamic/graphics/<uuid>.
+```
+
+于是排查路径变成两条互斥的结论：
+
+1. **日志里有这行** → 像素已经进了显存，问题不在上传。接着看同一帧的绘制调用
+   （`Joban Client` 的脚本调试覆盖层 / `ScriptRenderContext` 的 trace），确认那条
+   `Texture(... texture=jsblock:dynamic/graphics/<uuid> ...)` 的尺寸、uv 与 z 是否正常；
+   若调用在而画面不在，问题在**采样与混合**（最近邻、半透明层）或**像素化离屏**，不在画布。
+2. **日志里没有这行**，而有
+   `A PIDS script canvas (WxH) cannot be uploaded to the GPU: ... It is drawn on but never appears`
+   → 上传本身失败（没有 GL 上下文 / 驱动拒绝 / 尺寸超限），警告里带了原因。**这一条就是无头验不到、
+   必须实机看的那一步。**
+3. 两种都没有 → 脚本没走到 `upload()`（例如 `create()` 提前抛了）；此时 `ScriptApiCheck` 的
+   `state.err` 断言会先在无头检查里报出来。
+
+**与像素化、z-order 的关系**：画布贴图**按普通贴图处理，不做离屏嵌套**。
+`GraphicsTexture` 构造时就把自己的 identifier 记进 `ScriptTextures` 的
+`markExternal`，所以 `ScriptTextures.resolve` 对它直接返回，不会去找同名文件；`Texture` 调用落到
+与任何包内贴图相同的半透明光照层（`MoreRenderLayers.getLight(id, true)`）。
+`PIDSPixelatedPanel` 那趟离屏照旧把脚本的绘制调用画进它自己的 target，画布在其间
+`upload()` 改变的是**绑定的纹理**，不是**绑定的 framebuffer**，两者不冲突。
+
+---
+
 ## 5. 顺带修复的三个上游缺陷
 
 移植过程中发现 YJCM 公开仓库本身**编不过**，以下问题与本分支的功能无关，但必须修复。
@@ -886,6 +1131,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
 |---|---|
 | `PIDSPresetCheck` | 三个附带布局预设的解析（逐条打印组件树）、未知组件的降级、**显示行映射**语义（4 组用例比对内置渲染器的推进规则） |
 | `ScriptShutterCheck` | 脚本沙箱。24 条白名单/黑名单断言，再用**真实引擎作用域**去够四个被禁类（见 §7.7） |
+| `ScriptImporterCheck`（2.5 新增） | Rhino importer：9 个全局（`importPackage` / `importClass` / `Packages` / 6 个包根）在脚本眼里的类型；`next_train.js` 用到的 AWT/Java2D 类经 `importPackage` 与全限定两条路都能解析；`Resources.getSystemFont` 三个分支（含 `Font.createFont` 真读 `mtr:font/noto-sans-semibold.ttf`、`deriveFont(int, float)`、`new Font(name, PLAIN, 1)` 的字号 1）；**12 条**「经 importer 仍被拒」的断言（`importClass` / `Packages` / 包根 / `importPackage` 后再使用，每条都**使用**类而不只是提名字）＋ 允许侧仍可用的正对照；最后把 AWT 画布路径当脚本跑一遍：`importPackage(java.awt)` → 派生字体 → `RenderingHints` → `new Color(int)` → `fillRect` / `drawString` × 1088×608 → 像素读回 → 1 条贴图绘制调用 → 两次 upload 只报 1 次 → 释放（见 §4.15、§4.16、§4.18） |
 | `ScriptPathCheck` | 脚本的**文件**可达范围：资源根**之外**放一个诱饵文件，脚本用 `include("jsblock:../../../secret.js")` 去读，断言的是「它设的那个全局不存在」而不是「防护抛了异常」；另有规则表、真实目录树上的物理防护、以及 `Texture.texture()` 的同一拒绝 |
 | `ScriptCanvasCheck` | 运行时画布：画上去的像素**读回来比对**、无客户端时 `upload()` 降级不抛、`close()` 释放、第 65 张未释放画布被拒、资源重载释放遗留画布 |
 | `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画。另外断言 `MTRClientData` 指向 `mtr.client.ClientData` 且可读，以及脚本里的 `ctx.parseComponent` 全路径（clock 组件、矩形、`canRender`、`render`、`ctx.draw(component)`、五种拒绝） |
@@ -922,7 +1168,38 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 
 ### 7.3 最近一次验证结果
 
-> **HKR 终点站判定（§4.14，本次）**：`.\tools\run-pids-check.ps1 -SkipBuild -HkrPack <HKR PIDS\lower>`
+> **2.5：HKR 翻牌屏「面板透明」的根因（§4.15–§4.18，本次）**
+>
+> - `.\tools\run-pids-check.ps1`（含完整 `gradle build`）汇总行 **`RESULT: ALL CHECKS PASSED`**；
+>   新增的 `ScriptImporterCheck` 单独跑是 **`RESULT: IMPORTER OK`**（42 条断言全绿）；`ScriptShutterCheck`
+>   仍是 **`RESULT: SHUTTER OK`**（24 条规则 + 4 条端到端**未放宽任何一条**）。
+> - **用出问题那个包真跑通**：
+>   `.\tools\run-pids-check.ps1 -SkipBuild -Script <_hkr_split>\assets\jsblock\scripts\next_train.js -ResourceRoot <_hkr_split>`
+>   → 汇总行 **`RESULT: ALL CHECKS PASSED`**；`next_train.js` 在 **0 / 1 / 2 / 4** 四种班次数下都是
+>   `RESULT: SCRIPT OK`，绘制调用 1 条（`Texture(... size=128.0x72.0 texture=jsblock:dynamic/graphics/<uuid> ...)`），
+>   且每个班次数下 `state keys create() left behind: W,H,err,tex,fonts` 之后都是
+>   `OK the preset's own create() recorded no error on state`——**`state.err` 为 `null`，即屏幕画的是它自己的
+>   内容，不是脚本自己的错误屏**（这一条是本次新加的断言，见 §7.1 的 `ScriptApiCheck` 行）。
+> - 修复前同一条命令的输出是
+>   `FAIL org.mozilla.javascript.EcmaError: ReferenceError: "importPackage" is not defined. (next_train.js#27)`。
+> - **9 个真实包、112 个 `.js` 全部重跑**：整轮 `run-all.ps1` 跑了 4 次，得到 **108 / 107 / 107 / 107**；
+>   把 `World_PIDS-Pack-200` 单独重跑一次拿到 **66/66**（`result-World_PIDS-Pack-200-rerun.txt`），
+>   与其余 8 个包合计即 **112 个脚本、108 通过、4 失败**——失败集与 2.4 逐条相同，
+>   即这次改动没有让任何一个既有脚本掉出通过。
+> - **一个必须一起报的口径问题**：`World_PIDS-Pack-200` 的 `london_bus.js` **按墙上时钟发作**。
+>   它的 `animation_arrive()` 在**秒数末位为 9** 时把三个行下标从 1/2/3 顶到 4/5/6、再顶到 7/8/9，
+>   而只有再遇到一个 `:09` 才复位——所以**长会话里下标有约 2/3 的时间是越界的**；第 1、2、3 行分支
+>   拿到 `pids.arrivals().get(x)` 后**没有判空**（第 0 行用的是 `get(i)`，安全），于是
+>   `null.routeNumber()` 在第 130 行抛。**是包自己的潜在缺陷，先于本次改动存在**：
+>   把脚本复制到临时目录、把 `let sec = now.getSeconds()` 改成 `let sec = 9`，任何时刻都能**稳定复现**
+>   （已做，两次 render 都抛在第 130 行）；本次改动碰的三个面（importer、`Resources.getSystemFont`、
+>   `SoundManager` 参数）该脚本一个都没用到。游戏里引擎在第一次抛出后
+>   `adoptLenientArrivals()` 换成占位到达重试并保持，玩家看到的是一行占位而不是黑屏，所以此前没人发现。
+>   一次 `ScriptApiCheck` 是个新进程、只渲染 3 帧，撞上那一秒的机会不大：**实测 20 次失败 2 次（10%）**，
+>   而三个班次数（0 安全）的一整轮约 10–19% 会掉这一分。详见 `V2-API-覆盖表.md` §2.2b。
+> - `ScriptApiCheck` 新增的 `state.err` 断言**在 112 个脚本上全部通过**，没有误报。
+>
+> **HKR 终点站判定（§4.14）**：`.\tools\run-pids-check.ps1 -SkipBuild -HkrPack <HKR PIDS\lower>`
 > 的汇总行 **`RESULT: ALL CHECKS PASSED`**；新增的 `ScriptHkrCheck` 单独跑一遍是
 > **`RESULT: HKR TERMINUS RULE OK`**（6 组 fixture + 2 个真实预设 × 两站 + `marquee` 4 条断言）。
 > 11 个真实包、112 个 `.js` 在修复后**重跑一遍**：**仍是 108 通过 / 4 失败**，

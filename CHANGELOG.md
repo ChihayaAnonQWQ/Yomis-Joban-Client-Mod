@@ -5,9 +5,9 @@ MTR
 
 ## The Fabric manifest declares the dependency the classes always had, and HKR's terminus rule reads the panel's own platform
 
-Nothing here adds anything to look at: 2.5 draws what 2.4 draws. The first item is a manifest catching
-up with the classes the jar already ships; the second is a station name catching up with the platform
-the panel is standing on.
+Nothing in this section adds anything to look at: it draws what 2.4 drew. The first item is a
+manifest catching up with the classes the jar already ships; the second is a station name catching
+up with the platform the panel is standing on.
 
 ### `fabric.mod.json` declares `architectury`
 
@@ -59,6 +59,228 @@ existing `double` overload. `ScriptHkrCheck` pins both, and the eleven-pack run 
 | Check | What it pins |
 |---|---|
 | `ScriptHkrCheck` | HKR's terminus rule on a real MTR world: three stations (`你好 → 测试 → 114514`), real `Station`/`Platform`/`Route` objects in MTR's own client caches, and the same preset run at the terminus and mid-line. The terminus has to answer `true` and the mid-line `false`, including for an auto-detected panel (no filter) and for a filter naming a platform at the other end of the line; `-HkrPack` also runs HKR's two shipped presets and asserts the badge and the route-map strip on their own draw calls. Its second half pins `Text.marquee(number)` |
+
+## The importer globals every JCM 2.x script starts with, and the canvas a real pack paints its whole screen with
+
+A board in the library came up **transparent**, with nothing on it at all. The cause was one line of
+Rhino setup, and this section is what it took to find and fix it.
+
+### The script never loaded, so there was nothing to draw
+
+`HKR-Split-Flap-Display` ships one preset (`next_train`, "HKR Split-Flap Display") and one 81 KB
+script, and apart from its thumbnail it has no textures: the entire board — title, service badges,
+destinations, the stopping-at diagram, the flip animation — is painted into a `GraphicsTexture` with
+AWT. On screen it was an empty panel.
+
+`next_train.js#27` is:
+
+```js
+importPackage(java.awt);
+importPackage(java.awt.geom);
+```
+
+The engine built its script scope with `Context.initStandardObjects()`, which answers a scope of
+**standard objects** — the ECMAScript built-ins and nothing else. It has no `importPackage`, no
+`importClass`, no `Packages`, and none of the `java` / `javax` / `org` / `com` / `edu` / `net`
+package roots. So the preset died of
+
+```
+ReferenceError: "importPackage" is not defined. (next_train.js#27)
+```
+
+**while it was being loaded.** `create()` was never defined, so nothing was ever painted, and the
+panel stayed transparent. Nothing in the log said "the panel is blank" in those words; it said the
+script had thrown once, and a script that throws at load time looks exactly like a preset that draws
+nothing.
+
+JCM 2.x does not use `initStandardObjects()` either. `javap -p -c` of
+`com.lx862.mtrscripting.core.ParsedScript.<init>` is `Context.enter` →
+`setLanguageVersion(200)` → `setClassShutter(ScriptManager.getClassShutter())` →
+`new ImporterTopLevel` / `ImporterTopLevel.<init>(Context)` → `putfield scope`. `newScope()` now
+builds that same scope:
+
+```java
+ScriptClassShutter.install(cx, SHUTTER);
+final Scriptable scope = new ImporterTopLevel(cx);
+```
+
+`ImporterTopLevel`'s own `initStandardObjects` is the very call `Context.initStandardObjects()` makes
+internally (`Context.initStandardObjects(ScriptableObject, Z)`), followed by
+`exportAsJSClass(3, this, false)` and `delete("constructor")` — so the built-ins are the same ones
+and the importer is the only thing added. `newScope()` is the single entry point: the engine's
+compile path and all eight headless checks go through it, so both sides are the same scope by
+construction.
+
+### The importer does not open a hole in the sandbox
+
+The importer is a second route to a Java class, and a route that skipped `ClassShutter` would hand
+every pack the whole JVM — so this was checked before anything else, against the reference jar and
+then by running it. It does not skip the shutter:
+
+* `importPackage` is **lazy**. `javap -p -c` of `ImporterTopLevel.importPackage(ScriptableObject,
+  NativeJavaPackage)` shows it doing nothing but recording the package in an `ObjArray` associated
+  with the scope — no classes are resolved, so no check is needed at that point.
+* Resolution happens later, per name, in `ImporterTopLevel.get` → `NativeJavaPackage.getPkgProperty`,
+  and that is where the shutter is consulted: the bytecode reads
+  `Context.getClassShutter()` and calls `ClassShutter.visibleToScripts(fullName)` **four instructions
+  before** `Kit.classOrNull`, and falls through to a `NativeJavaPackage` when the answer is `false`.
+
+So a denied class resolves to a package object, not a class. Measured on the real scope:
+
+| A pack writes | Result |
+|---|---|
+| `importPackage(java.lang); System.nanoTime()` | `ReferenceError: "System" is not defined` |
+| `java.lang.System.nanoTime()` | `TypeError: Cannot call property nanoTime in object [JavaPackage java.lang.System]` |
+| `Packages.java.lang.System.nanoTime()` | the same refusal |
+| `importClass(java.lang.System)` | `EvaluatorException: Function importClass must be called with a class; had "[JavaPackage java.lang.System]"` |
+| `importPackage(java.io); new File(".")` | `ReferenceError: "File" is not defined` |
+| `importPackage(java.lang.reflect); Method.class.getName()` | `ReferenceError: "Method" is not defined` |
+| `typeof System` after `importPackage(java.lang)` | `undefined` |
+
+**No allow-list entry was added or widened for this.** `java.awt.*` and `java.awt.geom.*` were
+already on `ScriptClassShutter`'s list — the runtime canvas put them there in 2.3 — and `importPackage`
+resolves through the same rules as any other read. (For the record, JCM 2.x's own
+`MTRClassShutter` does **not** allow `java.awt.*`: its allow-list is `net.minecraft.*`, `java.lang.*`,
+`java.util.*`, `sun.java2d.*`, three `java.io` interfaces and `jdk.proxy1.*`, with `JCMScripting`
+adding `org.mtr.*`, `mtr.*` and two of its own packages. A pack that needs AWT therefore needs the
+player to have switched script restrictions off. This branch had already decided the other way for
+its own canvas, and `ScriptShutterCheck` still pins the refusals on both routes.)
+
+`ScriptImporterCheck` asserts all of the above on every build, plus the positive control that the
+allowed half of the same importer still works.
+
+### `Resources.getSystemFont(name)`
+
+The script's second line of business after the imports is its typefaces, and it asks for them the way
+the v2 docs describe: `base.deriveFont(style, size * k)`, never `new Font(family, ...)`, because a
+font that arrives through `Font.createFont` is not registered with the `GraphicsEnvironment` and has
+no family anything else can find.
+
+`javap -p -c com.lx862.mtrscripting.util.ScriptResourceUtil` gives the whole method — three branches:
+
+| Name | Reference implementation |
+|---|---|
+| `"Noto Sans"` | cached `Font.createFont` of `mtr:font/noto-sans-cjk-tc-medium.otf` when the class's `hasNotoSansCjk` flag is set, otherwise `mtr:font/noto-sans-semibold.ttf`; a failure logs and answers `null` |
+| `"Noto Serif"` | cached `Font.createFont` of `mtr:font/noto-serif-cjk-tc-semibold.ttf`; a failure logs and answers `null` |
+| anything else | `new Font(name, Font.PLAIN, 1)` — a JVM font-registry lookup, size 1, for the caller to scale |
+
+The `hasNotoSansCjk` branch is not reproduced, and that is a reading of the reference rather than an
+omission: `javap -p -c` shows the field assigned in exactly one place in that class, its static
+initialiser, with `iconst_0` — it is `false` for the life of the process, so the `.otf` branch is
+unreachable in the jar this port is measured against. MTR 3.6.3 does not ship that file either
+(listing `libs/mtr-common.jar`: `assets/mtr/font/` holds `mtr.json`,
+`noto-sans-semibold.ttf` and `noto-serif-cjk-tc-semibold.ttf`, and nothing else). The observable
+behaviour is identical; the branch is documented in `Resources#getSystemFont`.
+
+The three names HKR actually writes — `"Noto Sans CJK TC Medium"`, `"Noto Sans SemiBold"`,
+`"Monospaced"` — all fall through to `new Font(name, PLAIN, 1)`, in JCM 2.x as much as here, so the
+board is drawn in the JVM's default face. That is kept exactly: quietly upgrading those names to
+MTR's bundled Noto would draw a different typeface from the one the pack's author saw.
+
+### The canvas really does reach the screen — as far as a headless JVM can prove
+
+The board's whole image is a `GraphicsTexture`, and this is the pack that finally exercises the GL
+half of it. The chain was re-read against `javap -p -c` of the reference implementation, line by
+line:
+
+| Step | Reference | This port |
+|---|---|---|
+| `BufferedImage` | `new BufferedImage(w, h, 2)` = `TYPE_INT_ARGB` | identical |
+| Rendering hints | `KEY_TEXT_ANTIALIASING = ON`, `KEY_STROKE_CONTROL = PURE` | identical |
+| Upload loop | `for x in [0,w) for y in [0,h) pixels.setPixelRGBA(x, y, toAbgr(image.getRGB(x, y)))` | the same double loop, both bounds and both indices |
+| `toAbgr` | `(a<<24) \| (b<<16) \| (g<<8) \| r` | identical |
+| `NativeImage` | `new NativeImage(w, h, false)` | identical |
+| `DynamicTexture` | `new DynamicTexture(image)`, which sets `setFilter(false, false)` — nearest neighbour, no mipmap | identical; built on the first `upload()` instead of in the constructor, so a canvas can be created, drawn on and closed with no game running |
+| Registry | `Minecraft.execute(() -> textureManager.register(id, texture))` from the constructor | `textureManager.register(id, texture)` on the first upload |
+| Actual GL | `RenderSystem.recordRenderCall(dynamicTexture::upload)` — deferred to the end of the frame | `texture.upload()` inline when called from the render thread, queued through `Minecraft.execute` otherwise |
+
+Two deliberate differences, both consequences of deferring the GPU side: the texture is registered at
+first upload rather than at construction, and the upload is not deferred through
+`RenderSystem.recordRenderCall` when it is already on the render thread. Everything the script can
+observe is unchanged.
+
+`upload()` then announces itself once per canvas —
+`PIDS script canvas 1088x608 uploaded as texture jsblock:dynamic/graphics/<uuid>` — which is the
+handle an in-game report needs, and the only trace the GPU half leaves. **The GL half itself still
+cannot be exercised off the game**, and that is stated where it matters rather than glossed: what the
+headless checks pin is every step up to and including the byte-order swap
+(`ScriptCanvasCheck.checkAbgrSwap`), the painted pixels read back out of the `BufferedImage`
+(`ScriptCanvasCheck`, `ScriptImporterCheck`), and the degraded path when there is no GL context. See
+`MTR3-PIDS-PORT.md` §4.17 for the in-game self-check.
+
+The canvas is drawn as an ordinary texture: `GraphicsTexture` marks its identifier as externally
+registered, so `ScriptTextures.resolve` never goes looking for a file behind it, and
+`Texture.create(...).texture(canvas.identifier)` lands in the same translucent light layer as any
+pack texture. **No nested offscreen** — the pixelation pass (`PIDSPixelatedPanel`) renders the
+script's draw calls into its own target as it always did, and a canvas upload inside it changes the
+bound texture, not the bound framebuffer.
+
+### Two smaller things the same script found
+
+* **`SoundManager`'s optional argument.** Rhino resolves a Java overload by *exact arity* — a
+  five-parameter method called with four arguments answers
+  `EvaluatorException: Can't find method ...playSound(string,null,number,number)`, it does not fill
+  in a default. HKR plays its flip-board click as `sm.playSound(id, origin, volume, pitch)` with a
+  three-argument `sm.playLocalSound(id, volume, pitch)` fallback, so both calls failed to resolve and
+  the preset's own `catch (e) {}` swallowed the reason: silence, and nothing in the log. Both
+  spellings are now overloads, defaulting the category through the same `toCategory` path that
+  already answered MASTER for an unnamed category.
+* **`ctx.setDebugInfo(...)` is not implemented, and is not invented here either.** A whole-jar scan
+  of the reference implementation for the string `setDebugInfo` returns **zero hits** — it is not in
+  the jar this port follows, so there is no name, signature or behaviour to port. The pack reaches it
+  only when its own `DEBUG_INFO` flag is true (it ships `false`), and even then inside a
+  `try { ... } catch (e) {}`, so it cannot affect the board. Recorded as a version difference between
+  the pack's JCM and this reference build, not as an MTR 4 dependency.
+
+### Checks
+
+| Check | What it pins |
+|---|---|
+| `ScriptImporterCheck` (new) | The nine importer globals (`importPackage` / `importClass` / `Packages` / `java` / `javax` / `org` / `com` / `edu` / `net`) as the script sees them; the AWT and Java2D classes `next_train.js` draws with; `Resources.getSystemFont` in all three of its branches, including `Font.createFont` over `mtr:font/noto-sans-semibold.ttf` and `deriveFont(int, float)`; **twelve** refusals through the importer (`importClass`, `Packages`, the bare package roots, and `importPackage` of a denied package followed by a use), each one *using* the class rather than naming it, plus the positive control that the allowed half of the same importer still resolves; and the whole AWT canvas path as a script — `importPackage(java.awt)`, a derived font, `RenderingHints`, `new Color(int)`, `Graphics2D.fillRect` / `drawString` at 136×76×8 = 1088×608, pixels read back, one texture draw call, one degrade report for two uploads, and a release |
+| `ScriptCanvasCheck` | Gained `checkAbgrSwap`: the ARGB→ABGR swap the upload performs, asserted directly — this is the last step of the pixel path that can be verified without a GPU, and getting it wrong swaps red and blue |
+| `ScriptApiCheck` | Gained the optional-argument sound shapes HKR writes (both spellings, so an overload added for the short form cannot have broken the long one), and a preset whose `create()` catches its own failure into `state.err` and paints an error screen now **fails by name** instead of reporting green over a picture that says "PIDS script error" |
+| `ScriptShutterCheck` | Unchanged, and still green — 24 rule assertions and four end-to-end refusals |
+
+### The board, run for real
+
+```
+== script check: ...\_hkr_split\assets\jsblock\scripts\next_train.js (arrivals=2) ==
+OK   compiled (67253 chars)
+     state keys create() left behind: W,H,err,tex,fonts
+OK   the preset's own create() recorded no error on state
+OK   render() ran
+     draw calls recorded: 1
+       Texture(z=-0.0 pos=0.0,0.0 size=128.0x72.0 texture=jsblock:dynamic/graphics/e5ce9b9a-... uv=0.0,0.0,1.0,1.0 color=FFFFFFFF)
+OK   render() produced draw calls
+OK   all 1 texture/rectangle colours are opaque
+OK   dispose()
+
+RESULT: SCRIPT OK
+```
+
+Green at 0, 1, 2 and 4 arrivals — `state.err` is `null` at every count, so the board is drawing its
+own content and not the script's error panel. `.\tools\run-pids-check.ps1` with that pack added
+(`-Script ...\next_train.js -ResourceRoot ...\_hkr_split`) ends on `RESULT: ALL CHECKS PASSED`, and
+without it on the same line. The nine real packs re-run after all of this: **112 scripts, 108 passed,
+4 failed** — the same four as 2.4, none of them a missing API.
+
+One caveat that belongs with that number, found while re-running it: `World_PIDS-Pack-200`'s
+`london_bus.js` reads the wall clock. Its `animation_arrive()` bumps three row indices from 1/2/3 to
+4/5/6, and then to 7/8/9, once per second-that-ends-in-9 — and never resets them except on a later
+such second, so in a long session the indices are out of range **two thirds of the time**. The row-2
+and row-3 branches (and row 1, which uses `varA`) then call `pids.arrivals().get(x)` and dereference
+the result **without a null check**, so `null.routeNumber()` throws on line 130.
+
+It is the pack's own latent bug, it predates this work, and it is not subtle once seen: copying the
+script to a scratch directory and forcing `let sec = 9` reproduces it every time, on any clock. In
+game the engine's lenient-arrivals retry turns the throw into placeholder rows rather than a black
+panel, which is why nobody had seen it. A single `ScriptApiCheck` is a fresh process that renders
+three frames in well under a second, so it only trips when a render crosses that one-second boundary:
+measured at **2 failures in 20 runs**, which makes a whole regression suite land on 107 rather than 108
+roughly one run in six. The four full runs done here came out **108, 107, 107, 107**, and re-running
+that one pack alone came out **66/66** — so the library figure is **108 of 112**, with 107 on a run
+that catches `london_bus.js` mid-tick. The failing set never changed: the same four scripts as 2.4,
+plus that one flake.
 
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.4
 

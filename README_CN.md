@@ -277,14 +277,15 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 |---|---|
 | 绘制 | `Text` `Texture` `Rectangle` `Vector3f` `Matrices` |
 | 时间与状态 | `Timing` `StateTracker` `CycleTracker` `RateLimit` |
-| 资源 | `Resources`（含 `getMTRVersion`、`getAddonVersion`、`readBufferedImage`） `TextUtil` |
+| 资源 | `Resources`（含 `getMTRVersion`、`getAddonVersion`、`readBufferedImage`、`getSystemFont`） `TextUtil` |
+| Rhino importer | `importPackage(pkg)` `importClass(cls)` `Packages` `java` `javax` `org` `com` `edu` `net` —— v2 的每个脚本都跑在这个作用域里，我们此前用的是没有它们的 `initStandardObjects()`；缺了它们，HKR 翻牌屏的脚本在**加载期**就抛 `ReferenceError`，面板一帧都没画过（透明）。**惰性解析，仍过沙箱**，白名单一个字没放宽 |
 | 世界 | `MinecraftClient` `MinecraftClient.localPlayer()` `PlayerEntity` |
 | MTR 客户端数据 | `MTRClientData`（= `mtr.client.ClientData`：`STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`。**不是** `MinecraftClient` 的别名，理由见下） |
 | 声明式组件 | `ctx.parseComponent(json)` → `render(ctx)` / `canRender()` / `x()` / `y()` / `width()` / `height()` / `type()`；也可以 `ctx.draw(component)` |
 | 运行时画布 | `GraphicsTexture(w, h)`：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`clear` / `fillRect` / `drawText` / `measureText` / `drawTexture` |
 | 耗时操作 | `BackgroundWorker` `Networking` `NetworkResponse` `DataReader` |
 | 持久化 | `Files`：`read` / `readData` / `saveData` / `deleteData` / `hasData` —— 即 v2 的 `FilesUtil`，同名、同签名、同两个根目录（`<游戏目录>` 与 `<游戏目录>/data/mtrscripting`） |
-| 声音 | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` |
+| 声音 | `ctx.getSoundManager()` `SoundManager` `TickableSoundInstance` —— `playSound(id, pos, volume, pitch)` 与 `playLocalSound(id, volume, pitch)` 是真实包写的形式；Rhino 按参数个数**精确**匹配 Java 重载（实测），所以每个少参数形式都有独立重载，而不是靠默认值 |
 | 杂项 | `console` `print` `include` `SCRIPT_INPUT` |
 | 面板本身 | `pids.*`、`arrivals().*`、`arrival.*`、`pids.station()`、`route().getPlatforms()`、`ctx.setAutoZOrdering()` `ctx.setZOrderStep()` |
 | 本分支独有 | `arrival.routeType` 与 `arrival.isLightRailRoute`（MTR 3 的 `Route.routeType`：`NORMAL` / `LIGHT_RAIL` / `HIGH_SPEED`）。MTR 4 没有线路制式，而**两个版本都没有「快慢车」这个标志位**——在意的包是把种别写进线路的**线路号**里再做关键字匹配（见 HKR 的 `getColorByKeyword`）。MTR 3 的线路号藏在界面文案为 **Has Route Number** 的那个勾选框后面，勾上它，那些颜色才会在这里出现 |
@@ -298,7 +299,7 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 
 | 类 | 缺的 |
 |---|---|
-| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `getSystemFont` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` |
+| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` （`getSystemFont` 此前也在这行，**现已实现**） |
 | `Station` | `getZone1/2/3`、`getMinX/Y/Z`、`getMaxX/Y/Z`、`getExits`、`inArea`、`isTransportMode`、`getCenter` —— 需要保留车站几何，而当前包装类没存 |
 | `Stop` | `distance` `dwellTime` `dwellTimeMillis` `platform` `destinationName` `destinationStation` `customDestination` 等 6 条 |
 | `PlayerEntity` | `activeItem` `mainHandItem` `offHandItem` `yaw` `pitch` `bodyYaw` `isSneaking` `isSprinting` `isSwimming` `isHoldingItem` `playerName` |
@@ -308,7 +309,7 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 | `SimplifiedRoute` | `getId` `getColor` `getCircularState` `getPlatformIndex` |
 | `NetworkResponse` | `success` `exception` `getHeaders` |
 | `SimplifiedRoutePlatform` | `getDestination` `getStationId` |
-| `PIDSScriptContext` | `getRenderManager()`（3D 模型渲染）、`setDebugInfo()` |
+| `PIDSScriptContext` | `getRenderManager()`（3D 模型渲染）、`setDebugInfo()` —— 后者在参照 jar 里**根本不存在**（全 jar 扫描 0 命中），HKR 翻牌屏只在自身 `DEBUG_INFO = false` 的分支里调它、外面还套着 `try{}catch{}`，所以记为**不适用**（包的 JCM 版本比参照 jar 新），不是缺口 |
 
 *整个类都还没有的（68 条）：*
 
