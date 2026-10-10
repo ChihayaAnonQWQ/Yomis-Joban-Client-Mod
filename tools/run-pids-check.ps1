@@ -25,6 +25,15 @@
 #   ScriptCaseCheck     checks the spelling tolerance for script names: a pack that stored
 #                       Digital_Rail.js has to be reachable, and a capital must not be a way out of
 #                       a pack.
+#   ScriptFontFallbackCheck  checks the font a preset gets when it asks for one by name: a name the
+#                       machine has comes back untouched; a name it does not have is decided by the
+#                       script the name marks -- a CJK name keeps AWT's substitution when that
+#                       substitution already draws the script, and falls back to MTR's bundled CJK
+#                       face when it cannot, while a Latin or serif name is served from the bundled
+#                       Latin / serif file (HKR's "Noto Sans SemiBold" used to come back as Dialog
+#                       instead). The decision logs once per name, the rule's evidence is asserted in
+#                       pixels -- including the no-CJK path, called directly with a Latin-only font --
+#                       and the whole thing still soft-fails with no resource manager.
 #   ScriptHkrCheck      runs HKR's terminus rule -- the one that decides "not in service" from the
 #                       panel's own index in the service's calling pattern -- against a real MTR
 #                       world, at both ends of a three-station line. Pass -HkrPack to run the two
@@ -126,6 +135,7 @@ $checkSources = @(
     'tools\checks\com\jsblock\script\FilesCheck.java',
     'tools\checks\com\jsblock\script\FilesCheckSupport.java',
     'tools\checks\com\jsblock\script\ScriptCaseCheck.java',
+    'tools\checks\com\jsblock\script\ScriptFontFallbackCheck.java',
     'tools\checks\com\jsblock\script\ScriptHkrCheck.java'
 )
 foreach ($source in $checkSources) {
@@ -227,6 +237,27 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptCaseCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "ScriptCaseCheck (exit $NativeExitCode)" }
+
+# The fonts a preset asks for by name. JCM 2.x hands a name it does not know to the JVM, which
+# silently substitutes its own default -- HKR's "Noto Sans SemiBold" and "Noto Sans CJK TC Medium"
+# both came back as Dialog on a machine without them, which is a panel in the wrong typeface and
+# nothing in the log. This check asserts the port's answer instead: the machine's own font when it
+# has one; for a name it does not have, a CJK name KEEPS AWT's substitution when that substitution
+# already draws the script the name marks and falls back to MTR's bundled CJK face when it cannot,
+# while a Latin or serif name is served from the bundled Latin / serif file; one INFO line per name
+# naming the trade; and no throw when there is no resource manager at all. It also carries the
+# evidence for the rule's two halves, in pixels: the decision is one package-private function of
+# (substitution, name), so the check calls it directly with a Latin-only font and asserts the
+# no-CJK path on a machine that has CJK; and the bundled Latin file's missing glyph is a .notdef
+# box rather than a per-character substitution, because Java2D substitutes per character for
+# logical, composite fonts only.
+Write-Host ''
+Write-Host '== script font fallback (ScriptFontFallbackCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptFontFallbackCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptFontFallbackCheck (exit $NativeExitCode)" }
 
 # HKR's terminus rule, on a real MTR world: the same panel preset has to say "not in service" at
 # the last stop of the line and draw the real arrivals at a stop in the middle. Run last, because

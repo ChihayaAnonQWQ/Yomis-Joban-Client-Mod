@@ -3,6 +3,95 @@
 ## Compatible MTR Version
 MTR
 
+## A font name the machine does not have is drawn in a face that can draw it, not in AWT's silent substitution
+
+HKR Split-Flap Display asks `Resources.getSystemFont(...)` for three names. Only two of them —
+`"Noto Sans"` and `"Noto Serif"` — are the names JCM 2.x reads out of MTR's own font files, so
+`"Noto Sans SemiBold"` and `"Noto Sans CJK TC Medium"` both fall into its third branch,
+`new Font(name, Font.PLAIN, 1)`: a lookup in the JVM's own font registry. A name that registry does
+not have is **silently replaced**, and the panel is drawn in whatever face the JVM happened to pick
+instead of the one the pack's author wrote down.
+
+### What the substitution measured, on this machine
+
+| Request | `getFamily()` | `getFontName()` |
+|---|---|---|
+| `"Noto Sans SemiBold"` | `Dialog` | `Dialog.plain` |
+| `"Noto Sans CJK TC Medium"` | `Dialog` | `Dialog.plain` |
+
+Neither name is in the registry — the only installed families holding a Noto name are `Noto Sans SC`,
+`Noto Sans SC Medium` and `Noto Serif SC` — and AWT reports no error at all. JCM 2.x behaves the same
+way on a machine without those fonts, which is why this is a **deliberate deviation from v2** and is
+recorded as such in [`MTR3-PIDS-PORT.md`](MTR3-PIDS-PORT.md) §4.19.
+
+### What the port does instead
+
+The JVM lookup stays the **first** choice: a name this machine has is returned exactly as before, so
+no machine that already drew a pack correctly changes. A name the registry does not have is answered
+from MTR's bundled Noto (`mtr:font/noto-sans-semibold.ttf`, and the CJK
+`mtr:font/noto-serif-cjk-tc-semibold.ttf`) through the existing `ScriptFonts` reader, its path guard
+and its failure cache — except when the face AWT substituted for that name **already draws what the
+name asks for**, in which case the substitution is kept, which is what JCM 2.x draws with. That
+exception is not a nicety; the rule without it was wrong, and the subsection below says how.
+
+"Does not have" is decided by two rules rather than one, because one is not enough in either
+direction:
+
+* a one-shot, lower-cased set of the installed family names, in the default locale **and** in
+  `Locale.ENGLISH`. The English table is load-bearing on a Chinese-locale machine: here
+  `getAvailableFontFamilyNames()` holds `Microsoft YaHei` while `new Font("Microsoft YaHei", …)
+  .getFamily()` answers `微软雅黑`;
+* the resolved font's own family and **face** names, ignoring case, in both locales. A face spelling
+  is in no family table at all — `"Arial Bold"` resolves to family `Arial` and only `getFontName()`
+  shows the machine has it — so the table alone would have sent a working font to the fallback.
+  `Font.getName()` is deliberately not consulted: it returns the string the caller passed in, so it
+  agrees with the request even for a name nothing has.
+
+### Which bundled face, and why a CJK name is measured rather than assumed
+
+The choice is `Resources.substituteFor(substitute, name)` — one function of the JVM's substitution and
+the request name, package-private so the check can hand it a font whose coverage it knows and assert
+the branch this machine does **not** take. Three answers, in this order:
+
+1. the name **marks a CJK script** (`CJK`, `SC`, `TC`, `JP`, `KR`, `Hans`, `Hant`, … as a word, or a
+   name written in CJK/kana/hangul) **and** the substitution draws every script the name marks → the
+   substitution is **kept**. A Japanese mark is probed with `あ` and a Korean one with `한`, on top of
+   the Han probe `下` that every CJK name has to pass. HKR's `"Noto Sans CJK TC Medium"` lands here on
+   this machine: AWT substitutes `Dialog`, a *logical, composite* font that paints `下` (198 px) and
+   `班` (443 px) as two real characters. Keeping it changes nothing about a panel that was already
+   right;
+2. the name marks a CJK script the substitution **cannot** draw → MTR's bundled CJK face
+   (`mtr:font/noto-serif-cjk-tc-semibold.ttf`), the only bundled file with CJK glyphs at all;
+3. anything else → the bundled face the name's style asks for: `serif` selects the bundled CJK file,
+   every other name the bundled Latin `mtr:font/noto-sans-semibold.ttf`, which is the face HKR's
+   `"Noto Sans SemiBold"` asks for.
+
+**The first cut of this rule was wrong, and how it was wrong is worth keeping.** It said "a CJK name
+takes the bundled CJK file" unconditionally, and the assumption underneath was that the Chinese
+characters a bundled *Latin* file lacks would be filled in per character — which is how a browser, or
+a composite font, behaves. Java2D does **not** do that for a physical font: a face that arrives
+through `Font.createFont` has one face and no fallback chain, so `noto-sans-semibold.ttf` paints `下`
+and `班` as the **identical 246-pixel missing-glyph box** (`.notdef`, the tofu square), while `Dialog`
+— a logical, composite font — substitutes a face per character and paints the real glyphs. Both
+consequences are in the rule above:
+
+* a bundled file must never be chosen for a script it has no glyph for — hence the CJK file whenever
+  the substitution cannot draw the script, even though the name asked for a sans;
+* and a substitution that **already draws the script must not be thrown away** — hence the probe. The
+  unconditional rule replaced a working `Dialog` with a serif face the pack never asked for.
+
+`ScriptFontFallbackCheck` pins both halves, pixels included.
+
+### Checks
+
+| Check | What it pins |
+|---|---|
+| `ScriptFontFallbackCheck` (**new**) | `"Noto Sans SemiBold"` is the bundled Latin face rather than `Dialog`, and scales with the pack's own `deriveFont(BOLD, 40)`; `"Noto Sans CJK TC Medium"` is answered with a face whose `下` and `班` are two different drawings (not the same tofu box), whichever of the two paths this machine takes — and the check calls the decision function **directly with a Latin-only font**, so the branch this machine does *not* take is asserted anyway: it selects MTR's bundled CJK face, that face draws `下`, and the reason names the character the substitute lacks. The bundled Latin file is pinned as the tofu control (identical 246 px for both characters) and the bundled CJK file as the real-glyph side (293 vs 611 px). `"Noto Sans"` / `"Noto Serif"` are unchanged, still `Font.createFont` at size 1 out of their own files; `"Noto Sans SC"`, the face-spelling `"Noto Sans SC Bold"`, the logical `Dialog` and `Monospaced` all still come back as the machine's own fonts; the per-name cache is dropped by `resetFonts()`; **one** INFO line per name says which path was taken, what AWT substituted and why (captured through log4j, which the check raises to INFO for the duration); and with no resource manager the whole thing still soft-fails to the JVM's substituted font instead of throwing — including a CJK name, which needs no file at all |
+
+The eleven-pack regression is unchanged at **108/112** — the packs' own scripts reach the bundled
+fonts only in game (the headless pack run has no `mtr` assets), which is the soft-failure path this
+change leaves exactly as it was.
+
 ## The Fabric manifest declares the dependency the classes always had, and HKR's terminus rule reads the panel's own platform
 
 Nothing in this section adds anything to look at: it draws what 2.4 drew. The first item is a

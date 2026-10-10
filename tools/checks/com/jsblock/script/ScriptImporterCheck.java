@@ -164,8 +164,11 @@ public final class ScriptImporterCheck {
 	 * {@link ScriptEngine.Resources#getSystemFont} — the method that put HKR's board on screen.
 	 *
 	 * <p>Three behaviours, from the reference jar's bytecode rather than from the docs: the two names
-	 * that are MTR's own bundled fonts, and the fall-through that is a JVM font lookup at
-	 * {@code PLAIN} size {@code 1}.</p>
+	 * that are MTR's own bundled fonts, and the fall-through that starts as a JVM font lookup at
+	 * {@code PLAIN} size {@code 1}. That last one is where this port deviates — a name the machine
+	 * does not have is answered from MTR's bundled Noto instead of from AWT's silent substitution —
+	 * and {@link ScriptFontFallbackCheck} is the check that covers it; what is asserted here is the
+	 * contract every preset depends on either way, size 1 and a font rather than a throw.</p>
 	 */
 	private static void checkSystemFonts(Context cx, Scriptable scope) {
 		/* "Noto Sans" is the one name whose branch loads a file. It has to come back as a real
@@ -181,12 +184,14 @@ public final class ScriptImporterCheck {
 				"deriveFont(int, float) scales it, the unambiguous overload the pack's header insists on: "
 						+ derived);
 
-		/* Everything else is new Font(name, PLAIN, 1). HKR asks for "Noto Sans CJK TC Medium",
-		   "Noto Sans SemiBold" and "Monospaced" -- all three land here, in JCM 2.x as well. */
+		/* Everything else starts as new Font(name, PLAIN, 1) — and, since this port's fallback, ends
+		   as MTR's bundled Noto when the machine does not have the name. HKR asks for "Noto Sans CJK
+		   TC Medium", "Noto Sans SemiBold" and "Monospaced"; the first two are not installed here.
+		   Either answer is a size-1 font the caller scales, which is the contract asserted below. */
 		final Object fallback = evaluate(cx, scope,
 				"String(Resources.getSystemFont(\"Noto Sans CJK TC Medium\").getSize())");
 		expect("1".equals(String.valueOf(fallback)) || "1.0".equals(String.valueOf(fallback)),
-				"an unknown name falls through to new Font(name, PLAIN, 1), which the caller scales: "
+				"an uninstalled name answers a size-1 font the caller scales with deriveFont: "
 						+ fallback);
 
 		final Object mono = evaluate(cx, scope, "String(Resources.getSystemFont(\"Monospaced\").getFamily())");

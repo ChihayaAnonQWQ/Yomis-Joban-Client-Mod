@@ -20,8 +20,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * out of the mod's resource pack with {@code Font.createFont} — javap of
  * {@code com.lx862.mtrscripting.util.ScriptResourceUtil.<clinit>} shows the three locations it
  * builds, and {@code readFont} shows {@code Font.createFont(0, readStream(id))}. Everything else
- * falls back to {@code new Font(name, PLAIN, 1)} — a name lookup in the JVM's own font registry,
- * not a file.</p>
+ * starts as {@code new Font(name, PLAIN, 1)} — a name lookup in the JVM's own font registry, not a
+ * file — and a name that registry does not have is answered from MTR's bundled Noto through this
+ * class when the JVM's own substitution cannot draw the script the name asks for. When it can, the
+ * substitution is kept, which is what JCM 2.x does unconditionally; the rule and the evidence are in
+ * {@link ScriptEngine.Resources#getSystemFont(String)} and
+ * {@link ScriptEngine.Resources#substituteFor(java.awt.Font, String)}.</p>
  *
  * <h2>Why a font read out of the pack is not a "system font"</h2>
  * <p>A font that arrives through {@code Font.createFont} is <em>not</em> registered with the

@@ -621,18 +621,82 @@ public final class ScriptEngine {
 		 * {@code noto-serif-cjk-tc-semibold.ttf} and nothing else), so a port that took the branch
 		 * would only ever warn. The observable behaviour is identical.</p>
 		 *
-		 * <h2>What this means for a pack</h2>
-		 * <p>The names the packs actually write are <em>not</em> these two. HKR asks for
+		 * <h2>What a pack actually asks for</h2>
+		 * <p>The names the packs write are <em>not</em> these two. HKR asks for
 		 * {@code "Noto Sans CJK TC Medium"}, {@code "Noto Sans SemiBold"} and {@code "Monospaced"},
-		 * and all three fall through to {@code new Font(name, PLAIN, 1)} — a lookup in the JVM's
-		 * font registry, where an unknown family resolves to the platform's default. That is JCM
-		 * 2.x's behaviour as well, so it is kept exactly: a port that quietly upgraded those names
-		 * to MTR's bundled Noto would draw a different typeface from the one the pack's author saw.</p>
+		 * and the first two fall through to {@code new Font(name, PLAIN, 1)} — a lookup in the JVM's
+		 * font registry. A name that is not in that registry is <b>silently replaced</b>, which is
+		 * the failure this port fixes: measured on this machine's Java 21 (Azul),
+		 * {@code new Font("Noto Sans SemiBold", PLAIN, 1).getFamily()} and the same call for
+		 * {@code "Noto Sans CJK TC Medium"} both answer {@code "Dialog"} with
+		 * {@code getFontName() == "Dialog.plain"}, and the only installed families holding a Noto
+		 * name are {@code Noto Sans SC}, {@code Noto Sans SC Medium} and {@code Noto Serif SC}. The
+		 * panel therefore drew in the JVM's substituted face rather than in the Noto the pack's
+		 * author asked for — and JCM 2.x behaves the same way on a machine without those fonts, so
+		 * this is a deliberate deviation, recorded in {@code MTR3-PIDS-PORT.md}.</p>
 		 *
-		 * <p>Cached per name in the reference implementation with a plain static field, which is
-		 * also what happens here ({@code volatile} and this method {@code synchronized} only so a
-		 * {@code BackgroundWorker} thread cannot race the render thread into loading the same
-		 * 515 KB file twice; the value cached is the same one).</p>
+		 * <p>The lookup stays the <b>first</b> choice: a name this machine has is returned exactly
+		 * as before, so no machine that already drew the pack correctly changes. Only a name the
+		 * registry does not have is served from MTR's own bundled Noto instead of from AWT's
+		 * substitution.</p>
+		 *
+		 * <h2>Deciding that a name is not installed</h2>
+		 * <p>Two rules, and both are needed:</p>
+		 * <ol>
+		 *   <li>a one-shot, case-insensitive set of the installed family names
+		 *       ({@code GraphicsEnvironment.getAvailableFontFamilyNames()}, default locale and
+		 *       {@link java.util.Locale#ENGLISH} as well). The default-locale table alone is not
+		 *       enough: on this {@code zh_CN} machine {@code "Microsoft YaHei"} is absent from it
+		 *       while {@code new Font("Microsoft YaHei", ...).getFamily()} answers {@code "微软雅黑"}
+		 *       — an installed font would have been mistaken for a missing one.</li>
+		 *   <li>the resolved {@code Font}'s own family and face names, compared ignoring case, in
+		 *       both locales. AWT resolves a <em>face</em> spelling like {@code "Arial Bold"} to
+		 *       family {@code Arial} + face {@code "Arial Bold"}, and that spelling is in no family
+		 *       table. Comparing {@code getName()} here would prove nothing — it returns the string
+		 *       the caller passed in.</li>
+		 * </ol>
+		 * <p>A name that resolved to {@code Dialog} fails both rules, which is exactly the
+		 * substitution signature.</p>
+		 *
+		 * <h2>Which bundled face, and when a CJK name keeps the machine's own font instead</h2>
+		 * <p>Three answers, in this order — {@link #substituteFor}, which is package-private on
+		 * purpose so the check can assert the branch a given machine does <em>not</em> take:</p>
+		 * <ol>
+		 *   <li>a name that <em>marks</em> a CJK script ({@code CJK}, {@code SC}, {@code TC},
+		 *       {@code JP}, {@code KR}, {@code Hans}, {@code Hant}, … as a word, or a name written in
+		 *       CJK/kana/hangul) is measured rather than assumed: the JVM's substitution is probed
+		 *       for every script the name marks — {@code canDisplay('下')} for Han, and additionally
+		 *       {@code 'あ'} for a Japanese mark and {@code '한'} for a Korean one, because a CJK
+		 *       face carries Han whatever else it carries. <b>If it draws them all, it is kept.</b>
+		 *       A machine with a real Chinese font installed already has a better answer than MTR's
+		 *       bundled serif CJK file: HKR's {@code "Noto Sans CJK TC Medium"} is asking for a
+		 *       <em>sans</em>, and the substitution may well be one.</li>
+		 *   <li>a name that marks a CJK script the substitution <b>cannot</b> draw → MTR's bundled
+		 *       CJK face ({@code mtr:font/noto-serif-cjk-tc-semibold.ttf}), the only bundled file
+		 *       with CJK glyphs at all. This is the one place the port goes beyond "serif means
+		 *       serif", and the reason is measured: the bundled Latin face has no CJK glyph, and
+		 *       Java2D does <b>not</b> substitute a face per glyph for a physical font —
+		 *       {@code drawString("下")} through {@code noto-sans-semibold.ttf} paints the same 246
+		 *       pixels as an unmapped character, a missing-glyph box, while a logical font such as
+		 *       {@code Dialog} paints the real character. The first version of this rule — "a CJK
+		 *       name takes the bundled CJK file, unconditionally" — was wrong in the half that
+		 *       matters, and is recorded in {@code MTR3-PIDS-PORT.md} §4.19: it discarded a
+		 *       substitution that already drew the script, and it read per-glyph fallback as if it
+		 *       worked for a {@code Font.createFont} face.</li>
+		 *   <li>anything else → the bundled face the name's style asks for: {@code "serif"} in the
+		 *       name selects {@code Noto Serif} (that same CJK file) and every other name the bundled
+		 *       {@code Noto Sans} ({@code mtr:font/noto-sans-semibold.ttf}), which is the face HKR's
+		 *       {@code "Noto Sans SemiBold"} asks for.</li>
+		 * </ol>
+		 *
+		 * <p>Every resolved name is cached — the two built-ins in the reference implementation's
+		 * plain static fields, and the whole branch-3 answer in
+		 * {@link #resolvedByRequest} — so the per-frame call a renderer makes is a map lookup.
+		 * {@code volatile} and the lock are there so a {@code BackgroundWorker} thread cannot race
+		 * the render thread into loading the same 515 KB file twice; the value cached is the same
+		 * one. A bundled read that fails answers the JVM's substituted font rather than throwing,
+		 * and one INFO line per name names the request, what AWT did with it, what it is answered
+		 * with and why.</p>
 		 */
 		public static java.awt.Font getSystemFont(String name) {
 			if (name == null) {
@@ -658,8 +722,385 @@ public final class ScriptEngine {
 				}
 				return notoSerif;
 			}
-			return new java.awt.Font(name, java.awt.Font.PLAIN, 1);
+			/* Branch 3: the JVM's own font registry first, and only a name it does not have is
+			   answered from MTR's bundled Noto. See the method comment for both halves of the
+			   "is it installed" test and for how the answer is chosen. */
+			java.awt.Font resolved = resolvedByRequest.get(name);
+			if (resolved != null) {
+				return resolved;
+			}
+			synchronized (Resources.class) {
+				resolved = resolvedByRequest.get(name);
+				if (resolved != null) {
+					return resolved;
+				}
+				final java.awt.Font system = new java.awt.Font(name, java.awt.Font.PLAIN, 1);
+				if (isInstalledFamily(name, system)) {
+					resolvedByRequest.put(name, system);
+					return system;
+				}
+				final Substitute chosen = substituteFor(system, name);
+				resolvedByRequest.put(name, chosen.font);
+				/* One line per request name -- the cache above is what makes it once, not a guard
+				   here -- naming the request, what AWT did with it, what it is answered with and
+				   why, so a panel in the wrong typeface can be traced from the log. */
+				if (chosen.font == system) {
+					Joban.LOGGER.info("[Joban Client] PIDS script font \"{}\" is not installed on this machine,"
+							+ " so AWT substitutes \"{}\"; keeping the substitution, because {}",
+							name, system.getFamily(), chosen.reason);
+				} else {
+					Joban.LOGGER.info("[Joban Client] PIDS script font \"{}\" is not installed on this machine"
+							+ " (AWT silently substitutes \"{}\"); using \"{}\" instead, because {}",
+							name, system.getFamily(), chosen.font.getFontName(), chosen.reason);
+				}
+				return chosen.font;
+			}
 		}
+
+		/**
+		 * Whether this machine's font registry has {@code name} — the guard that keeps the fallback
+		 * off every font that is already there.
+		 *
+		 * <p>Rule one is the cached family table; rule two is the resolved font's own family and
+		 * face names in both the default locale and English. Both are needed and for opposite
+		 * reasons: the table has no <em>face</em> spelling in it ({@code "Arial Bold"} resolves to
+		 * family {@code Arial}, and only {@code getFontName()} shows it is installed), while
+		 * {@code getFamily()} is localized ({@code "Microsoft YaHei"} answers {@code "微软雅黑"}
+		 * on this {@code zh_CN} machine, where the English name is the one in the table).
+		 * {@code Font.getName()} is deliberately not consulted: it returns the string that was
+		 * passed in, so it is equal to the request for every name including a missing one.</p>
+		 */
+		private static boolean isInstalledFamily(String name, java.awt.Font resolved) {
+			if (installedFamilies().contains(name.toLowerCase(java.util.Locale.ROOT))) {
+				return true;
+			}
+			return name.equalsIgnoreCase(resolved.getFamily())
+					|| name.equalsIgnoreCase(resolved.getFamily(java.util.Locale.ENGLISH))
+					|| name.equalsIgnoreCase(resolved.getFontName())
+					|| name.equalsIgnoreCase(resolved.getFontName(java.util.Locale.ENGLISH));
+		}
+
+		/**
+		 * The installed family names, lower-cased, read once per resource reload.
+		 *
+		 * <p>Both the default-locale and the English tables are merged, so a name is recognised in
+		 * whichever spelling the pack used. An environment that cannot enumerate its fonts answers
+		 * an empty set rather than throwing: {@link #isInstalledFamily} then decides on the
+		 * resolved font's own names, which still recognises an installed family and still refuses
+		 * a {@code Dialog} substitution.</p>
+		 */
+		private static Set<String> installedFamilies() {
+			Set<String> families = systemFamilies;
+			if (families == null) {
+				synchronized (Resources.class) {
+					families = systemFamilies;
+					if (families == null) {
+						families = new HashSet<>();
+						try {
+							final java.awt.GraphicsEnvironment environment =
+									java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment();
+							collectFamilies(environment.getAvailableFontFamilyNames(), families);
+							collectFamilies(environment.getAvailableFontFamilyNames(java.util.Locale.ENGLISH),
+									families);
+						} catch (RuntimeException | LinkageError cannotEnumerate) {
+							/* Leave the set empty; the resolved-name rule is the fallback rule. */
+						}
+						systemFamilies = families;
+					}
+				}
+			}
+			return families;
+		}
+
+		private static void collectFamilies(String[] names, Set<String> into) {
+			for (String family : names) {
+				if (family != null && !family.isEmpty()) {
+					into.add(family.toLowerCase(java.util.Locale.ROOT));
+				}
+			}
+		}
+
+		/**
+		 * What an uninstalled request is answered with, and why — the decision and the log line's
+		 * reason in one value, so the two cannot drift apart.
+		 */
+		static final class Substitute {
+			/**
+			 * The font to draw with. Never {@code null}: a bundled file that cannot be read leaves
+			 * the JVM's own substitution in place, which is what JCM 2.x would have drawn with.
+			 */
+			final java.awt.Font font;
+			/** Why this font, phrased to finish the log line's "…, because …". */
+			final String reason;
+
+			private Substitute(java.awt.Font font, String reason) {
+				this.font = font;
+				this.reason = reason;
+			}
+		}
+
+		/**
+		 * The rule for a name this machine does not have, as one function of the substitute and the
+		 * request name.
+		 *
+		 * <p>Package-private and static on purpose: it is what lets the check hand in a font whose
+		 * glyph coverage it knows, so the branch a given machine does not take is still asserted on
+		 * that machine. In game the substitute is always
+		 * {@code new java.awt.Font(name, PLAIN, 1)}, built by the caller.</p>
+		 *
+		 * <h2>The three answers</h2>
+		 * <ol>
+		 *   <li>a name that marks a CJK script ({@link #markedScripts}) and a substitute that
+		 *       draws every script it marks → the substitute, unchanged. This is the adaptive half:
+		 *       a machine with a real Chinese font has a better answer than MTR's bundled serif CJK
+		 *       face, and a name like {@code "Noto Sans CJK TC Medium"} is asking for a sans;</li>
+		 *   <li>a name that marks a CJK script the substitute cannot draw → MTR's bundled CJK face,
+		 *       the only bundled file with CJK glyphs at all;</li>
+		 *   <li>anything else → the bundled face the name's style asks for: {@code "serif"} selects
+		 *       the bundled CJK file, every other name the bundled Latin face.</li>
+		 * </ol>
+		 *
+		 * <p>A bundled file that cannot be read (no client, no resource manager) leaves the
+		 * substitute in place rather than throwing or answering {@code null}.</p>
+		 */
+		static Substitute substituteFor(java.awt.Font substitute, String name) {
+			if (asksForCjkFace(name)) {
+				/* A sans CJK family this machine really has beats both alternatives. AWT's own
+				   substitution is not trustworthy here: it draws Han, but on this machine it draws it
+				   with SimSun -- proven by identical pixel patterns for 下 and 班 -- and a Song/Ming
+				   face beside the panel's Noto Sans Latin is the mismatch a reader notices first. MTR's
+				   bundled CJK file is a serif too, so it is the last resort rather than the answer. */
+				final java.awt.Font sans = installedSansCjkFace(name);
+				if (sans != null) {
+					return new Substitute(sans, "this machine has \"" + sans.getFamily()
+							+ "\", a sans CJK face, and the request asks for " + markedScriptList(name)
+							+ " in a sans style; MTR bundles no CJK sans face to prefer over it");
+				}
+				final java.awt.Font cjk = bundledCjkFace();
+				return cjk == null
+						? new Substitute(substitute, unreadableReason())
+						: new Substitute(cjk, "no sans CJK family is installed here, so MTR's bundled serif"
+								+ " CJK face -- the only bundled file that draws " + markedScriptList(name)
+								+ " -- is the last resort (Java2D paints a missing-glyph box for a physical"
+								+ " font instead of substituting one per character)");
+			}
+			if (isSerifRequest(name)) {
+				final java.awt.Font serif = bundledCjkFace();
+				return serif == null
+						? new Substitute(substitute, unreadableReason())
+						: new Substitute(serif, "the name asks for a serif face");
+			}
+			final java.awt.Font sans = bundledLatinFace();
+			return sans == null
+					? new Substitute(substitute, unreadableReason())
+					: new Substitute(sans, "the bundled Latin Noto is the face a non-CJK name wants");
+		}
+
+		private static String unreadableReason() {
+			return "MTR's bundled Noto could not be read, so JCM 2.x's own substitution is what is left";
+		}
+
+		/**
+		 * The bundled Latin face — {@code mtr:font/noto-sans-semibold.ttf} — read once and shared
+		 * with the {@code "Noto Sans"} branch above.
+		 *
+		 * <p>Read through {@link ScriptFonts#read}, which applies the script path rules and reports a
+		 * failure once; the field is the cache, so a name that lands here twice loads the file once.
+		 * Called from inside the caller's lock in game, and from the check on one thread.</p>
+		 */
+		private static java.awt.Font bundledLatinFace() {
+			if (notoSans == null) {
+				notoSans = ScriptFonts.read(NOTO_SANS);
+			}
+			return notoSans;
+		}
+
+		/** The bundled CJK face — {@code mtr:font/noto-serif-cjk-tc-semibold.ttf} — read once. */
+		private static java.awt.Font bundledCjkFace() {
+			if (notoSerif == null) {
+				notoSerif = ScriptFonts.read(NOTO_SERIF);
+			}
+			return notoSerif;
+		}
+
+		private static boolean isSerifRequest(String name) {
+			return name.toLowerCase(java.util.Locale.ROOT).contains("serif");
+		}
+
+		/**
+		 * The scripts a request name marks, and the character each is probed with.
+		 *
+		 * <p>Every CJK face carries Han whatever else it carries, so a Japanese or Korean mark is
+		 * <em>added</em> to Han rather than replacing it: {@code "Noto Sans CJK JP"} has to draw both
+		 * 下 and あ, which is why a substitute with Han but no kana is not good enough for it.</p>
+		 */
+		private enum Script {
+			/** A CJK ideograph: 下, "down" — a character no CJK face is without. */
+			HAN('\u4e0b'),
+			/** Hiragana あ. */
+			KANA('\u3042'),
+			/** The Hangul syllable 한. */
+			HANGUL('\uD55C');
+
+			private final char probe;
+
+			Script(char probe) {
+				this.probe = probe;
+			}
+		}
+
+		/**
+		 * Which scripts a request name marks: the ones it names as words, and the ones it is
+		 * <em>written</em> in.
+		 *
+		 * <p>Either the name is written in CJK/kana/hangul ({@code "微软雅黑"}, {@code "メイリオ"}) or
+		 * one of its words says so ({@code "Noto Sans CJK TC Medium"}, {@code "Noto Sans SC"},
+		 * {@code "Source Han Sans"}). Only reached for a name that is not installed, so a false
+		 * positive costs nothing but a wider face — which is why the style words that merely suggest
+		 * a CJK face ({@code "gothic"}) are left in.</p>
+		 */
+		private static Set<Script> markedScripts(String name) {
+			final java.util.EnumSet<Script> scripts = java.util.EnumSet.noneOf(Script.class);
+			for (int i = 0; i < name.length(); i++) {
+				final char c = name.charAt(i);
+				if (c >= 0x3040 && c <= 0x30FF) {
+					/* Kana, tested before the wider CJK range below, which contains it. */
+					scripts.add(Script.KANA);
+				} else if (c >= 0xAC00 && c <= 0xD7AF) {
+					scripts.add(Script.HANGUL);
+				} else if (c >= 0x2E80 && c <= 0x9FFF || c >= 0xF900 && c <= 0xFAFF) {
+					/* Radicals, ideographs, and the compatibility ideographs. */
+					scripts.add(Script.HAN);
+				}
+			}
+			for (String word : name.toLowerCase(java.util.Locale.ROOT).split("[^a-z0-9]+")) {
+				if (CJK_HAN_WORDS.contains(word)) {
+					scripts.add(Script.HAN);
+				}
+				if (CJK_KANA_WORDS.contains(word)) {
+					scripts.add(Script.KANA);
+				}
+				if (CJK_HANGUL_WORDS.contains(word)) {
+					scripts.add(Script.HANGUL);
+				}
+			}
+			if (!scripts.isEmpty()) {
+				/* Anything that marks a CJK face at all is expected to have Han: this is the "only
+				   cjk was mentioned" case, and it is what {@link #asksForCjkFace} reduces to. */
+				scripts.add(Script.HAN);
+			}
+			return scripts;
+		}
+
+		/**
+		 * A sans CJK family this machine actually has, or {@code null}.
+		 *
+		 * <p>Deliberately a short list of families that are sans by construction rather than a
+		 * heuristic over every installed face: style cannot be read off a family name, and getting it
+		 * wrong is visible on the panel. The weight suffix is tried first when the request names one,
+		 * so {@code "Noto Sans CJK TC Medium"} lands on a Medium face where the machine has it --
+		 * which is the weight the pack asked for in the first place.</p>
+		 */
+		private static java.awt.Font installedSansCjkFace(String name) {
+			final Set<String> installed = installedFamilies();
+			if (installed.isEmpty()) {
+				return null;
+			}
+			final String asked = name.toLowerCase(java.util.Locale.ROOT);
+			final java.util.List<String> suffixes = new java.util.ArrayList<>();
+			if (asked.contains("medium")) {
+				suffixes.add(" Medium");
+			}
+			if (asked.contains("semibold") || asked.contains("semi bold") || asked.contains("demi")) {
+				suffixes.add(" SemiBold");
+			}
+			if (asked.contains("bold")) {
+				suffixes.add(" Bold");
+			}
+			if (!suffixes.contains(" Medium")) {
+				/* Every Noto CJK family ships a Medium, and a Medium face is what a split-flap panel
+				   wants next: regular is thin beside the panel's semibold Latin. */
+				suffixes.add(" Medium");
+			}
+			suffixes.add("");
+			for (String family : SANS_CJK_FAMILIES) {
+				for (String suffix : suffixes) {
+					final String candidate = family + suffix;
+					if (installed.contains(candidate.toLowerCase(java.util.Locale.ROOT))) {
+						return new java.awt.Font(candidate, java.awt.Font.PLAIN, 1);
+					}
+				}
+			}
+			return null;
+		}
+
+		/**
+		 * Sans CJK families, most wanted first.
+		 *
+		 * <p>Noto first because that is what packs ask for by name, then the other widely installed
+		 * sans faces. Simplified and Traditional are listed separately: they are different families
+		 * with different glyph forms and a machine can have either.</p>
+		 */
+		private static final String[] SANS_CJK_FAMILIES = {
+				"Noto Sans SC", "Noto Sans TC", "Noto Sans HK", "Noto Sans JP", "Noto Sans KR",
+				"Source Han Sans SC", "Source Han Sans TC", "Source Han Sans",
+				"Microsoft YaHei", "Microsoft JhengHei", "PingFang SC", "PingFang TC",
+				"Hiragino Sans", "Meiryo", "Yu Gothic UI", "Yu Gothic", "Malgun Gothic",
+		};
+
+		/** Whether the request name marks a CJK script — see {@link #markedScripts}. */
+		private static boolean asksForCjkFace(String name) {
+			return !markedScripts(name).isEmpty();
+		}
+
+		/**
+		 * Whether {@code font} draws every script {@code name} marks.
+		 *
+		 * <p>{@code canDisplay} is the right question for <em>this</em> font and the wrong one for
+		 * the bundled files: it answers whether the face has a glyph, and a physical font does not
+		 * borrow one from another face for a character it lacks — see the method comment on
+		 * {@link #getSystemFont(String)}. It is asked about the JVM's substitution, which is a
+		 * logical, composite font and does substitute per character.</p>
+		 */
+		private static boolean drawsMarkedScripts(java.awt.Font font, String name) {
+			if (font == null) {
+				return false;
+			}
+			for (Script script : markedScripts(name)) {
+				if (!font.canDisplay(script.probe)) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		/** The probe characters a name marks, for the log line: {@code "下"}, {@code "下+あ"}. */
+		private static String markedScriptList(String name) {
+			final StringBuilder list = new StringBuilder();
+			for (Script script : markedScripts(name)) {
+				if (list.length() > 0) {
+					list.append('+');
+				}
+				list.append(script.probe);
+			}
+			return list.toString();
+		}
+
+		/**
+		 * The words a font name uses to say which CJK face it is.
+		 *
+		 * <p>Split by script rather than kept as one list, because the probe is per script: a
+		 * Japanese name has to draw kana as well as Han, and a Korean one hangul. The union of the
+		 * three sets is the recognition set a name is classified by — the same one this port has
+		 * used since the fallback was added.</p>
+		 */
+		private static final Set<String> CJK_HAN_WORDS = Set.of(
+				"cjk", "han", "hans", "hant", "chinese", "chs", "cht", "sc", "tc",
+				"songti", "heiti", "kai", "ming", "yahei", "pingfang", "gothic");
+		private static final Set<String> CJK_KANA_WORDS = Set.of(
+				"japanese", "jp", "jpn", "mincho", "meiryo", "hiragino");
+		private static final Set<String> CJK_HANGUL_WORDS = Set.of(
+				"korean", "kr", "kor", "malgun");
 
 		/** {@code mtr:font/noto-sans-semibold.ttf} — see {@link #getSystemFont(String)}. */
 		private static final ResourceLocation NOTO_SANS = new ResourceLocation("mtr", "font/noto-sans-semibold.ttf");
@@ -671,10 +1112,23 @@ public final class ScriptEngine {
 		private static volatile java.awt.Font notoSans;
 		private static volatile java.awt.Font notoSerif;
 
+		/**
+		 * Branch 3's answers, keyed by the name the script asked for, so a renderer's per-frame call
+		 * is one map lookup and the INFO line below is written once per name.
+		 */
+		private static final Map<String, java.awt.Font> resolvedByRequest = new java.util.concurrent.ConcurrentHashMap<>();
+
+		/** The installed family names, lower-cased; {@code null} until first needed. */
+		private static volatile Set<String> systemFamilies;
+
 		/** Drops the font caches; called when the resource manager reloads. */
 		static void resetFonts() {
 			notoSans = null;
 			notoSerif = null;
+			resolvedByRequest.clear();
+			/* The installed families do not change with a resource pack, but this is the one place
+			   the class is told the world moved; re-reading them is cheap and keeps the reset whole. */
+			systemFamilies = null;
 			ScriptFonts.reset();
 		}
 	}

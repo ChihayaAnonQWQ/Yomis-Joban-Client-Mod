@@ -145,7 +145,7 @@ scope 上（javap 全量），真正的解析发生在 `NativeJavaPackage.getPkg
 | `Resources.id` | 11 包 / 115 处 | ✅ | |
 | `Resources.getMTRVersion` | 1 包 / 2 处 | ✅ | |
 | `Resources.readBufferedImage` | 1 包 / 1 处 | ✅ | |
-| `Resources.getSystemFont` | **1 包 / 3 处（HKR Split-Flap Display）** | ✅ **2.5 新增** | 语义按 `javap -p -c ScriptResourceUtil.getSystemFont` 三个分支实现：`"Noto Sans"` → MTR 的 `mtr:font/noto-sans-semibold.ttf`（`Font.createFont`）、`"Noto Serif"` → `mtr:font/noto-serif-cjk-tc-semibold.ttf`、**其余名字** → `new Font(name, PLAIN, 1)`。HKR 写的 `"Noto Sans CJK TC Medium"` / `"Noto Sans SemiBold"` / `"Monospaced"` 三个都落第三支，**与 v2 一致**。v2 里恒为 `false` 的 `hasNotoSansCjk` 分支未照搬（依据见 §1.3b） |
+| `Resources.getSystemFont` | **1 包 / 3 处（HKR Split-Flap Display）** | ✅ **2.5 新增** | 语义按 `javap -p -c ScriptResourceUtil.getSystemFont` 三个分支实现：`"Noto Sans"` → MTR 的 `mtr:font/noto-sans-semibold.ttf`（`Font.createFont`）、`"Noto Serif"` → `mtr:font/noto-serif-cjk-tc-semibold.ttf`、**其余名字** → 先在 JVM 字体注册表查 `new Font(name, PLAIN, 1)`，**系统里有的原样返回**（与 v2 逐字一致）。HKR 写的 `"Noto Sans CJK TC Medium"` / `"Noto Sans SemiBold"` / `"Monospaced"` 三个都落第三支：`"Monospaced"` 是逻辑族、系统里就有，不变；另外两个在没装它们的机器上 AWT 会**静默替换**（本机实测 `getFamily()`/`getFontName()` = `Dialog` / `Dialog.plain`）。对它们，本移植按**名字里标记的脚本**探测那张替换字体：标记的每个字形（`下`，日语另加 `あ`、韩语另加 `한`）都画得出就**原样保留**——本机的 `"Noto Sans CJK TC Medium"` 走这条，与 v2 逐字一致；画不出（或名字是拉丁 / 含 `serif`）才改用 MTR 自带的 Noto，并打一行 INFO 说明。**只有「探不过」这几种情况是有意偏离 v2**（v2 静默接受替换），依据与实测见 `MTR3-PIDS-PORT.md` §4.19。v2 里恒为 `false` 的 `hasNotoSansCjk` 分支未照搬（依据见 §1.3b） |
 | `Resources.idr` | 1 包 / 6 处 | ❌ | **只在无锡包 `assets/mtr/**`，非 PIDS（§3）** |
 | `Resources.readString` | 1 包 / 1 处 | ❌ | 同上 |
 | `Resources.readFont` | 1 包 / 4 处 | ❌ | 同上 |
@@ -515,10 +515,12 @@ assets/mtr/shlcd_xh/mtr_util.js
 
 ## 4. 检查用例
 
-`tools/run-pids-check.ps1` 最终输出 `RESULT: ALL CHECKS PASSED`。2.4 新增两个检查，2.5 新增一个：
+`tools/run-pids-check.ps1` 最终输出 `RESULT: ALL CHECKS PASSED`。2.4 新增两个检查，2.5 新增一个，
+字体回退又新增一个：
 
 | 检查 | 盯住什么 | 关键断言 |
 |---|---|---|
+| `ScriptFontFallbackCheck`（**新增**） | `Resources.getSystemFont` 第三支：系统里没有的名字先按名字标记的脚本**探测替换字体**，探不过才用 MTR 自带 Noto；系统里有的原样返回 | `"Noto Sans SemiBold"` 拿到自带拉丁面而不是 `Dialog`（family/fontName + `deriveFont(BOLD,40)` 可缩放）；`"Noto Sans CJK TC Medium"` 拿到的面画 `下` 与 `班` 是**两个不同字形**（防豆腐块，连像素一起断言），并按本机实际走的那条路分别断言（保留替换字体 / 用自带 CJK 面）；**判定函数 `substituteFor(替换字体, 请求名)` 被直接调用**——传一张没有 CJK 字形的拉丁字体进去，断言它选到自带 CJK 面、该面 `canDisplay('下')`、且原因里点名缺的是哪个字，于是在**有 CJK 的机器上也能验「没有 CJK」那条路**；反向同样断言：已画得出标记脚本的替换字体**原样返回**（同一实例，且日语标记连 `下`+`あ` 一起点名）；`"Noto Sans"`/`"Noto Serif"` 两个文件分支逐条不变（仍是 `createFont`、size 1、拉丁面无 CJK）；本机真实存在的族（`"Noto Sans SC"`）与族名表里没有的 **face 拼写**（`"Noto Sans SC Bold"`）都原样返回系统字体；逻辑族 `Dialog`/`Monospaced` 不被劫持；按名缓存命中同一实例、`resetFonts()` 清掉；每条裁决**只打一行 INFO**（用 log4j appender 现场抓，含请求名 / AWT 替换成什么 / 最终哪张面 / 原因）；无资源管理器时软失败不抛异常（CJK 名字更是一个文件都不读）。另含**偏离依据的像素断言**：自带拉丁文件画 `下`/`班` 是同一个 246 像素缺字方框，自带 CJK 面画出来是两个不同字形（293 vs 611 px） |
 | `ScriptImporterCheck`（**2.5 新增**） | Rhino importer 全局、经 importer 的沙箱、AWT 画布路径 | 9 个全局的 `typeof`；AWT/Java2D 类经 `importPackage` 与全限定两条路都解析；`Resources.getSystemFont` 三个分支（含真读 `mtr:font/noto-sans-semibold.ttf` 与 `deriveFont(int,float)`）；**12 条**拒绝断言（每条都**使用**类：`importClass(java.lang.System)`、`Packages.java.lang.System.nanoTime()`、`importPackage(java.lang)` 后 `System.nanoTime()` / `System.exit(0)`、`importPackage(java.io)` 后 `new File(".")`、`importPackage(java.lang.reflect)` 后 `Method.class`、`java.nio.file.Files.readString` …）＋ 允许侧正对照 ＋ `typeof System/Class/Runtime == undefined`；AWT 画布脚本：1088×608、背景/色块/文字像素读回、1 条贴图绘制调用、两次 upload 只报 1 次、释放 |
 | `FilesCheck` | `Files` 全局（唯一写盘的那一个） | 存档-读回一致；缺文件返回 `null` 不抛；UTF-8 多行往返；`saveData` 自动建目录；`deleteData` 幂等；**7 种逃逸形态**（`..`、`..`×2、`../..`、`a/../../..`、深逃逸、绝对路径、Windows 路径）× 4 个方法全部拒绝且文案为 v2 原文；从脚本侧（Rhino + 真作用域）跑 `hasData/readData/saveData`，含 `met_running_board` 的真实调用形状；`rootOverride` 对脚本不可达 |
 | `ScriptCaseCheck` | 引用拼写的宽容 | 精确引用**不被折叠**；大写折叠成可用 `ResourceLocation`；命名空间大小写也折叠；**6 种逃逸形态在两条路径上都仍被拒绝**；`caseFoldedCandidates` 的候选顺序；磁盘查找：小写引用找到大写文件、精确拼写优先于近似、多文件互不串味、拒绝向上爬出根；**以及 `ScriptPackFiles.readFromDirectoryRoot` 本身**——用 met transit 的真实资产路径（`assets/jsblock/Scripts/Digital_Rail.js`）断言精确命中、小写拼写同样命中、不存在的名字返回 `null` |

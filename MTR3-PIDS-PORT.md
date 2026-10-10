@@ -939,8 +939,11 @@ registerGlobals(cx, scope);
 资源重载时随 `ScriptEngine.reset()` 一起清缓存。
 
 **HKR 实际写的三个名字——`"Noto Sans CJK TC Medium"`、`"Noto Sans SemiBold"`、`"Monospaced"`——
-全部落到第三个分支**，在 v2 上也是一样。所以那块屏用的是 JVM 的默认字面。这一点**刻意保持一致**：
-偷偷把这三个名字升级成 MTR 自带的 Noto，画出来的字面就和包作者看到的不一样了。文档里照实写。
+全部落到第三个分支**，在 v2 上也是一样，而第三支是「JVM 字体注册表查询」，名字查不到时 AWT 会
+**静默替换**。**这一节当时写的「刻意保持一致、就用 JVM 默认字面」已经不成立，见 §4.19**：系统里
+**确实找不到**该名字时，先看 AWT 的替换字体画不画得出名字标记的字形——画得出就**原样保留**（本机的
+`"Noto Sans CJK TC Medium"` 就是这种，与 v2 逐字一致），画不出才改用 MTR 自带的 Noto；系统里有的
+名字（包括 `"Monospaced"` 这类逻辑族）行为一个字没变。
 
 无头环境没有客户端、也就没有资源管理器，`ScriptFonts` 因此留了一个**包私有**的读取口
 （`headlessSource`），由 `ScriptImporterCheck` 接上 `assets/mtr/font/...` 的 classpath 资源——
@@ -1046,6 +1049,163 @@ HKR 这块屏的核心就是「用 AWT 画进 `GraphicsTexture` 再铺满屏幕�
 
 ---
 
+### 4.19 `getSystemFont` 第三支：名字查不到时改用 MTR 自带的 Noto（本次修复；**有意偏离 v2 的一处**）
+
+§4.16 记的是「三个分支照字节码一一对应」，其中第三支 `new Font(name, PLAIN, 1)` 是**JVM 字体
+注册表查询**。HKR 翻牌屏问的 `"Noto Sans SemiBold"`（F_LATIN，`next_train.js:308`）与
+`"Noto Sans CJK TC Medium"`（F_CJK，`:307`）都不等于 `"Noto Sans"`，所以两个都走第三支。问题就
+在这里：**注册表里没有这个名字时，AWT 不报错，直接换成一个别的字面**。
+
+#### 实测（本机 Java 21 Azul，就是本次诊断用的那台）
+
+| 请求 | `getFamily()` | `getFontName()` | 说明 |
+|---|---|---|---|
+| `"Noto Sans SemiBold"` | `Dialog` | `Dialog.plain` | 本机没有这个名字 |
+| `"Noto Sans CJK TC Medium"` | `Dialog` | `Dialog.plain` | 同上 |
+| `"Monospaced"` / `"Dialog"` / `"Noto Sans SC"` | 同名 | 同名 | 逻辑族与真实族都正常 |
+
+本机 `getAvailableFontFamilyNames()` 里含 Noto 的族只有 `Noto Sans SC`、`Noto Sans SC Medium`、
+`Noto Serif SC` 三个。v2 在没装这两个字体的机器上**行为完全相同**：面板画出来不是作者写下的
+Noto，而是 JVM 随手替换的字面，且日志里一个字都没有。
+
+#### 裁决：这是本移植有意偏离 v2 的一处（字体方面）
+
+依据是上表的实测加上一条硬约束：**系统里能找到时必须原样返回系统字体**——已经在 v2 下画对的机器，
+行为不许变。v2 在「查不到」时的做法是**静默接受 AWT 的替换**；本移植只在**替换字体画不出请求名所
+标记的字形**（以及名字是拉丁/serif、本来就没有 CJK 标记）时才改用别的东西，其余情况逐字保留 v2 的
+行为：
+
+| 情况 | v2 | 本移植 |
+|---|---|---|
+| 系统里有这个名字 | 系统字体 | **一样**（逐字一致） |
+| 查不到，替换字体**画得出**名字标记的字形（本机的 `"Noto Sans CJK TC Medium"`） | AWT 的替换字体 | **一样**，另加一行 INFO 说明走了这条路 |
+| 查不到，替换字体**画不出**该字形 | AWT 的替换字体——**缺字方框** | MTR 自带的 CJK Noto + 一行 INFO |
+| 查不到，名字是拉丁 / 含 `serif`（无 CJK 标记） | AWT 的替换字体 | MTR 自带的拉丁 / serif Noto + 一行 INFO |
+
+用到的两个内置文件是 MTR 3.6.3 自带的 `mtr:font/noto-sans-semibold.ttf`（515204 B）与
+`mtr:font/noto-serif-cjk-tc-semibold.ttf`（28120132 B），都在 `libs/mtr-common.jar` 里（jar 内容已列过）。
+读它们走的是原来那条 `ScriptFonts.read`（`ScriptPaths` 防护 + 失败只报一次），复用 `notoSans` /
+`notoSerif` 两个缓存。
+
+#### 怎么判「系统里没有」：两条规则，缺一不可
+
+1. **一次性缓存的族名表**：`GraphicsEnvironment.getLocalGraphicsEnvironment()
+   .getAvailableFontFamilyNames()`，忽略大小写比较；**同时**并入 `getAvailableFontFamilyNames(
+   Locale.ENGLISH)`。英文表不是冗余：本机是 `zh_CN`，默认表里是 `Microsoft YaHei`，而
+   `new Font("Microsoft YaHei", …).getFamily()` 返回 `微软雅黑`——只看默认表 + `getFamily()` 会把
+   一个**装了的**字体判成没装。
+2. **解析出来的那个 `Font` 自己的 family / fontName**（默认与英文两个 locale 都比，忽略大小写）。
+   这条专治「face 拼写不在族名表里」：`"Arial Bold"` 解析成 family `Arial` + fontName
+   `"Arial Bold"`，族名表里根本没有 `"Arial Bold"` 这一项，只有 `getFontName()` 能证明它存在。
+   **不用 `Font.getName()`**：它返回的就是调用方传进来的字符串，对任何名字（包括不存在的）都相等，
+   拿它做判据等于永远判「存在」。
+
+两条都不过的名字，典型特征就是 `getFamily()` 变成了 `Dialog`——这正是静默替换的指纹。族名表只读
+一次，`Resources.resetFonts()` 里和新增的按名缓存一起清掉。
+
+#### 选哪张面：先按名字里标出的脚本**探测替换字体**，探测不过才用内置面
+
+判定被抽成**一个吃（替换字体, 请求名）两个参数的包私有 static 函数** `Resources.substituteFor(...)`，
+返回「用哪张面 + 为什么」。抽出来是为了**可测**：拿一张字面覆盖已知的字体直接调用它，就能在**有 CJK
+的机器上**验「没有 CJK 的那条路」，不必换一台机器。
+
+三个答案，按顺序：
+
+1. 名字**标记了 CJK 字面**（作为独立词出现 `CJK` / `SC` / `TC` / `JP` / `KR` / `Hans` / `Hant` /
+   `chinese` / `japanese` / `korean` / `yahei` / `mincho` / `gothic` …，或名字本身就是 CJK / 假名 /
+   谚文，如 `微软雅黑`）**且替换字体画得出名字标记的每一个脚本** → **保留替换字体**。探测字符：汉字
+   `下`（每个 CJK 名字都要过这一条），日语标记**另加** `あ`，韩语标记**另加** `한`；一个名字里同时
+   出现多种标记就都要满足，只写 `cjk` 的只要汉字那条。本机的 `"Noto Sans CJK TC Medium"` 走这条：
+   AWT 替换成 `Dialog`，它是**逻辑/复合字体**，`下` 画出 198 px、`班` 443 px，是**真字形**——与 v2
+   画出来的东西逐字一致；
+2. 名字标记了 CJK 字面，但替换字体**画不出** → MTR 自带的 CJK 面
+   `mtr:font/noto-serif-cjk-tc-semibold.ttf`（唯一带 CJK 字形的内置文件）；
+3. 其余 → 按名字的样式选内置面：含 `serif` → 同一个 CJK 文件，其它 → 自带的拉丁面
+   `mtr:font/noto-sans-semibold.ttf`（HKR 的 `"Noto Sans SemiBold"` 要的就是它）。
+
+##### 最初那条规则是错的：错在把「逐字回退」当成了物理字体也有的能力
+
+第一版写的是「名字标记了 CJK 就一律用内置 CJK 文件」，它隐含的假设是：自带拉丁文件缺的中文字，
+Java2D 会**逐字回退**补上——浏览器是这样，**复合字体**也是这样。但**物理字体没有这条链**：
+`Font.createFont` 载入的面只有一面，缺字就画缺字字形。实测（本机，40 px，抗锯齿）：
+
+| 字体 | `canDisplay('下')` | `drawString("下")` | `drawString("班")` |
+|---|---|---|---|
+| 自带 `noto-sans-semibold.ttf`（物理字体） | `false` | 246 px 方框 | **同样 246 px 方框** |
+| 自带 `noto-serif-cjk-tc-semibold.ttf`（物理字体） | `true` | 293 px | 611 px |
+| `Dialog`（**逻辑/复合字体**） | `true` | 198 px | 443 px |
+
+也就是说「CJK 交给逐字回退」这条规则错在**把逻辑字体的能力当成了所有字体的能力**：对 `createFont`
+出来的物理字体，缺字不是「去别的面找一个补上」，而是**一个和生僻字一模一样的空心方框**（`.notdef`），
+四个不同汉字画出来像素完全相同。两个后果，正好就是上面的规则：
+
+* 内置文件**绝不能**用在它没有字形的脚本上——所以替换字体画不出时给 CJK 文件，哪怕名字要的是无衬线
+  而内置只有衬线 CJK 这一张；
+* 而**已经画得出该脚本的替换字体绝不能被扔掉**——所以先探测。第一版那条无条件规则会把一块本来画对
+  的 `Dialog` 换成包从没要过的衬线面。
+
+`ScriptFontFallbackCheck` 把两条都钉住，含像素。
+
+#### 缓存、日志、软失败
+
+* 第三支的解析结果**按请求名缓存**（`ConcurrentHashMap`，双检锁与 `notoSans`/`notoSerif` 同一把锁），
+  渲染线程每帧的调用就是一次 map 查询；命中直接返回同一个 `Font` 实例。
+* 每次「这个名字系统里没有」的裁决都打**一行 INFO**：请求名 + AWT 替换成了什么 + 最终用的是哪张面
+  + 原因；走「保留替换字体」那条路时也打（文案是 `keeping the substitution, because …`），**每个名字
+  只打一次**（写在那次缓存写入旁边，不是每帧判一次）。`resetFonts()` 清掉全部新增缓存，资源重载后
+  重新解析、重新打。
+* **软失败不变**：内置字体读不到（无客户端/无资源管理器、文件缺失、资源包被替换）时**不抛异常**，
+  仍然返回 AWT 那个替换字体——与改动前逐字一致；`ScriptFonts` 那边已经按 location 只警告一次，
+  所以不会每帧刷日志。包自己的 `sysFont()` 外面还有 `try/catch` 与 `new Font("SansSerif", …)` 兜底。
+  自适应那条路还更稳一点：替换字体画得出字形时**一个文件都不用读**（无头检查里断言了这一点）。
+
+#### 无头验证
+
+新增 `tools/checks/com/jsblock/script/ScriptFontFallbackCheck.java`，已挂进
+`tools/run-pids-check.ps1`。关键输出（本机实跑）：
+
+```
+OK   "Noto Sans SemiBold" is not AWT's silent substitution: family=Noto Sans SemiBold, fontName=Noto Sans SemiBold
+OK   it is MTR's bundled face for that name (Noto Sans SemiBold from mtr:font/noto-sans-semibold.ttf)
+OK   a raw AWT lookup for "Noto Sans SemiBold" answers "Dialog.plain" on this machine, which is the substitution the fallback replaced
+OK   it can draw the panel's Chinese station names: 下=true
+OK   and it paints 下 and 班 as two different characters (198 vs 443 pixels), not as the same missing-glyph box
+OK   this machine's own substitution for "Noto Sans CJK TC Medium" already draws Chinese, so it is kept rather than replaced: family=Dialog
+NOTE this machine takes the adaptive path: AWT substitutes "Dialog.plain", which draws Chinese, so no bundled font is needed for a CJK name
+OK   a CJK name given a substitute with no CJK glyph selects MTR's bundled CJK face: Noto Serif CJK TC SemiBold
+OK   it paints real characters rather than one missing-glyph box (293 vs 611 pixels)
+OK   a substitute that already draws every script the name marks is returned unchanged: Noto Serif CJK TC SemiBold
+OK   "Noto Sans SC" is installed, so it comes back as the machine's own font, not as bundled Noto: family=Noto Sans SC
+OK   a face spelling the family table does not hold ("Noto Sans SC Bold" -> Noto Sans SC Bold) is still served by the machine, not by bundled Noto
+OK   drawing 下 and 班 through it paints the identical missing-glyph box (246 pixels), i.e. Java2D does not substitute a face per glyph for a physical font
+OK   the bundled CJK Noto paints them as two different characters (293 vs 611 pixels)
+OK   the fallback logs one INFO line per request name however many frames ask (lines=1)
+OK   with no resource manager "Noto Sans SemiBold" still answers a Font instead of throwing or answering null: family=Dialog
+OK   and a CJK name is answered without reading a file at all: family=Dialog
+
+RESULT: FONT FALLBACK OK
+```
+
+日志一行（走自适应那条路时的原文）：
+
+```
+[Joban Client] PIDS script font "Noto Sans CJK TC Medium" is not installed on this machine, so AWT substitutes
+"Dialog"; keeping the substitution, because AWT's substitution already draws 下, and MTR bundles no CJK sans face
+to replace it with
+```
+
+`tools/run-pids-check.ps1` 整体仍是 `RESULT: ALL CHECKS PASSED`；HKR 的
+`_hkr_split/assets/jsblock/scripts/next_train.js` 在 0/2/4 班次下仍是 `RESULT: SCRIPT OK`；十一包
+回归仍是 112 支脚本 **108 通过**（那些包自己的脚本在无头环境里**读不到** `mtr:` 资源，走的就是
+「软失败返回替换字体」那条路，因此这次改动对它们逐字不变）。
+
+`tools/run-pids-check.ps1` 整体仍是 `RESULT: ALL CHECKS PASSED`；HKR 的
+`_hkr_split/assets/jsblock/scripts/next_train.js` 在 0/2/4 班次下仍是 `RESULT: SCRIPT OK`；十一包
+回归仍是 112 支脚本 **108 通过**（那些包自己的脚本在无头环境里**读不到** `mtr:` 资源，走的就是
+「软失败返回替换字体」那条路，因此这次改动对它们逐字不变）。
+
+---
+
 ## 5. 顺带修复的三个上游缺陷
 
 移植过程中发现 YJCM 公开仓库本身**编不过**，以下问题与本分支的功能无关，但必须修复。
@@ -1137,6 +1297,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
 | `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画。另外断言 `MTRClientData` 指向 `mtr.client.ClientData` 且可读，以及脚本里的 `ctx.parseComponent` 全路径（clock 组件、矩形、`canRender`、`render`、`ctx.draw(component)`、五种拒绝） |
 | `FilesCheck`（2.4 新增） | `Files` 全局——**唯一写盘的那一个**：存档/读回一致、缺文件返回 `null` 不抛、UTF-8 多行往返、`saveData` 自动建目录、`deleteData` 幂等、**7 种逃逸形态 × 4 个方法**全部拒绝且文案为 v2 原文；再从**脚本侧**（Rhino + 真作用域 + 真沙箱）跑一遍 `hasData`/`readData`/`saveData`（含 `met_running_board` 的真实调用形状）；最后断言包私有的根目录 setter 对脚本不可达 |
 | `ScriptCaseCheck`（2.4 新增） | 引用拼写的宽容：精确引用**不被折叠**、大写折叠成可用 `ResourceLocation`、命名空间大小写也折叠、**6 种逃逸形态在两条路径上都仍被拒绝**、候选顺序；以及基于真实临时目录树的磁盘查找（小写引用找到大写文件、精确拼写优先、多文件互不串味、拒绝爬出根），其中包含「返回值必须带磁盘上的真实拼写」这条 |
+| `ScriptFontFallbackCheck`（**新增**） | `Resources.getSystemFont` 第三支的裁决：系统里**有**的名字原样返回（族名表命中、族名表里没有的 face 拼写、逻辑族 `Dialog`/`Monospaced` 三种形态都断言）；系统里**没有**的名字先按名字标记的脚本**探测 AWT 的替换字体**（`下`，日语标记另加 `あ`、韩语标记另加 `한`），画得出就**保留替换字体**（与 v2 逐字一致），画不出才用 MTR 自带的 CJK 面，拉丁与 `serif` 名字分别用自带的拉丁 / 衬线面。判定函数 `substituteFor(替换字体, 请求名)` 是包私有 static，检查**直接传一张没有 CJK 字形的字体**过去——于是「没有 CJK 的那条路」在**有 CJK 的机器上**也能验；另有**像素级防豆腐块**断言（自带拉丁面画 `下`/`班` 是同一个 246 px 方框，自带 CJK 面 293 vs 611 px）与「每条裁决只打一行 INFO」的 log4j 现场抓取；无资源管理器时软失败不抛（见 §4.19） |
 
 沙箱检查排在脚本检查**之前**：白名单若写错，下面每个脚本要么被拦住、要么毫无防护，
 先看到沙箱那一块就能直接定位，不必从 16 个脚本失败里反推。
@@ -1248,6 +1409,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 |---|---|---|
 | `:common` / `:fabric` / `:forge` 全量 `gradle build`（含 `mergeJars`） | ✅ **BUILD SUCCESSFUL** | 本次运行 |
 | `PIDSPresetCheck` | ✅ **ALL CHECKS PASSED** | 本次运行 |
+| `ScriptFontFallbackCheck`（字体回退，50 条 `OK` + 2 条 `NOTE`） | ✅ **FONT FALLBACK OK** —— `"Noto Sans SemiBold"` 拿到自带拉丁面；`"Noto Sans CJK TC Medium"` 走自适应那条路（保留 `Dialog`，`下`/`班` = 198 / 443 px，真字形）；把拉丁字体直接喂进判定函数时选到自带 CJK 面（293 vs 611 px）；本机实有的族与 face 拼写原样返回；两条 `NOTE` 分别是「本机走自适应那条路」与「本机没有只有汉字、没有假名的字体可做 kana 隔离用例」 | 本次运行 |
 | `ScriptShutterCheck`（24 条规则断言 + 4 个真实作用域探针） | ✅ **SHUTTER OK** —— 四个被禁类在**使用**时全部被拒 | 本次运行 |
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
 | 「每个 Texture/Rectangle 的最终颜色必须不透明」新断言 | ✅ 全部通过（2/3/4/6 个调用随班次数变化） | 本次运行 |
