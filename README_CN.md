@@ -278,7 +278,7 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 | 绘制 | `Text` `Texture` `Rectangle` `Vector3f` `Matrices` |
 | 时间与状态 | `Timing` `StateTracker` `CycleTracker` `RateLimit` |
 | 资源 | `Resources`（含 `getMTRVersion`、`getAddonVersion`、`readBufferedImage`、`getSystemFont`） `TextUtil` |
-| `getSystemFont` 的语义 | v2 从 MTR 自带文件里读的那两个名字（`"Noto Sans"`、`"Noto Serif"`）不变；**其余名字**先在 JVM 字体注册表里查，**系统里有的原样返回**。系统里**没有**的名字不再盲目替换，而是先**探测** AWT 替换成的那张面：名字标记的每个脚本都画得出（汉字 `下`，日语标记另加 `あ`，韩语标记另加 `한`）就**原样保留**——这正是 v2 画出来的东西；画不出才用 MTR 自带的 CJK 文件，因为自带的拉丁文件没有 CJK 字形，而 Java2D 对物理字体不做逐字回退（`下` 与 `班` 画出**完全相同的 246 px 方框**）。拉丁名 / 含 `serif` 的名字用自带的拉丁 / serif Noto。走了哪条路、为什么，每个名字打**一行 INFO**。本机实测 `new Font("Noto Sans SemiBold", PLAIN, 1).getFontName()` 是 `Dialog.plain`。**有意偏离 v2 的一处**（v2 静默接受这个替换），见 [`MTR3-PIDS-PORT.md`](MTR3-PIDS-PORT.md) §4.19 |
+| `getSystemFont` 的语义 | v2 从 MTR 自带文件里读的那两个名字（`"Noto Sans"`、`"Noto Serif"`）不变；**其余名字**先在 JVM 字体注册表里查，**系统里有的原样返回**（`Monospaced` 等逻辑族也在内）。系统里**没有**的名字**不交给** AWT 静默替换：名字标记了 CJK 脚本时（`CJK`/`SC`/`TC`/`JP`/`KR`/`Hans`/`Hant` … 作为词出现，或名字本身就是 CJK/假名/谚文），先取**真实安装的无衬线 CJK 族**——`Noto Sans SC/TC/HK/JP/KR`、`Source Han Sans …`、`Microsoft YaHei`/`JhengHei`、`PingFang …`、`Hiragino Sans`、`Meiryo`、`Yu Gothic …`、`Malgun Gothic`，并优先匹配请求里的字重，所以本机 HKR 的 `"Noto Sans CJK TC Medium"` 拿到 `Noto Sans SC Medium`；一个都没有才用 MTR 自带的 CJK 文件，而它是**衬线**，所以只算最后手段——之所以不退回替换字体：实测本机替换字体的中文就是 `SimSun`（宋体），`Dialog` 的 `下` 与 `SimSun` 的 `下` 像素完全相同（198 px），即"无衬线拉丁 + 宋体中文"的混搭。拉丁名 / 含 `serif` 的名字用自带的拉丁 / serif Noto。选了哪张面、为什么，每个名字打**一行 INFO**。本机实测 `new Font("Noto Sans SemiBold", PLAIN, 1).getFontName()` 是 `Dialog.plain`。**有意偏离 v2 的一处**（v2 静默接受这个替换），见 [`MTR3-PIDS-PORT.md`](MTR3-PIDS-PORT.md) §4.19–§4.20 |
 | Rhino importer | `importPackage(pkg)` `importClass(cls)` `Packages` `java` `javax` `org` `com` `edu` `net` —— v2 的每个脚本都跑在这个作用域里，我们此前用的是没有它们的 `initStandardObjects()`；缺了它们，HKR 翻牌屏的脚本在**加载期**就抛 `ReferenceError`，面板一帧都没画过（透明）。**惰性解析，仍过沙箱**，白名单一个字没放宽 |
 | 世界 | `MinecraftClient` `MinecraftClient.localPlayer()` `PlayerEntity` |
 | MTR 客户端数据 | `MTRClientData`（= `mtr.client.ClientData`：`STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`。**不是** `MinecraftClient` 的别名，理由见下） |
@@ -300,7 +300,7 @@ JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客�
 
 | 类 | 缺的 |
 |---|---|
-| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` （`getSystemFont` 此前也在这行，**现已实现**；系统里没有的名字改用 MTR 自带的 Noto，CJK 名字则先探测 AWT 替换字体——名字标记的字形都画得出就原样保留，见上表 `getSystemFont` 行与 §4.19） |
+| `Resources` | `read` `readString` `readFont` `idr` `exist` `manager` `getNTEVersion` `getNTEVersionInt` `getNTEProtoVersion` `hasSystemFont` `ensureStrFonts` `getFontRenderContext` （`getSystemFont` 此前也在这行，**现已实现**；系统里没有的名字改用 MTR 自带的 Noto，标记了 CJK 脚本的名字则优先用本机**真实安装的无衬线 CJK 族**，见上表 `getSystemFont` 行与 §4.19–§4.20） |
 | `Station` | `getZone1/2/3`、`getMinX/Y/Z`、`getMaxX/Y/Z`、`getExits`、`inArea`、`isTransportMode`、`getCenter` —— 需要保留车站几何，而当前包装类没存 |
 | `Stop` | `distance` `dwellTime` `dwellTimeMillis` `platform` `destinationName` `destinationStation` `customDestination` 等 6 条 |
 | `PlayerEntity` | `activeItem` `mainHandItem` `offHandItem` `yaw` `pitch` `bodyYaw` `isSneaking` `isSprinting` `isSwimming` `isHoldingItem` `playerName` |

@@ -1324,7 +1324,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
 | `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画。另外断言 `MTRClientData` 指向 `mtr.client.ClientData` 且可读，以及脚本里的 `ctx.parseComponent` 全路径（clock 组件、矩形、`canRender`、`render`、`ctx.draw(component)`、五种拒绝） |
 | `FilesCheck`（2.4 新增） | `Files` 全局——**唯一写盘的那一个**：存档/读回一致、缺文件返回 `null` 不抛、UTF-8 多行往返、`saveData` 自动建目录、`deleteData` 幂等、**7 种逃逸形态 × 4 个方法**全部拒绝且文案为 v2 原文；再从**脚本侧**（Rhino + 真作用域 + 真沙箱）跑一遍 `hasData`/`readData`/`saveData`（含 `met_running_board` 的真实调用形状）；最后断言包私有的根目录 setter 对脚本不可达 |
 | `ScriptCaseCheck`（2.4 新增） | 引用拼写的宽容：精确引用**不被折叠**、大写折叠成可用 `ResourceLocation`、命名空间大小写也折叠、**6 种逃逸形态在两条路径上都仍被拒绝**、候选顺序；以及基于真实临时目录树的磁盘查找（小写引用找到大写文件、精确拼写优先、多文件互不串味、拒绝爬出根），其中包含「返回值必须带磁盘上的真实拼写」这条 |
-| `ScriptFontFallbackCheck`（**新增**） | `Resources.getSystemFont` 第三支的裁决：系统里**有**的名字原样返回（族名表命中、族名表里没有的 face 拼写、逻辑族 `Dialog`/`Monospaced` 三种形态都断言）；系统里**没有**的名字先按名字标记的脚本**探测 AWT 的替换字体**（`下`，日语标记另加 `あ`、韩语标记另加 `한`），画得出就**保留替换字体**（与 v2 逐字一致），画不出才用 MTR 自带的 CJK 面，拉丁与 `serif` 名字分别用自带的拉丁 / 衬线面。判定函数 `substituteFor(替换字体, 请求名)` 是包私有 static，检查**直接传一张没有 CJK 字形的字体**过去——于是「没有 CJK 的那条路」在**有 CJK 的机器上**也能验；另有**像素级防豆腐块**断言（自带拉丁面画 `下`/`班` 是同一个 246 px 方框，自带 CJK 面 293 vs 611 px）与「每条裁决只打一行 INFO」的 log4j 现场抓取；无资源管理器时软失败不抛（见 §4.19） |
+| `ScriptFontFallbackCheck`（**新增**） | `Resources.getSystemFont` 第三支的裁决：系统里**有**的名字原样返回（族名表命中、族名表里没有的 face 拼写、逻辑族 `Dialog`/`Monospaced` 三种形态都断言）；系统里**没有**的名字按**名字标记的脚本**选面——标记了 CJK → 取**真实安装的无衬线 CJK 族**（清单顺序 + 请求字重优先），一个都没有才用 MTR 自带的 CJK 面；拉丁 / `serif` 名字用自带的拉丁 / 衬线面。判定函数 `substituteFor(替换字体, 请求名)` 是包私有 static，检查**直接传一张没有 CJK 字形的字体**过去——于是「没有无衬线 CJK 族」那条路在**有 CJK 的机器上**也能验；另有**像素级防豆腐块**断言（自带拉丁面画 `下`/`班` 是同一个 246 px 方框，自带 CJK 面 293 vs 611 px，本机拿到的 `Noto Sans SC Medium` 378 vs 738 px）与「每条裁决只打一行 INFO」的 log4j 现场抓取；无资源管理器时软失败不抛（最终规则见 §4.20） |
 
 沙箱检查排在脚本检查**之前**：白名单若写错，下面每个脚本要么被拦住、要么毫无防护，
 先看到沙箱那一块就能直接定位，不必从 16 个脚本失败里反推。
@@ -1436,7 +1436,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
 |---|---|---|
 | `:common` / `:fabric` / `:forge` 全量 `gradle build`（含 `mergeJars`） | ✅ **BUILD SUCCESSFUL** | 本次运行 |
 | `PIDSPresetCheck` | ✅ **ALL CHECKS PASSED** | 本次运行 |
-| `ScriptFontFallbackCheck`（字体回退，50 条 `OK` + 2 条 `NOTE`） | ✅ **FONT FALLBACK OK** —— `"Noto Sans SemiBold"` 拿到自带拉丁面；`"Noto Sans CJK TC Medium"` 走自适应那条路（保留 `Dialog`，`下`/`班` = 198 / 443 px，真字形）；把拉丁字体直接喂进判定函数时选到自带 CJK 面（293 vs 611 px）；本机实有的族与 face 拼写原样返回；两条 `NOTE` 分别是「本机走自适应那条路」与「本机没有只有汉字、没有假名的字体可做 kana 隔离用例」 | 本次运行 |
+| `ScriptFontFallbackCheck`（字体回退，50 条 `OK` + 2 条 `NOTE`） | ✅ **FONT FALLBACK OK** —— `"Noto Sans SemiBold"` 拿到自带拉丁面；`"Noto Sans CJK TC Medium"` 拿到本机真实安装的**无衬线 CJK 族** `Noto Sans SC Medium`（不采用替换字体 `Dialog`，因为本机它的中文是宋体，见 §4.20）；把拉丁字体直接喂进判定函数时选到自带 CJK 面（293 vs 611 px）；本机实有的族与 face 拼写原样返回 | 本次运行 |
 | `ScriptShutterCheck`（24 条规则断言 + 4 个真实作用域探针） | ✅ **SHUTTER OK** —— 四个被禁类在**使用**时全部被拒 | 本次运行 |
 | `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
 | 「每个 Texture/Rectangle 的最终颜色必须不透明」新断言 | ✅ 全部通过（2/3/4/6 个调用随班次数变化） | 本次运行 |
