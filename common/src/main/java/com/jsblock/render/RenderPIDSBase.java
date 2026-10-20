@@ -60,6 +60,12 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
 
     @Override
     public void render(T entity, float delta, PoseStack matrices, MultiBufferSource vertexConsumers, int light, int overlay) {
+        /* Section A of the per-frame statistics starts here, before the preset is even known:
+           the custom messages, the platform set and the schedule list are paid by every panel,
+           scripted or not, and a breakdown that began after them would miss them. A single
+           nanoTime call per panel per frame, and only with -Djsblock.pids.canvasStats=true. */
+        final long statsStart = com.jsblock.script.PidsFrameStats.frameStart();
+
         final Level world = entity.getLevel();
         if (world == null || ClientConfig.getRenderDisabled()) {
             return;
@@ -170,10 +176,15 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
            skipped entirely. Guarded like the other paths: a broken script must not throw
            out of the block-entity renderer once per frame. */
         if (preset != null && preset.isScripted()) {
+            com.jsblock.script.PidsFrameStats.begin(statsStart, preset.id, entity.getBlockPos());
             try {
                 renderScripted(entity, world, preset, customMessages, hideArrivals, platformIds, hidePlatforms, delta, matrices, vertexConsumers);
             } catch (Exception e) {
                 e.printStackTrace();
+            } finally {
+                /* In a finally: a broken preset that throws out of the renderer would otherwise
+                   leave the frame open and the next panel's sections would be added to it. */
+                com.jsblock.script.PidsFrameStats.end();
             }
             return;
         }
@@ -713,9 +724,18 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
            ParsedScript.invokeFunction passes getWrapperObject() as the third argument to create and
            render alike -- so this is the contract, not a convenience. Placed before the pixelation
            attempt so both render paths share one create(). */
+        /* Section A ends where the script starts: everything above is preparation the frame pays
+           whether or not the preset draws anything, and everything below is the preset's own work.
+           See PidsFrameStats for what each section means. */
+        com.jsblock.script.PidsFrameStats.endSectionA();
+
+        final long createStart = com.jsblock.script.PidsFrameStats.mark();
         program.start(wrapper);
+        com.jsblock.script.PidsFrameStats.addCreate(com.jsblock.script.PidsFrameStats.mark() - createStart);
 
         if (pixelTarget != null && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelTarget, pixelScale, pixelShape, pixelDots, frameContext)) {
+            /* B was timed around the script calls inside the offscreen pass; the framebuffer work
+               around them is section D, which is why the span is not added again here. */
             matrices.popPose();
             return;
         }
@@ -736,6 +756,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                         preset.font == null ? geometry.defaultFont : preset.font,
                         1F));
 
+        final long renderStart = com.jsblock.script.PidsFrameStats.mark();
         if (!program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper)) {
             /* The script threw, very likely before it reached its own background call, which is
                why a script error used to leave the panel completely black.
@@ -769,6 +790,7 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                 drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
             }
         }
+        com.jsblock.script.PidsFrameStats.addSectionB(renderStart);
 
         immediate.endBatch();
         matrices.popPose();
@@ -1088,7 +1110,9 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                script's own draws get it -- the pass is mirrored, and the layers cull back faces. */
             ctx.setComponentSupport(frameContext, offscreenComponentGraphics(
                     preset, panelStack, offscreenSource, facing.getOpposite()));
+            final long offscreenRenderStart = com.jsblock.script.PidsFrameStats.mark();
             drawn = program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper);
+            com.jsblock.script.PidsFrameStats.addSectionB(offscreenRenderStart);
             offscreenSource.flush();
 
             if (!drawn) {
@@ -1113,7 +1137,9 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                    a preset that uses ctx.parseComponent would pixelate only until its first throw. */
                 ctx.setComponentSupport(frameContext, offscreenComponentGraphics(
                         preset, panelStack, offscreenSource, facing.getOpposite()));
+                final long retryStart = com.jsblock.script.PidsFrameStats.mark();
                 drawn = program.renderOrFail(ctx, wrapper.withLenientArrivals());
+                com.jsblock.script.PidsFrameStats.addSectionB(retryStart);
                 offscreenSource.flush();
                 if (drawn && pixelationRecovered.add(preset.id)) {
                     com.jsblock.Joban.LOGGER.info("[PIDS pixelation] preset=" + preset.id

@@ -1,3 +1,87 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.8
+
+## Compatible MTR Version
+MTR
+
+## The canvas was not the cost: a PIDS frame is its script, and one missing method was half of it
+
+The previous round cut a `GraphicsTexture` upload's pixel copy from 1.64 ms to 0.37 ms and added the
+`PIDS canvas stats` line. The player's instance then reported, for one HKR panel at 1088x608:
+
+```
+upload() calls 10, pixel copies 10, copy avg 0.20-0.27 ms, GL upload avg 0.11-0.17 ms, script redraws 10
+```
+
+Ten uploads a second at ~0.35 ms each is **0.06 ms per frame** — the canvas is finished business.
+What was left unexplained was the steady frame, and the headless number for that (0.52 ms on a frame
+that only re-submits its draw calls) was a lower bound: without MTR line data the preset's route walk
+answers `null` immediately, so none of it ran.
+
+This round therefore measures the frame in sections, on the render thread, behind the same switch:
+
+```
+-Djsblock.pids.canvasStats=true
+```
+
+```
+[Joban Client] PIDS script stats hkr:next_train@100,64,-5: frames=58/s total avg=1.42 max=8.10
+ | A avg=0.05 max=0.21 | B avg=0.71 max=6.90 (create 0.00 once) | C avg=0.11 max=0.40, in B
+ | D avg=0.02 max=0.09 | redrawFrames=10 (B avg=6.20) | api avg=0.21 max=0.90 calls=118/s
+ | drawCalls avg=1.0 | worst=B,6.90
+```
+
+**A** is everything before the script is entered (preset lookup, custom messages, platform filter,
+schedule list, `PIDSWrapper`, panel transform, pixelation decisions), **B** is the
+`create()`/`render()` call itself, **C** is draw-call execution timed inside `ScriptContext.draw`
+(inside B in this port, because a call draws immediately instead of being queued), and **D** is the
+residual `total - A - B`. `api` is the time spent inside this port's own script-visible Java objects,
+and `redrawFrames` counts the frames on which the preset repainted its canvas.
+
+### What it found, with real MTR data in the caches
+
+A probe (24 stops, one all-stops and one express route, eight scheduled arrivals, dry-run context so
+nothing is drawn) put **98% of the frame in B** and **1-2% in our own Java** — A 0.05 ms, C nothing
+(dry run), D 0.01 ms, `api` 0.02-0.05 ms. So the steady cost of a panel is the preset's own
+interpreted JavaScript, and the line walk is most of it: `pickLine` 0.54 ms of a 0.65 ms `render()`.
+
+The reason HKR's row-by-row route walk was that expensive was not our lookups (155 ns per call) but
+**a method HKR probes that this port did not have**. `next_train.js` reads
+`platforms.get(i).getStationId()` behind a `try/catch` while it keys its route map, and
+`MTR3-PIDS-PORT.md`'s own API coverage table already listed that method as part of the surface. With
+it missing, every stop of every candidate route threw and caught a Rhino `TypeError`:
+
+| Call from the script | Cost |
+|---|---|
+| plain JS loop iteration (baseline) | 0.6-0.9 µs |
+| a method that exists (`getPlatformId()`, `routeName()`) | 0.4-1.4 µs |
+| **a method that does not (`getStationId()`), caught by the preset** | **5.7-6.5 µs** |
+
+`pickLine` makes 48-72 of those on a 24-stop line, once for each half of a two-block panel, every
+frame. `RouteStopInfo.getStationId()` is now implemented (the station area's id, falling back to the
+platform's own id when the station cannot be resolved so a route map cannot collapse while the
+client's caches are filling). Measured on the same probe, 1,500 calls per run, median of five:
+
+| Per script call | Before | After |
+|---|---|---|
+| `render()` | 0.65 ms | **0.33 ms** |
+| `pickLine()` | 0.54 ms | **0.29 ms** |
+| `stateSignature()` | 1.20 ms | 0.93 ms |
+
+The route map itself is unchanged (same 24 stops, same first and last station) because a station on a
+normal line has one platform per direction; a route that calls at two platforms of one station now
+draws one stop for it, which is what JCM 2.x does with the same call. Nothing else about the drawing
+changed, and `route.getColor()` — the other method HKR probes — was deliberately **not** added,
+because it would change which line the map draws and this round is a performance one.
+
+What remains is not something a lookup can fix: a two-block panel runs the whole script **twice per
+frame**, and on this port it runs on the render thread. JCM 2.x runs it on `ScriptManager.scriptThread`
+and only replays the previous frame's draw calls on the render thread, which is why the same board
+loses two frames there and dozens here. That change is recorded, with the numbers, as the next step in
+[`MTR3-PIDS-PORT.md`](MTR3-PIDS-PORT.md) §4.22.
+
+`tools/run-pids-check.ps1` is `RESULT: ALL CHECKS PASSED`; HKR's `next_train.js` is
+`RESULT: SCRIPT OK` at 0/1/2/4 arrivals; the eleven-pack regression is unchanged at **108/112**.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.7
 
 ## Compatible MTR Version

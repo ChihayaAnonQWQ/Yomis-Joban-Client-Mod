@@ -277,6 +277,10 @@ public final class GraphicsTexture implements java.io.Closeable {
 		   upload by its script every time it redraws, and the headless check needs that count to
 		   tell a redrawing frame from one that only re-submitted its draw call. */
 		UPLOAD_CALLS.incrementAndGet();
+		/* Tells the frame statistics that this frame was a redrawing one. A canvas preset's
+		   repaint and its re-submit-only frames cost very different amounts, and the per-frame
+		   line reports them apart; see PidsFrameStats. */
+		PidsFrameStats.noteCanvasUpload();
 		if (closed || failed) {
 			return;
 		}

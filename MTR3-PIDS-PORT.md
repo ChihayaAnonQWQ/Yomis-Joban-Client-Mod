@@ -2538,3 +2538,173 @@ jar 备份            yjcm-recon\backup-jar\
 git checkout backup-before-pids1a-config -- common/src/main/java/com/jsblock/block/PIDS1A.java
 git checkout backup-before-pids1a-config -- common/src/main/java/com/jsblock/JobanClient.java
 ```
+
+### 4.22 帧内分段计时：画布之后，一块面板的每帧到底花在哪（2.8 优化与诊断）
+
+#### 已经排除的部分（实机数据）
+
+2.7 把 `GraphicsTexture` 的整张像素拷贝改成批量之后，用户实例（1 块 HKR 面板，1088×608）
+每秒输出：
+
+```
+upload() calls 10, pixel copies 10, copy avg 0.20-0.27 ms, GL upload avg 0.11-0.17 ms, script redraws 10
+```
+
+每秒 10 次上传 ×（0.2~0.27 + 0.11~0.17 ms）≈ **0.06 ms/帧**。画布这一条结案：它不再是瓶颈。
+
+无头 `ScriptApiCheck` 此前给的 0.52 ms（只重交绘制调用的帧）/ 5.13 ms（重画帧）是**下限**——
+没有 MTR 线路数据时 `pickLine()` 立刻返回 `null`，预设的整段线路遍历根本没跑。所以这一轮要
+在**渲染线程上**把一帧拆开量，并且要在**真实线路数据**下量。
+
+#### 分段计时的口径与埋点位置
+
+开关沿用 2.7 的 `-Djsblock.pids.canvasStats=true`（一个开关同时开画布统计和帧分段）。
+实现是 `com.jsblock.script.PidsFrameStats`，只在渲染线程读写、全部累加原始数值、每秒格式化一行：
+
+| 段 | 含义 | 埋点 |
+|---|---|---|
+| **A** | 进入脚本之前的准备：预设查表、`customMessages`（`parseVariable`×4）、平台过滤集合、`scheduleList` 收集与排序、`PIDSWrapper` 构造、面板变换、像素化决策 | `RenderPIDSBase.render` 最开头取 `nanoTime`，`renderScripted` 里 `program.start()` 之前收口 |
+| **B** | `create()` / `render()` 调用本身 | `program.start()` 与 `renderOrFail()`（含重试、含像素化路径里的那两次）前后成对 |
+| **C** | 绘制调用执行（本移植里 `ctx.draw()` 是**立即画**，不是排队重放，所以 C 在 B 之内） | `ScriptRenderContext.draw()` / `renderComponent()` 里 `drawCall.draw()` 前后 |
+| **D** | 其余：交给脚本的渲染状态、`immediate.endBatch()`、像素化 FBO 包围、`popPose` | 不埋点，按 `total - A - B` 算，保证与 total 自洽 |
+| **api** | 脚本→本移植 Java 对象的耗时（`PIDSWrapper`/`Arrivals`/`Arrival`/`RouteInfo`/`RouteStopList`/`RouteStopInfo` 的热点访问器） | 各访问器里 `apiStart()`/`apiEnd()` 成对 |
+| **redrawFrames** | 本帧脚本重画过画布（`GraphicsTexture.upload()` 被调用） | `GraphicsTexture.upload()` 里打标记 |
+
+代价：开关关掉时是静态布尔判断；打开时每帧约 5 次 `nanoTime`（外加每个绘制调用、每次被
+插桩的访问器各一次），不拼字符串、不分配对象、不加锁，攒满一秒才格式化一次并 `LOGGER.info`。
+双面 PIDS 的两半按 `preset@x,y,z` 分成两条记录，各自一行——**这正好也是"两半是否各跑一次脚本"
+的可观测证据**。
+
+#### 无头测量：真实线路数据下的分段
+
+探针（`build/costprobe`，未入库）用真实 MTR 客户端缓存对象铺一条 24 站、两条线路（各停 + 快车）、
+该站台 8 班车的线路，脚本用 `ScriptRenderContext.dryRun`（不碰 GL，但 Rhino、包装类、绘制调用
+构造全是真的），60 fps 配速跑 180 帧。稳定窗口：
+
+| 指标 | 数值（每帧） | 占比 |
+|---|---|---|
+| A 准备 | 0.04-0.06 ms | ~2% |
+| B 脚本 | 2.1-2.9 ms | ~98% |
+| C 绘制调用 | 无头为 0（dry-run 不画） | 实机看日志 |
+| D 其余 | 0.01 ms | <1% |
+| api（我们的 Java） | 0.02-0.05 ms | **1-2%** |
+| 重画帧 | 9-10 次/秒，B 7-10 ms | 每秒 ~0.9 ms/帧均摊 |
+
+**结论一：这一帧的钱几乎全在 B，而 B 里几乎没有我们的代码。** 进一步用探针直接计时预设自己的
+函数（每次 1500 次调用、5 轮取中位）：
+
+| 预设函数 | 耗时/次 | 说明 |
+|---|---|---|
+| `render(ctx,state,pids)` | 0.65 ms | 每帧整段 |
+| `stateSignature(pids,state)` | 1.20 ms | 冷调用测得；里面含 `pickLine` |
+| `pickLine(arr,state,pids)` | 0.54 ms | 线路遍历，`render` 里最大的单项 |
+| `hasActiveFlip(state)` | 0.006 ms | 与猜测相反，可以忽略 |
+
+`pickLine` 每帧都跑（`stateSignature` 无条件调用它），它遍历最多 16 班车的线路、按站去重、
+逐站比较候选线路。**我们的每个 Java 访问器只有 155 ns**（`api` 总量 0.02-0.05 ms/帧 已证明），
+所以省查表、省包装类分配都只能动到这 1-2%。
+
+#### 真正的元凶：一个缺失的方法让每站每帧抛一次异常
+
+`next_train.js` 的 `stationKey(plat)` 这样写：
+
+```js
+var sid = null;
+try { sid = plat.getStationId(); } catch (e) { sid = null; }
+if (sid != null) { var ss = "" + sid; if (ss !== "") return ss; }
+try { return "" + plat.getPlatformId(); } catch (e2) { return "?"; }
+```
+
+而本移植的 `RouteStopInfo` **没有 `getStationId()`**（JCM 官方 API 文档 `tsc.md` 里
+`SimplifiedRoutePlatform.getStationId(): long` 存在，本仓库 `README.md` 的覆盖表也早已把它列为
+应实现的条目）。于是**每个站、每条候选线路的每一次探测**都是一次 Rhino
+`TypeError: Cannot find function getStationId`，被预设的 `catch` 吞掉后走回退分支。
+
+探针在同一个 scope 里直接量了跨语言调用的单价（20000 次循环、含 JS 循环本身）：
+
+| 调用 | ns/call |
+|---|---|
+| 纯 JS 循环迭代（基线） | 600-900 |
+| 存在的字段读（`pids.rows`） | 约 +100 |
+| 存在的方法（`getPlatformId()`、`routeName()`） | 约 +400-1400 |
+| **不存在的方法（抛 + 被 catch）** | **5700-6500** |
+
+一条 24 站的线路，`pickLine` 每帧要探测 **48-72 次**（建 stopSet 一遍、`routeCovers` 每个候选
+一遍、最后建站点表一遍），双面面板还要 ×2。这就是"每帧 2 ms"里最大的那一块。
+
+#### 做了什么：补 `RouteStopInfo.getStationId()`
+
+* 语义按官方文档：**返回所属车站区域的 id**；车站解析不出来时回退到**站台自己的 id**，
+  而不是 `0`——`0` 会让"按车站去重"的预设把整条线路塌成一个站（客户端缓存还没同步时尤其糟），
+  回退到站台 id 则与补这个方法之前的行为一致。
+* 只补这一个。`route.getColor()`（`SimplifiedRoute.getColor()`，HKR 也探测它）**故意没补**：
+  补了会让 HKR 的"同色即同线"匹配真正生效，**换掉线路图的底图线路**——那是画面变化，
+  不该混在性能提交里，已单独记在下面"剩下什么"。
+* 实测（探针，1500 次/轮，5 轮中位）：
+
+| 每次脚本调用 | 补之前 | 补之后 | 变化 |
+|---|---|---|---|
+| `render()` | 0.65 ms | **0.33 ms** | **-49%** |
+| `pickLine()` | 0.54 ms | **0.29 ms** | **-45%** |
+| `stateSignature()` | 1.20 ms | 0.93 ms | -22% |
+
+* **画面没变**：同一份 fixture 下线路图仍是 24 站，首末站名相同（`Fixture Station 1` /
+  `Fixture Station 24`）；只有"一条线路在同站两个站台都停"时才会按车站去重成一个站，
+  那正是 JCM 2.x 用同一个方法得到的结果。
+* 折算到实机：一块双面面板每帧跑两遍脚本，节省 **约 0.6-0.7 ms/帧**，重画帧同样少这么多。
+  这是本轮**唯一**按数据做的优化。
+
+#### 没有做的事，以及为什么
+
+* **没跳脚本执行**（例如不可见面板、或"内容没变就不跑"）：会改行为——预设的翻牌动画、
+  帧计数、音效都靠每帧执行；JCM 2.x 之所以能这么做，是因为它把脚本放到自己的线程上，
+  渲染线程只重放上一帧的 `drawCalls`（`ScriptPIDSPreset.render` → `ScriptManager.scriptThread`）。
+* **没动双面**：两半各自 `renderScripted`（`isKeyBlock()` 是预设自己的判断），
+  跳过任一半都会让 `st_ql.js` 这类"按 key 半决定画哪面"的预设画错。
+* **没补 `route.getColor()`**：见上，会换底图线路。
+* **没在 `PIDSData` 加每帧记忆化**：`api` 实测 1-2%，加了也测不出来。
+
+#### 剩下什么（下一轮的入口）
+
+1. **off-thread + replay（真正的解法）**：把"执行脚本"和"画上一帧的绘制调用"分开，
+   像 v2 的 `ScriptManager.scriptThread` / `ScriptInstance.scriptTask` 那样。本轮的实机数据支
+   持这个判断：一帧的 98% 在 B，而 B 里 98% 是预设自己的解释执行——除了不在这条线程上跑，
+   没有别的办法把它从帧时间里拿掉。
+2. **`SimplifiedRoute.getColor()` / `getStationId()` 之外仍缺的 API**：补 `getColor()` 要单独做，
+   并核对线路图底图的变化。
+3. **首帧 `create()` 很贵**：探针里 HKR 的 `create()` 一次 **380-500 ms**（AWT 字体装载 + 整屏
+   首次重绘）。它只在面板首次出现/资源重载后发生，但用户在登录时会感到一次明显卡顿。
+   值得单独做"首帧分帧绘制"或"延后到面板可见时再建画布"。
+
+#### 实机怎么看那一行
+
+```
+[Joban Client] PIDS script stats hkr:next_train@100,64,-5: frames=58/s total avg=1.42 max=8.10
+ | A avg=0.05 max=0.21 | B avg=0.71 max=6.90 (create 0.00 once) | C avg=0.11 max=0.40, in B
+ | D avg=0.02 max=0.09 | redrawFrames=10 (B avg=6.20) | api avg=0.21 max=0.90 calls=118/s
+ | drawCalls avg=1.0 | worst=B,6.90
+```
+
+判读顺序：
+
+1. **`frames=N/s`**：这块面板每秒被渲染多少次。双面面板会出现**两行**（坐标不同），
+   每行都≈屏幕 fps → 证实"两半各跑一次脚本"，实机开销就是两倍。
+2. **`B avg` / `worst=B,x`**：每帧脚本的真实代价。`B avg` 0.5-1 ms、`worst` 5-10 ms 属于
+   "静止时还行、每隔 110 ms 卡一下"（重画）；`B avg` 已经 3 ms 以上就要看 `pickLine` 那类遍历。
+3. **`redrawFrames` 与 `(B avg=x)`**：每秒重画次数，以及重画帧贵多少。HKR 正常是 **9-11 次/秒**；
+   接近 `frames` 就是每帧重画（预设的缓存失效了，或者 `ledBrightness` 相位在变）。
+4. **`C avg`**：真正变成顶点/贴图的那一段。窗口 1.0 的面板应该是 **0.05-0.3 ms**；
+   如果是文本类预设的几十个绘制调用，这里会明显变大——那时候该看的是绘制调用数而不是脚本。
+5. **`A avg`**：每帧准备。正常 **<0.1 ms**；突然变大 = 该站台的 `scheduleList` 很长，或者开了自动换预设。
+6. **`api avg` 占比**：`api/B` 只有几个百分点 → 别去优化我们的查表；占比大才是我们的事。
+7. **`D avg`**：包装与收尾。开启像素化（`pixelScale`/`pixelResolution`）时它会包含 offscreen 的
+   FBO 与合成，正常应 <0.3 ms。
+
+#### 验收（本轮）
+
+```
+gradle build                      → BUILD SUCCESSFUL
+tools\run-pids-check.ps1          → RESULT: ALL CHECKS PASSED
+next_train.js 0/1/2/4 arrivals    → RESULT: SCRIPT OK
+_v2api\run-all.ps1（11 包）       → 108/112（与 2.7 相同）
+```

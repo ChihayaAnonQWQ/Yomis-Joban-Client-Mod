@@ -362,7 +362,12 @@ public class ScriptRenderContext {
 			drawCall.z = z;
 			traceCalls.add(drawCall.describe());
 		}
+		/* Section C of the frame statistics: the geometry this call draws, here and now. In JCM
+		   2.x this is the replay of a queued call; in this port it happens inside the script's own
+		   call, which is why C is reported as a part of B rather than beside it. */
+		final long drawStart = PidsFrameStats.mark();
 		drawCall.draw(this, z);
+		PidsFrameStats.noteDrawCall(PidsFrameStats.mark() - drawStart);
 	}
 
 	// ------------------------------------------------------------------
@@ -484,9 +489,11 @@ public class ScriptRenderContext {
 		}
 		componentGraphics.matrices.pushPose();
 		componentGraphics.matrices.translate(0F, 0F, z);
+		final long drawStart = PidsFrameStats.mark();
 		try {
 			component.draw(componentContext, componentGraphics);
 		} finally {
+			PidsFrameStats.noteDrawCall(PidsFrameStats.mark() - drawStart);
 			componentGraphics.matrices.popPose();
 		}
 	}

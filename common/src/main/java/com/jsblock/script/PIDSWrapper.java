@@ -187,12 +187,18 @@ public class PIDSWrapper {
 
 	/** @return the custom message for a row, or an empty string. */
 	public String getCustomMessage(int i) {
-		return i >= 0 && i < customMessages.length && customMessages[i] != null ? customMessages[i] : "";
+		final long api = PidsFrameStats.apiStart();
+		final String message = i >= 0 && i < customMessages.length && customMessages[i] != null ? customMessages[i] : "";
+		PidsFrameStats.apiEnd(api);
+		return message;
 	}
 
 	/** @return whether the given row is suppressed by the block or the preset. */
 	public boolean isRowHidden(int i) {
-		return i >= 0 && i < rowHidden.length && rowHidden[i];
+		final long api = PidsFrameStats.apiStart();
+		final boolean hidden = i >= 0 && i < rowHidden.length && rowHidden[i];
+		PidsFrameStats.apiEnd(api);
+		return hidden;
 	}
 
 	/**
@@ -294,7 +300,9 @@ public class PIDSWrapper {
 	 * this method did before it was passed an answer, so nothing that worked stops working.</p>
 	 */
 	public StationInfo station() {
+		final long api = PidsFrameStats.apiStart();
 		final Station station = PIDSData.stationOf(primaryPlatformId());
+		PidsFrameStats.apiEnd(api);
 		return station == null ? null : new StationInfo(station);
 	}
 
@@ -305,7 +313,9 @@ public class PIDSWrapper {
 	 * routed through the same resolution for the same reason.</p>
 	 */
 	public String stationName() {
+		final long api = PidsFrameStats.apiStart();
 		final Station station = PIDSData.stationOf(primaryPlatformId());
+		PidsFrameStats.apiEnd(api);
 		return station == null || station.name == null ? "" : station.name;
 	}
 
@@ -461,10 +471,15 @@ public class PIDSWrapper {
 		 * this wrapper is lenient, in which case a placeholder that answers every accessor
 		 */
 		public Arrival get(int i) {
+			final long api = PidsFrameStats.apiStart();
+			final Arrival arrival;
 			if (i >= 0 && i < arrivals.size()) {
-				return arrivals.get(i);
+				arrival = arrivals.get(i);
+			} else {
+				arrival = lenient ? Arrival.absent() : null;
 			}
-			return lenient ? Arrival.absent() : null;
+			PidsFrameStats.apiEnd(api);
+			return arrival;
 		}
 
 		public int size() {
@@ -562,7 +577,10 @@ public class PIDSWrapper {
 		}
 
 		public String destination() {
-			return entry == null ? "" : PIDSData.destination(entry);
+			final long api = PidsFrameStats.apiStart();
+			final String destination = entry == null ? "" : PIDSData.destination(entry);
+			PidsFrameStats.apiEnd(api);
+			return destination;
 		}
 
 		public int carCount() {
@@ -574,11 +592,17 @@ public class PIDSWrapper {
 		}
 
 		public String routeName() {
-			return entry == null ? "" : PIDSData.routeName(entry);
+			final long api = PidsFrameStats.apiStart();
+			final String name = entry == null ? "" : PIDSData.routeName(entry);
+			PidsFrameStats.apiEnd(api);
+			return name;
 		}
 
 		public int routeColor() {
-			return entry == null ? 0 : PIDSData.routeColor(entry, 0);
+			final long api = PidsFrameStats.apiStart();
+			final int color = entry == null ? 0 : PIDSData.routeColor(entry, 0);
+			PidsFrameStats.apiEnd(api);
+			return color;
 		}
 
 		/**
@@ -586,11 +610,12 @@ public class PIDSWrapper {
 		 * MTR 4 exposes this on the arrival itself; on MTR 3 it lives on the route.
 		 */
 		public String routeNumber() {
+			final long api = PidsFrameStats.apiStart();
 			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
-			if (route == null || route.lightRailRouteNumber == null) {
-				return "";
-			}
-			return route.lightRailRouteNumber;
+			final String number = route == null || route.lightRailRouteNumber == null
+					? "" : route.lightRailRouteNumber;
+			PidsFrameStats.apiEnd(api);
+			return number;
 		}
 
 		/**
@@ -631,13 +656,19 @@ public class PIDSWrapper {
 		}
 
 		public long platformId() {
+			final long api = PidsFrameStats.apiStart();
 			final Platform platform = platformRef();
-			return platform == null ? 0L : platform.id;
+			final long id = platform == null ? 0L : platform.id;
+			PidsFrameStats.apiEnd(api);
+			return id;
 		}
 
 		public String platformName() {
+			final long api = PidsFrameStats.apiStart();
 			final Platform platform = platformRef();
-			return platform == null || platform.name == null ? "" : platform.name;
+			final String name = platform == null || platform.name == null ? "" : platform.name;
+			PidsFrameStats.apiEnd(api);
+			return name;
 		}
 
 		/** @return the destination of the stop this train is heading to, when resolvable. */
@@ -657,7 +688,13 @@ public class PIDSWrapper {
 		 * also what {@code pids.arrivals().get(i)} reports for a row with no train
 		 */
 		public RouteInfo route() {
-			return entry == null ? null : new RouteInfo(PIDSData.route(entry.routeId));
+			if (entry == null) {
+				return null;
+			}
+			final long api = PidsFrameStats.apiStart();
+			final RouteInfo route = new RouteInfo(PIDSData.route(entry.routeId));
+			PidsFrameStats.apiEnd(api);
+			return route;
 		}
 
 		/**
@@ -746,13 +783,28 @@ public class PIDSWrapper {
 
 		/** {@code route.getPlatforms()} — the stops this service calls at, in order. */
 		public RouteStopList getPlatforms() {
-			return new RouteStopList(route);
+			final long api = PidsFrameStats.apiStart();
+			final RouteStopList stops = new RouteStopList(route);
+			PidsFrameStats.apiEnd(api);
+			return stops;
 		}
 
 		/** {@code route.getName()} — MTR 4 spells it this way, so both are offered. */
 		public String getName() {
 			return name;
 		}
+
+		/**
+		 * {@code route.getColor()} — MTR 4's {@code SimplifiedRoute.getColor()} — is deliberately
+		 * <b>not</b> implemented in this round. It is part of the API the port targets (see
+		 * {@code README.md}'s coverage table), and HKR's {@code next_train.js} calls it behind a
+		 * {@code try/catch} to match a route map to the first train's line colour, so today that
+		 * match is silently skipped and the board falls back to the colour-blind rule. Adding it
+		 * would remove a handful of exceptions per frame, but it would also change <em>which line
+		 * the route map draws</em>, and a rendering change is not what a performance round should
+		 * carry. Recorded in {@code MTR3-PIDS-PORT.md} §4.22 as the next gap to close, on its own,
+		 * with the visual difference checked.
+		 */
 
 		/** @return the number of stops, or 0 when the route could not be resolved. */
 		public int getPlatformCount() {
@@ -777,10 +829,15 @@ public class PIDSWrapper {
 		 * because HKR's loops iterate to the list's own size and a null would abort the frame
 		 */
 		public RouteStopInfo get(int i) {
+			final long api = PidsFrameStats.apiStart();
+			final RouteStopInfo stop;
 			if (route == null || route.platformIds == null || i < 0 || i >= route.platformIds.size()) {
-				return new RouteStopInfo(0L, route);
+				stop = new RouteStopInfo(0L, route);
+			} else {
+				stop = new RouteStopInfo(route.platformIds.get(i).platformId, route);
 			}
-			return new RouteStopInfo(route.platformIds.get(i).platformId, route);
+			PidsFrameStats.apiEnd(api);
+			return stop;
 		}
 
 		/**
@@ -838,11 +895,45 @@ public class PIDSWrapper {
 
 		/** {@code getStationName()} — MTR 4's spelling; this is what HKR prints. */
 		public String getStationName() {
-			return station == null ? "" : station.name;
+			final long api = PidsFrameStats.apiStart();
+			final String name = station == null ? "" : station.name;
+			PidsFrameStats.apiEnd(api);
+			return name;
 		}
 
 		public long getPlatformId() {
-			return platformId;
+			final long api = PidsFrameStats.apiStart();
+			final long id = platformId;
+			PidsFrameStats.apiEnd(api);
+			return id;
+		}
+
+		/**
+		 * {@code getStationId()} — the station area the stop belongs to, MTR 4's
+		 * {@code SimplifiedRoutePlatform.getStationId()}.
+		 *
+		 * <h2>Why this is on the hot path</h2>
+		 * <p>HKR's {@code next_train.js} calls it on <em>every stop of every candidate route</em>
+		 * while it builds its route map ({@code stationKey()}, which reads this and falls back to
+		 * {@link #getPlatformId()}). With the method missing, Rhino answers each of those calls
+		 * with a thrown {@code TypeError} that the preset's {@code catch} swallows: measured on
+		 * this machine, one missing-method call costs <b>5.7-6.5 us</b> against 0.4-1.4 us for a
+		 * present one, and HKR's frame makes 48-72 of them on a 24-stop line. That was roughly
+		 * half of the preset's whole per-frame script cost; see MTR3-PIDS-PORT.md §4.22.</p>
+		 *
+		 * <h2>What it returns when the station cannot be resolved</h2>
+		 * <p>The platform's own id, not {@code 0}. The id is a stop's identity for a preset that
+		 * is deduplicating stops (which is what HKR does with it), and returning {@code 0} for
+		 * every unresolvable stop would collapse a whole route map into one stop the moment the
+		 * client's {@code platformIdToStation} cache is behind — a worse failure than a slightly
+		 * different key. The fallback is also what this port did implicitly before the method
+		 * existed, so a panel drawn while the caches are still filling looks the same.</p>
+		 */
+		public long getStationId() {
+			final long api = PidsFrameStats.apiStart();
+			final long id = station == null || station.id == 0L ? platformId : station.id;
+			PidsFrameStats.apiEnd(api);
+			return id;
 		}
 
 		/**
