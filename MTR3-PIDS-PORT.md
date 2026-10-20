@@ -1000,12 +1000,12 @@ HKR 这块屏的核心就是「用 AWT 画进 `GraphicsTexture` 再铺满屏幕�
 |---|---|---|
 | `BufferedImage` | `new BufferedImage(w, h, 2)` = `TYPE_INT_ARGB` | 相同 |
 | 渲染提示 | `KEY_TEXT_ANTIALIASING = VALUE_TEXT_ANTIALIAS_ON`、`KEY_STROKE_CONTROL = VALUE_STROKE_PURE` | 相同 |
-| 上传循环 | `for x∈[0,w) for y∈[0,h) pixels.setPixelRGBA(x, y, toAbgr(image.getRGB(x, y)))` | 同一双重循环，上下界与两个下标都一致 |
+| 上传循环 | `for x∈[0,w) for y∈[0,h) pixels.setPixelRGBA(x, y, toAbgr(image.getRGB(x, y)))` | 同一双重循环，上下界与两个下标都一致（2.7 起读 `DataBufferInt` 批量拷贝，字节序不变；实测与原因见 §4.21） |
 | `toAbgr` | `(a<<24)\|(b<<16)\|(g<<8)\|r` | 逐条一致（`GraphicsTexture.abgr`） |
 | `NativeImage` | `new NativeImage(w, h, false)` | 相同 |
 | `DynamicTexture` | 构造器里 `new DynamicTexture(image)`，其构造器设 `setFilter(false, false)` → **最近邻、无 mipmap** | 相同；只是**改到第一次 `upload()` 才建**，这样「创建→画→关」在没有游戏时也能跑 |
 | 注册 | 构造器里 `Minecraft.execute(() -> getTextureManager().register(id, tex))` | 第一次 upload 时 `register(id, tex)` |
-| 真上传 | `RenderSystem.recordRenderCall(dynamicTexture::upload)`（**延迟到帧末**） | 已在渲染线程时**就地上传** `texture.upload()`；不在（BackgroundWorker）时 `Minecraft.execute` 排到主线程 |
+| 真上传 | `RenderSystem.recordRenderCall(dynamicTexture::upload)`（**延迟到帧末**） | 已在渲染线程时**就地上传** `texture.upload()`；不在（BackgroundWorker）时 `Minecraft.execute` 排到主线程。这两者都只是"上传在哪个线程/哪一刻"，不解释 HKR 的掉帧差异；真正的差异是脚本执行线程，见 §4.21 |
 
 两处差异都是「把 GPU 侧延后」的连带结果，脚本能观察到的语义没有变化。
 
@@ -1236,6 +1236,203 @@ PingFang SC/TC、Hiragino Sans、Meiryo、Yu Gothic、Malgun Gothic），并优�
 | ② 替换字体能画就保留 | 把 CJK 交给了 `Dialog` = 宋体（本机） |
 | ③ CJK 一律用内置衬线 | 内置那份也是衬线，用户否掉的就是这个观感 |
 | ④（最终）无衬线 CJK 优先，内置衬线兜底 | 本机 → `Noto Sans SC Medium` ✓ |
+
+### 4.21 画布上传的拷贝路径、HKR 掉帧，以及 v2 为什么只掉 2 帧（2.7 优化与诊断）
+
+#### 现象与已经排除的猜想
+
+HKR `next_train.js`（81 KB）把整屏画进一张 `GraphicsTexture`（`SS = 8` →
+`136×76×8 = 1088×608`），再用**一个** `Texture` 绘制调用铺满面板。它自己的
+`render()` 已经做了缓存：`stateSignature()` 不变且没有翻牌时不重画、不 `upload()`；
+`ledBrightness` / `stopBlinkBrightness` 的相位被量化（`TERMINAL_LED_STEPS = 10`、
+`TERMINAL_LED_PERIOD = 1100 ms`），所以稳定状态下**约每秒 9～10 次重画**，不是每帧。
+
+用户实测：同一张屏在 JCM 2.x（MTR 4）只掉约 2 帧，在本分支掉几十帧，且面板越多越掉。
+在改任何代码之前，先把无头能测的两段分开量了：拷贝本身、以及脚本层的重画频率与单帧开销。
+
+#### 测量一：像素拷贝（纯 Java，不需要 GL）
+
+`NativeImage` 的分配与 `setPixelRGBA` 不需要 GL 上下文（只有 `DynamicTexture.upload()`
+需要），所以 1088×608 = **661,504 像素**的整条拷贝路径可以在无头环境里跑真代码。
+下表是本机 Java 21（Zulu）上 40 次预热 + 60 次计时、随机顺序交错的中位数；两组输出
+逐字节比对相同：
+
+| 拷贝方式 | 中位耗时 | 相对旧路径 |
+|---|---|---|
+| 旧：逐像素 `bufferedImage.getRGB(x,y)` + `abgr()` + `pixels.setPixelRGBA()` | **1.64 ms** | 1.0× |
+| 新：`((DataBufferInt) raster.getDataBuffer()).getData()` 一次取出，紧凑循环写 `setPixelRGBA` | **0.37 ms** | **4.3×**（每次省 1.26 ms） |
+| 参考：`bufferedImage.getRGB(0,0,w,h,int[],0,w)` 批量取出再转换 | 2.64 ms | 0.6×（比旧路径还慢） |
+
+两条被否掉的候选，理由都来自上面的数字与 API 本身：
+
+* **没有 `NativeImage.getPixels()` 的 `IntBuffer` 视图可用**。`javap -p` 1.20.1 的
+  `NativeImage` 只有 `getPixelRGBA` / `setPixelRGBA` / `applyToAllPixels` 等，
+  没有可以整块写入的 `IntBuffer`；`applyToAllPixels` 只能对已有像素做一元变换，
+  不能把外部数组灌进去。所以**批量写只有 `setPixelRGBA` 一条路**，能省的是读的那一半。
+* **`getRGB(0,0,w,h,...)` 不是更快**：它内部仍逐像素走颜色模型，2.64 ms 反而比旧路径慢。
+
+顺带确认了**没有 mipmap 生成**：1.20.1 的 `DynamicTexture.upload()` 调
+`NativeImage.upload(0,0,0,0)`，其 `_upload` 字节码只做 `_pixelStore` /
+`_texSubImage2D` / `_texParameter`，没有 `glGenerateMipmap`；`DynamicTexture` 构造器
+本身也只 `setFilter(false, false)`（最近邻）。
+
+#### 测量二：脚本层的重画频率与单帧开销
+
+用 `ScriptApiCheck` 把 `next_train.js` 跑 120 次 `render()`，并给 `GraphicsTexture`
+加了一个包内可见的 `upload()` 计数（该脚本每次重画恰好调用一次 `upload()`，所以这个计数
+就是重画次数）。直接背靠背跑 120 次只经过约 60～80 ms 墙钟，跨不过一个 110 ms 的 LED
+量化台阶，所以给检查器加了 `--frame-ms=16`，把 120 帧按 60 fps 配速（约 2.18 s）：
+
+```
+120 render() iterations in 2184 ms (18.20 ms/frame; render calls 1.33 ms/frame);
+canvas upload() calls: 21 (redraws, 0.18/frame);
+redrawing frames avg 5.13 ms vs 0.52 ms otherwise
+```
+
+| 指标 | 数值 | 说明 |
+|---|---|---|
+| 120 帧内的重画次数 | **21 次**（0.18/帧，**~9.6 次/秒**） | 与 `10 档 / 1100 ms` 的 LED 量化一致，**证实不是每帧重画** |
+| 重画帧的脚本耗时 | **5.13 ms** | `stateSignature` + `drawAll`（AWT 全屏重绘）+ 提交绘制调用；无头环境没有 MTR 线路/站点数据，实机只会更高 |
+| 只重交绘制调用的帧 | **0.52 ms** | 每帧固定开销（脚本 + 签名 + 一个 `Texture` 调用） |
+| 强制每帧重画时 | 5.60 ms/帧 | 120/120 帧重画，与上一行互证 |
+
+按这个数字估算一块 136×76 的面板：每帧固定约 0.5 ms（双面 PIDS 的两半各跑一次，
+约 1 ms/帧），再加平均 0.18×5.13 ≈ 0.9 ms/帧。**一块面板约 2 ms/帧量级**，十块就接近
+20 ms/帧——这就是"面板越多越卡"的线性项；而重画集中在同一个 110 ms 边界上（所有面板用
+同一个墙钟、同一个量化表），所以还会叠加成一次几十毫秒的卡顿波。
+
+#### 测量三：每帧固定开销里那个"看着可疑"的字符串解析
+
+`Texture.texture(String)` 每帧经 `ScriptPaths.resource()` 重新构造 `ResourceLocation`。
+实测：
+
+```
+ScriptPaths.resource: 198.5 ns/call (0.199 us)
+new ResourceLocation: 118.5 ns/call
+```
+
+十块面板 × 60 fps = 600 次/秒 ≈ **0.12 ms/秒**。加缓存省下的部分比一次缓存查找的复杂度还小，
+**不值得改**，所以没有改。
+
+#### v2 的 `GraphicsTexture.upload()`：没有脏检查，也没有更快的拷贝（javap 结论）
+
+任务最初最可疑的假设是"v2 的 `upload()` 有脏检查/批量拷贝，所以只掉 2 帧"。逐条对了
+`NeoJCM-neoforge-2.0.0-prerelease.2+fork.1+1.21.1.jar` 的字节码，结论是**两者都不是**：
+
+```
+public void upload();
+   ... for (i = 0; i < width; i++)
+       for (j = 0; j < height; j++)
+           dynamicTexture.getPixels().setPixelRGBA(i, j, toAbgr(bufferedImage.getRGB(i, j)));
+   ... RenderSystem.recordRenderCall(dynamicTexture::upload);
+```
+
+* **没有脏检查**：每次调用都整张重拷，和我们旧代码逐像素、上下界、下标、ABGR 交换完全一样；
+* **没有更快的拷贝路径**：连 `getRGB` 的调用形状都一致；
+* 唯一差别是**真 GL 上传**用 `RenderSystem.recordRenderCall(dynamicTexture::upload)` 延到帧末，
+  而我们是就地上传。这一条能解释少量差别，解释不了"2 帧 vs 几十帧"。
+
+真正的差别在**执行线程**，也是本次排查最有价值的结论：
+
+| 证据（javap） | 含义 |
+|---|---|
+| `com.lx862.mtrscripting.core.ScriptInstance` 有 `public java.util.concurrent.Future<?> scriptTask;` | 每个脚本实例的任务是异步提交的 |
+| `com.lx862.mtrscripting.ScriptManager` 有 `private java.util.concurrent.ExecutorService scriptThread;` 与 `submitScriptTask(Runnable)` | 脚本跑在自己的线程池上 |
+| `ParsedScript.invokeRenderFunction(ScriptInstance, Runnable)` → `ScriptManager.submitScriptTask(...)` | 每帧的 `render` 是**提交**，不是内联执行 |
+| `ScriptPIDSPreset.render(...)`：先 `invokeRenderFunction(...)`，再把 `PIDSScriptInstance.drawCalls` **复制一份**交给渲染线程执行 | 脚本、AWT 画布、像素拷贝都在 scriptThread；渲染线程只画**上一帧**的绘制调用，帧末再上传纹理 |
+
+也就是说，v2 的 2 帧 = 帧末那几次 `glTexSubImage2D`；我们的"几十帧" = 每块面板每帧的
+Rhino 执行 + 每秒约 10 次、每次约 5 ms 的 AWT 全屏重绘 + 像素拷贝，**全部发生在渲染线程**。
+`RenderPIDSBase.renderScripted()` → `ScriptEngine.Compiled.renderOrFail()` 是同步调用链，
+这是移植时有意选的简单模型（脚本能直接拿到当前帧的 `PoseStack`），不是 `upload()` 的细节。
+
+#### 本次改了什么
+
+1. **`GraphicsTexture.copyPixelsTo(NativeImage)`**：画布永远是 `TYPE_INT_ARGB`，其
+   `DataBufferInt` 里的 int 就是 `getRGB(x,y)` 的返回值；一次取出数组、紧凑循环
+   `abgr()` + `setPixelRGBA`。非 `TYPE_INT_ARGB` 时仍退回旧的逐像素路径（构造函数保证了
+   走不到，但方法本身不假设）。**字节序不变**，`ScriptCanvasCheck` 新增
+   `checkPixelCopy()`：在真实的 `NativeImage` 上写入 6 个不同 alpha/通道的像素，再
+   `getPixelRGBA` 逐像素读回比对，`FF112233 → FF332211` 的断言仍在。
+2. **`-Djsblock.pids.canvasStats=true` 诊断开关**（默认关闭，读一次静态常量）：
+   每块画布每秒最多一行，见下。
+3. **`ScriptApiCheck` 的计时/计数**：每次跑脚本都会打印"多少帧、其中多少次重画、
+   重画帧平均多少 ms、其它帧平均多少 ms"；`--frame-ms=N` 用来按真实帧率配速。
+   这些只是打印，不参与通过/失败判定，CI 不会因为机器快慢变红。
+4. **`MTR3-PIDS-PORT.md` 本节 + CHANGELOG**。
+
+#### 优化前后对比
+
+| 项目 | 优化前 | 优化后 | 依据 |
+|---|---|---|---|
+| 1088×608 一次像素拷贝 | 1.64 ms | **0.37 ms** | 上表，4.3×，字节一致 |
+| 十块面板一次同步重画波里的拷贝总耗时 | ~16.4 ms | **~3.7 ms** | 1.64→0.37 × 10 |
+| 每帧固定开销（`stateSignature` + 绘制调用） | 0.52 ms/帧 | 0.52 ms/帧 | **没有改**：这是包自己的 JS，且没有便宜的外部缓存点 |
+| 每次重画的 AWT `drawAll` | 5.13 ms | 5.13 ms | **没有改**：见下"未做" |
+| `Texture.texture(String)` 的 location 解析 | 0.2 µs/次 | 0.2 µs/次 | 量级太小，不做缓存 |
+
+**为什么没有顺手把 AWT 重绘也搬走**：那需要 v2 的异步脚本模型——把脚本的绘制调用捕获成
+可重放的列表、双缓冲到下一帧、再在渲染线程回放。`ScriptRenderContext` 现在是即时执行
+（`beginQuad`/`endQuad`），没有可重放的调用对象；这是渲染管线级改动，无法在无头环境验证
+正确性，超出这次"按证据做小步优化"的范围。所以本次的定位是：**把属于我们的 1.26 ms/次
+拷贝从渲染线程拿掉，并把"到底是谁在花时间"变成可测量的**；要完全对齐 v2 的 2 帧，下一步
+是异步脚本执行，已记入下面的"未验证/待办"。
+
+#### 诊断开关怎么用、看哪一行
+
+启动参数（默认关闭，不加时热路径只多一次静态布尔判断）：
+
+```
+-Djsblock.pids.canvasStats=true
+```
+
+每块画布在"上一次打印满 1 秒"后的下一次上传时打一行：
+
+```
+[Joban Client] PIDS canvas stats jsblock:dynamic/graphics/<uuid> (1088x608) over 1003 ms:
+upload() calls 10, pixel copies 10, copy avg 0.382 ms (max 0.501), GL upload avg 0.214 ms, script redraws 10.
+```
+
+判读：
+
+* `upload() calls` ≈ **10/秒** → HKR 的正常 LED 节奏（每 110 ms 一档），说明包自己的签名缓存
+  在工作；接近 **60/秒** → 脚本在每帧重画，`stateSignature` 没起作用（或者包的 LED 档数被调高了）；
+* `pixel copies` **小于** `upload() calls` → 上传被排到了别的线程（`Minecraft.execute`），
+  差额就是排队量；相等 → 全在调用线程上同步执行；
+* `copy avg` 在 1088×608 上应约 **0.37～0.5 ms**（旧实现约 1.6 ms）。如果仍看到 1.5 ms 以上，
+  说明跑的不是本次优化后的类（部署了旧 jar）；
+* `script redraws` 与 `upload() calls` 同值：HKR 的 `render()` 每次重画只调一次 `upload()`，
+  所以这一列就是**脚本重画次数**；
+* 画布停止上传时不再打印——这本身也是答案："它现在不传了"。
+
+另外，第一次成功上传时那条一次性日志仍在：
+
+```
+[Joban Client] PIDS script canvas 1088x608 uploaded as texture jsblock:dynamic/graphics/<uuid>.
+```
+
+**实机判据**：`canvasStats` 行里 `copy avg` ≈0.4 ms、`upload() calls` ≈10/秒，说明上传路径与
+包的重画节奏都正常；若此时仍掉帧，问题不在上传/拷贝，而在每次重画的 AWT `drawAll`（渲染线程
+上的 ~5 ms/次），需要的是 v2 那套异步执行，而不是继续优化 `upload()`。
+
+#### 本次验收
+
+* `tools/run-pids-check.ps1` → **`RESULT: ALL CHECKS PASSED`**（`gradle build` 一并通过）；
+* `ScriptCanvasCheck` → `RESULT: CANVAS OK`，含新增的 `copyPixelsTo` 字节序断言；
+* `next_train.js` 在 0/1/2/4 班次 → 4 × `RESULT: SCRIPT OK`；
+* 十一包回归 → **108/112**（与基线一致；4 个失败为既有的工具模块/无头缺数据）。
+
+#### 未验证 / 待办
+
+1. **GL 上传耗时无法无头测量**：`copy avg` 与 `GL upload avg` 分开打印，但后者需要实机；
+   v2 的 `recordRenderCall` 延迟是否比我们就地 `texture.upload()` 更省，本次**没有改**，
+   也没有实机数据，不做断言。
+2. **AWT `drawAll` 的实机成本**：无头检查没有 MTR 线路/站点数据（`pickLine` 返回 null），
+   实机每帧/每次重画只会更贵；5.13 ms 是**下限**。
+3. **异步脚本执行**：v2 的 `scriptThread + drawCalls 双缓冲` 是"只掉 2 帧"的根因，本次只在
+   文档里定位，没有实现。实现它需要可重放的绘制调用缓冲与线程安全审计，另开任务。
+4. 微基准是单机、单 JVM 的数字（Java 21 Zulu、Windows），只用于比较两条路径的相对快慢；
+   绝对值会随 CPU/缓存变化。上表的"十块面板 ×10 次/秒"是算术外推，不是实机采样。
 
 ### 5.1 缺失 `ForgeConfig.java`
 

@@ -1,5 +1,6 @@
 package com.jsblock.script;
 
+import com.mojang.blaze3d.platform.NativeImage;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.NativeJavaObject;
 import org.mozilla.javascript.Scriptable;
@@ -22,8 +23,9 @@ import java.awt.image.BufferedImage;
  * needs a GL context, so the check asserts the degraded path instead — no client is running, so
  * {@code upload()} must report once and return, leaving the image intact and the script alive. The
  * upload itself is a straight copy of JCM 2.x's: {@code DynamicTexture}, {@code getPixels()},
- * {@code setPixelRGBA(bufferedImage.getRGB(...))} converted through the same ABGR swap, and that
- * conversion is asserted here directly.</p>
+ * {@code setPixelRGBA} with the same ABGR swap. The image half of that copy is real
+ * {@code NativeImage} work and is asserted through {@link GraphicsTexture#copyPixelsTo(NativeImage)}
+ * pixel by pixel; only the final {@code glTexSubImage2D} needs the GPU.</p>
  *
  * <p>Run via {@code tools/run-pids-check.ps1}.</p>
  */
@@ -39,6 +41,7 @@ public final class ScriptCanvasCheck {
 
 		checkColourRules();
 		checkAbgrSwap();
+		checkPixelCopy();
 		checkImageCopy();
 		checkSizeRules();
 		checkLeakBound();
@@ -92,6 +95,51 @@ public final class ScriptCanvasCheck {
 			}
 		}
 		expect(roundTrips, "the swap is its own inverse on every channel order it can be given");
+	}
+
+	/**
+	 * The whole copy, from the canvas's raster into a real {@code NativeImage}.
+	 *
+	 * <p>{@code NativeImage} itself needs no GL context — only the texture does — so the batch
+	 * path {@link GraphicsTexture#copyPixelsTo(NativeImage)} can be exercised for real here and
+	 * read back pixel by pixel. That pins both halves at once: the raster fast path must produce
+	 * exactly the same bytes as the per-pixel {@code getRGB} conversion, and the ABGR swap must
+	 * still be the one {@link GraphicsTexture#abgr} describes. A canvas whose raster is not
+	 * {@code TYPE_INT_ARGB} is not reachable through the constructor, so the fallback loop is
+	 * deliberately not forced here.</p>
+	 */
+	private static void checkPixelCopy() {
+		final int[][] pixels = {
+				{0xFF112233, 0x80123456, 0x00000000},
+				{0xFFFFFFFF, 0x7F445566, 0xFE010203},
+		};
+		final GraphicsTexture canvas = new GraphicsTexture(3, 2);
+		try (NativeImage nativeImage = new NativeImage(3, 2, false)) {
+			for (int y = 0; y < pixels.length; y++) {
+				for (int x = 0; x < pixels[y].length; x++) {
+					canvas.bufferedImage.setRGB(x, y, pixels[y][x]);
+				}
+			}
+			canvas.copyPixelsTo(nativeImage);
+			boolean same = true;
+			for (int y = 0; y < pixels.length; y++) {
+				for (int x = 0; x < pixels[y].length; x++) {
+					final int expected = GraphicsTexture.abgr(pixels[y][x]);
+					final int actual = nativeImage.getPixelRGBA(x, y);
+					if (actual != expected) {
+						same = false;
+						System.out.printf("FAIL copy at (%d,%d): expected %08X, got %08X%n",
+								x, y, expected, actual);
+					}
+				}
+			}
+			expect(same, "copyPixelsTo() writes every pixel as the ABGR bytes the GPU samples");
+			expect(nativeImage.getPixelRGBA(0, 0) == 0xFF332211,
+					"red/blue swap survives the batch path: FF112233 -> "
+							+ String.format("%08X", nativeImage.getPixelRGBA(0, 0)));
+		} finally {
+			canvas.close();
+		}
 	}
 
 	/** The ARGB copy a pack image goes through before it is drawn onto a canvas. */

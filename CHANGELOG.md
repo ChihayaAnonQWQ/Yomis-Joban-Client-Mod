@@ -3,6 +3,61 @@
 ## Compatible MTR Version
 MTR
 
+## A canvas upload copies its pixels in one batch, and a switch says how often it really happens
+
+HKR Split-Flap Display's `next_train.js` paints a 1088x608 `GraphicsTexture` with Java2D and uploads
+it whenever its own signature changes — about ten times a second, because the terminus LED's phase is
+quantised into ten steps. Each upload used to run 661,504 `BufferedImage.getRGB` → ABGR → `setPixelRGBA`
+round trips. On a two-block PIDS that is twice the work, and on a platform with several panels it is
+render-thread time every ~110 ms.
+
+The copy now reads the canvas's own `TYPE_INT_ARGB` raster (a `DataBufferInt`) once and writes the
+`NativeImage` in a single pass, keeping the exact same ABGR bytes. Measured here on a 1088x608 canvas,
+40 warm-up rounds and 60 timed rounds, byte-identical output verified pixel by pixel:
+
+| Upload copy | Median | Per 10-panel wave |
+|---|---|---|
+| old, per-pixel `getRGB` + `abgr` + `setPixelRGBA` | 1.64 ms | ~16.4 ms |
+| new, batch `DataBufferInt` + `setPixelRGBA` | 0.37 ms | ~3.7 ms |
+
+The reference implementation is **not** faster here: `javap` of JCM 2.x's
+`GraphicsTexture.upload()` shows the identical per-pixel loop and no dirty check. What v2 does
+differently is run the whole script (and therefore the AWT paint and the copy) on a script thread
+(`ScriptManager.scriptThread` / `ParsedScript.invokeRenderFunction`) and only draw the previous
+frame's `drawCalls` on the render thread; this port still executes the preset inline on the render
+thread. So this change removes the measured 1.26 ms per upload from that path, but the ~5 ms AWT
+redraw itself is untouched and is the reason a wall of panels still costs more here than on v2. The
+full numbers, the `javap` evidence and the remaining work are in
+[`MTR3-PIDS-PORT.md`](MTR3-PIDS-PORT.md) §4.21.
+
+A default-off diagnostic makes the question answerable in game:
+
+```
+-Djsblock.pids.canvasStats=true
+```
+
+Once a second, per canvas:
+
+```
+[Joban Client] PIDS canvas stats jsblock:dynamic/graphics/<uuid> (1088x608) over 1003 ms:
+upload() calls 10, pixel copies 10, copy avg 0.382 ms (max 0.501), GL upload avg 0.214 ms, script redraws 10.
+```
+
+`upload() calls` near ten a second is HKR's normal LED cadence; near sixty means the preset is
+redrawing every frame. `pixel copies` lower than `upload() calls` means the upload was queued to
+another thread. The one-time line
+`PIDS script canvas 1088x608 uploaded as texture jsblock:dynamic/graphics/<uuid>.` is unchanged.
+
+The headless checks now time the render loop as well: `ScriptApiCheck` prints how many of its
+iterations redrew the canvas and what a redrawing frame cost against one that only re-submitted its
+draw calls (`--frame-ms=16` paces the loop like a 60 fps client so time-driven redraws are observed).
+On `next_train.js` over 120 paced frames: 21 redraws (0.18/frame, ~9.6/s), 5.13 ms on a redrawing
+frame against 0.52 ms otherwise. `ScriptCanvasCheck` gained a real `NativeImage` round trip that asserts
+the batch path's byte order.
+
+`tools/run-pids-check.ps1` is still `RESULT: ALL CHECKS PASSED`; HKR's `next_train.js` is still
+`RESULT: SCRIPT OK` at 0/1/2/4 arrivals; the eleven-pack regression is unchanged at **108/112**.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.5
 
 ## Compatible MTR Version

@@ -49,17 +49,24 @@ public final class ScriptApiCheck {
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 1) {
-			System.out.println("usage: ScriptApiCheck <script.js> [resourceRoot ...] [--arrivals=N] [--iterations=N]");
+			System.out.println("usage: ScriptApiCheck <script.js> [resourceRoot ...] [--arrivals=N] [--iterations=N]"
+					+ " [--frame-ms=N]");
 			System.exit(2);
 		}
 		String scriptArg = null;
 		int arrivalCount = 2;
 		int iterations = 1;
+		int frameMs = 0;
 		for (String arg : args) {
 			if (arg.startsWith("--arrivals=")) {
 				arrivalCount = Integer.parseInt(arg.substring("--arrivals=".length()));
 			} else if (arg.startsWith("--iterations=")) {
 				iterations = Integer.parseInt(arg.substring("--iterations=".length()));
+			} else if (arg.startsWith("--frame-ms=")) {
+				/* Paces the render loop like a real client so time-driven redraws (HKR's LED
+				   breathing quantises its phase to wall-clock steps) are observed. Diagnostic only:
+				   the default runs the loop as fast as it can. */
+				frameMs = Integer.parseInt(arg.substring("--frame-ms=".length()));
 			} else if (scriptArg == null) {
 				scriptArg = arg;
 			} else {
@@ -73,7 +80,8 @@ public final class ScriptApiCheck {
 		}
 
 		System.out.println("== script: " + script);
-		System.out.println("   arrivals simulated: " + arrivalCount + ", render iterations: " + iterations);
+		System.out.println("   arrivals simulated: " + arrivalCount + ", render iterations: " + iterations
+				+ (frameMs > 0 ? ", paced at " + frameMs + " ms/frame" : ""));
 		System.out.println("   resource roots: " + RESOURCE_ROOTS);
 
 		final Context cx = Context.enter();
@@ -108,12 +116,47 @@ public final class ScriptApiCheck {
 			failures += checkLenientRetryRenders(cx, scope, state, pids);
 
 			// render(ctx, state, pids) with a recording context, repeated to catch state drift.
+			//
+			// Timed as well as checked: a preset is executed once per panel per frame on the
+			// render thread, so how often it redraws its GraphicsTexture (and what a redraw
+			// costs against a frame that only re-submits draw calls) is the number that decides
+			// whether a "this PIDS drops frames" report is the canvas upload or the script
+			// itself. The canvas counts its upload() calls -- next_train.js calls it exactly once
+			// per redraw -- which is how redrawing iterations are told apart from the rest.
 			List<String> recorded = Collections.emptyList();
+			com.jsblock.script.GraphicsTexture.resetUploadCalls();
+			final long renderStart = System.nanoTime();
+			long frameSumNanos = 0L;
+			long redrawNanos = 0L;
+			int redrawFrames = 0;
 			for (int i = 0; i < iterations; i++) {
+				if (frameMs > 0) {
+					Thread.sleep(frameMs);
+				}
+				final long before = com.jsblock.script.GraphicsTexture.uploadCalls();
+				final long frameStart = System.nanoTime();
 				final ScriptRenderContext ctx = ScriptRenderContext.dryRun(pids.width, pids.height, 1F);
 				failures += callRender(cx, scope, state, pids, ctx, i);
+				final long frameNanos = System.nanoTime() - frameStart;
+				frameSumNanos += frameNanos;
+				if (com.jsblock.script.GraphicsTexture.uploadCalls() > before) {
+					redrawFrames++;
+					redrawNanos += frameNanos;
+				}
 				recorded = ctx.recordedCalls();
 			}
+			final long renderNanos = System.nanoTime() - renderStart;
+			System.out.printf(java.util.Locale.ROOT,
+					"     %d render() iterations in %.0f ms (%.2f ms/frame; render calls %.2f ms/frame);"
+							+ " canvas upload() calls: %d (redraws, %.2f/frame); redrawing frames avg %.2f ms"
+							+ " vs %.2f ms otherwise%n",
+					iterations, renderNanos / 1e6, renderNanos / 1e6 / iterations,
+					frameSumNanos / 1e6 / iterations,
+					com.jsblock.script.GraphicsTexture.uploadCalls(),
+					iterations == 0 ? 0.0 : com.jsblock.script.GraphicsTexture.uploadCalls() / (double) iterations,
+					redrawFrames == 0 ? 0.0 : redrawNanos / 1e6 / redrawFrames,
+					iterations - redrawFrames == 0 ? 0.0
+							: (frameSumNanos - redrawNanos) / 1e6 / (iterations - redrawFrames));
 			System.out.println("     draw calls recorded: " + recorded.size());
 			for (String call : recorded) {
 				System.out.println("       " + call);

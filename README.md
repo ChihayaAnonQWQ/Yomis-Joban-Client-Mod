@@ -186,7 +186,7 @@ Full write-up, in Chinese, with the decompiled evidence and the in-game logs:
 | 1A PIDS presets | `jsblock:pids_1a` gets the preset storage, auto-switch and config screen the LCD/RV PIDS already had |
 | Textures | JCM 2.x's PIDS artwork (`weather_*`, `plat_circle`, `rv_default`, `black`) |
 | Checks | `tools/run-pids-check.ps1` — three headless checks that run real presets through the real engine |
-| Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text |
+| Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text; `-Djsblock.pids.canvasStats=true` logs, once a second per `GraphicsTexture`, how often the script uploaded it, how often pixels were really copied, and the copy/GL timings |
 | Docs | `MTR3-PIDS-PORT.md` |
 | PIDS Projector | `jsblock:pids_projector` — JCM 2.x's projector: the panel hangs in the air, with its own format, offset, rotation, scale, per-row text and hide-platform switch |
 

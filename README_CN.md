@@ -175,7 +175,7 @@ MTR 3 上，本 fork 就是还在继续做 PIDS 的那条线。
 | 1A PIDS 预设 | `jsblock:pids_1a` 拿到了 LCD / RV PIDS 早就有的预设存储、自动切换和配置界面 |
 | 贴图 | JCM 2.x 的 PIDS 素材（`weather_*`、`plat_circle`、`rv_default`、`black`） |
 | 检查程序 | `tools/run-pids-check.ps1` —— 三个无头检查，用真实引擎跑真实预设 |
-| 诊断 | `-Djsblock.pids.trace=true` 记录预设发出的每一次绘制调用（类型、深度、颜色、文字） |
+| 诊断 | `-Djsblock.pids.trace=true` 记录预设发出的每一次绘制调用（类型、深度、颜色、文字）；`-Djsblock.pids.canvasStats=true` 每秒为每张 `GraphicsTexture` 打一行：脚本请求上传几次、真正拷贝像素几次、拷贝与 GL 上传各多少毫秒 |
 | 文档 | `MTR3-PIDS-PORT.md` |
 | PIDS 投影仪 | `jsblock:pids_projector` —— JCM 2.x 的投影仪：面板悬在空中，自带显示格式、偏移、旋转、缩放、逐行信息与隐藏月台号 |
 
