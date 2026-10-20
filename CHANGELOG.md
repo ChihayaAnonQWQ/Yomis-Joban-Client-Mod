@@ -1,4 +1,4 @@
-# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.8
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.9
 
 ## Compatible MTR Version
 MTR
