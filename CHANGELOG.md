@@ -117,6 +117,21 @@ tools\run-pids-check.ps1     → RESULT: ALL CHECKS PASSED   (includes 3 new thu
 
 The GUI itself cannot be checked headlessly; the in-game checklist is in §4.24 and the README.
 
+## QuadDrawCall: the 3D shell JCM 2.x packs draw around a panel
+
+Japanese_PIDS wraps its board in a grey box built from five `QuadDrawCall`s, drawn through
+`ctx.renderManager()`. Neither existed here, and the pack wraps `drawShell` in a `try/catch`, so the
+whole shell was skipped in silence — the panel looked right, just without its casing.
+
+`QuadDrawCall` (`create`/`renderType`/`texture`/`color`/`normal`/`quad`), `ctx.renderManager()` with
+`draw`/`queue` (and `drawModel`/`drawDynamicModel` accepted and ignored), and the `QuadDrawCall`
+global are now implemented, with a `QuadCall` recorded-frame type so the shell also survives the
+async replay. Vertices arrive in blocks, as in JCM 2.x; they are turned by the same half-turn JCM 2.x
+applies before drawing, because this port's script space is y-down and -z-forward while the block
+space those vertices are written in is y-up and +z-forward.
+
+Verified against the real pack: `kamino_jp_pids.js` now emits five `Quad` calls and `RESULT: SCRIPT OK`.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.9
 
 ## Compatible MTR Version

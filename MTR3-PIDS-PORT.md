@@ -2917,3 +2917,23 @@ AmberUI 取自 JCM 2.3 的 MIT 源码（`com.lx862.amberui`，24 个类），改
   预设选择页能点选回填、保存后生效、投影仪 7 个数字框能改
 - AmberUI 是**改编**而非逐字移植：`AnimatedScreen` 的动画、`WidgetHost` 的焦点管理与原版有细微差异，
   滚动惯性也由 `ListViewWidget` 自己的实现决定
+
+### 4.25 QuadDrawCall / ctx.renderManager()：JCM 2.x 包给面板画的 3D 外壳（2.10）
+
+Japanese_PIDS 的 `drawShell()` 用 5 个 `QuadDrawCall` 给面板套一圈灰色外壳（白色内框被灰包住）。
+这两样 API（`QuadDrawCall` 全局、`ctx.renderManager()`）此前都没有实现，而脚本把 `drawShell` 包在
+`try/catch` 里 —— 于是整层外壳被**静默跳过**，面板本身看起来正常，只是没有壳。
+
+现在补上：
+
+| API | 行为 |
+|---|---|
+| `QuadDrawCall.create()` / `.renderType()` / `.texture()` / `.color()` / `.normal()` / `.quad(V×4)` | 一个 3D 四边形，顶点以**方块**为单位 |
+| `ctx.renderManager()` | 返回 `ScriptRenderManager`，`draw()`/`queue()` 立即绘制；`drawModel()`/`drawDynamicModel()` 接受但忽略 |
+| 重放 | 新增 `QuadCall` 录制类型，异步模式也会重放外壳 |
+
+**空间转换**：脚本空间是 y 向下、-z 朝外；而四边形的顶点写的是方块空间（y 向上、+z 朝外）。
+JCM 2.x 在绘制前做了 `rotateXDegrees(-180)`，我们做同一件事（y、z 取反），再按 96 倍换到脚本单位。
+没有这一步，外壳会翻到面板另一侧，表现为几块黑平面横插出去。
+
+验证：`kamino_jp_pids.js` 无头运行输出 5 条 `Quad(...)` 并 `RESULT: SCRIPT OK`；实机白色内框+灰色外壳正常。

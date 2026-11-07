@@ -8,6 +8,9 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.Direction;
+import mtr.data.IGui;
+import mtr.render.MoreRenderLayers;
+import org.joml.Matrix4f;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -370,6 +373,57 @@ public class ScriptRenderContext {
 	 * {@code end} lands in the world no matter which framebuffer was bound beforehand. The uploader
 	 * puts the caller's target back between the two steps, which is the only order that works.</p>
 	 */
+	/**
+	 * Draws one {@code QuadDrawCall}.
+	 *
+	 * <p>The vertices arrive in blocks and the script matrix is in 1/96-block units, so they are
+	 * scaled by 96 here — the same conversion the pack author already did by writing
+	 * {@code -32 / 96} for a 32-unit offset.</p>
+	 */
+	void drawQuad(ScriptQuadDrawCall call, float z) {
+		final RenderType layer = MoreRenderLayers.getLight(call.textureId(), true);
+		final VertexConsumer vertexConsumer = beginQuad(layer);
+		final Matrix4f pose = matrices.last().pose();
+		final int argb = call.color() | 0xFF000000;
+		final float red = ((argb >> 16) & 0xFF) / 255F;
+		final float green = ((argb >> 8) & 0xFF) / 255F;
+		final float blue = (argb & 0xFF) / 255F;
+		final float alpha = ((argb >>> 24) & 0xFF) / 255F;
+		final float nx = call.normal().x();
+		final float ny = call.normal().y();
+		final float nz = call.normal().z();
+		final float[] us = {0F, 1F, 1F, 0F};
+		final float[] vs = {0F, 0F, 1F, 1F};
+
+		for (int i = 0; i < 4; i++) {
+			final ScriptMath.Vector3f vertex = call.vertex(i);
+			/* JCM 2.x runs its quad through rotateXDegrees(-180) before drawing, because the
+			   block-space vertices have y up and +z towards the viewer while this port's script
+			   space has y down and -z towards the viewer. Applying the same half-turn here is what
+			   keeps the shell around the panel instead of mirrored through it. */
+			vertexConsumer.vertex(pose,
+							vertex.x() / ScriptDrawCall.BASE_SCALE,
+							-vertex.y() / ScriptDrawCall.BASE_SCALE,
+							-vertex.z() / ScriptDrawCall.BASE_SCALE + z)
+					.color(red, green, blue, alpha)
+					.uv(us[i], vs[i])
+					.overlayCoords(0)
+					.uv2(IGui.MAX_LIGHT_GLOWING)
+					.normal(nx, ny, nz)
+					.endVertex();
+		}
+
+		endQuad(layer);
+	}
+
+	/** {@code ctx.renderManager()} — the JCM 2.x door to the 3D draw calls. */
+	public ScriptRenderManager renderManager() {
+		if (renderManager == null) {
+			renderManager = new ScriptRenderManager(this);
+		}
+		return renderManager;
+	}
+
 	public void endQuad(RenderType layer) {
 		if (SCRIPT_QUADS == null) {
 			return;
@@ -393,6 +447,7 @@ public class ScriptRenderContext {
 
 	/** Set to draw through an {@link QuadUploader} rather than straight into the world. */
 	private QuadUploader quadUploader = null;
+	private ScriptRenderManager renderManager;
 
 	/** @see QuadUploader */
 	public void setQuadUploader(QuadUploader uploader) {

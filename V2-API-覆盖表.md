@@ -571,3 +571,10 @@ cd ..\..\_v2api
 - §2.1 重点包逐脚本 **15 行**；§2.2 失败归因 **4 行**
 - §3.1 已知缺口 **7 组**；§3.3 未验证清单 **5 条**（2.4）；§3.4 **5 条**（2.5）
 - §4 检查用例 **3 个新增**（`FilesCheck` / `ScriptCaseCheck` / `ScriptImporterCheck`）
+## 2.10 追加
+
+| API | 状态 | 依据 |
+|---|---|---|
+| `QuadDrawCall`（create/renderType/texture/color/normal/quad） | 已实现 | JCM 2.3 `QuadDrawCall.run` 的 `rotateXDegrees(-180)`；顶点为方块单位 |
+| `ctx.renderManager()`（draw/queue/drawModel/drawDynamicModel） | 已实现 | JCM 2.3 `ScriptRenderManager`；模型方法接受并忽略 |
+| `Vector3f` | 已存在 | `ScriptMath.Vector3f`，脚本可用 `new Vector3f(x,y,z)` |

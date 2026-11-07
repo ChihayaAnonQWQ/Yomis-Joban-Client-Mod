@@ -72,6 +72,9 @@ public abstract class RecordedCall {
 		if (call instanceof ScriptDrawCalls.Rectangle) {
 			return new RectangleCall((ScriptDrawCalls.Rectangle) call, z);
 		}
+		if (call instanceof ScriptQuadDrawCall) {
+			return new QuadCall((ScriptQuadDrawCall) call, z);
+		}
 		throw new IllegalArgumentException("Unsupported draw call for recording: " + call.getClass().getName());
 	}
 
@@ -339,6 +342,64 @@ public abstract class RecordedCall {
 		@Override
 		public void replay(ScriptRenderContext ctx) {
 			ctx.replayComponent(component, type, z);
+		}
+	}
+
+	// ==================================================================
+	// QuadDrawCall (the 3D shell JCM 2.x packs draw around a panel)
+	// ==================================================================
+
+	/** A captured {@code QuadDrawCall}. */
+	public static final class QuadCall extends RecordedCall {
+		private final net.minecraft.resources.ResourceLocation texture;
+		private final int color;
+		private final float nx;
+		private final float ny;
+		private final float nz;
+		private final double[][] corners;
+
+		QuadCall(ScriptQuadDrawCall call, float z) {
+			super(z);
+			this.texture = call.textureId();
+			this.color = call.color();
+			this.nx = call.normal().x();
+			this.ny = call.normal().y();
+			this.nz = call.normal().z();
+			this.corners = new double[4][3];
+			for (int i = 0; i < 4; i++) {
+				ScriptMath.Vector3f vertex = call.vertex(i);
+				this.corners[i] = new double[]{vertex.x(), vertex.y(), vertex.z()};
+			}
+		}
+
+		@Override
+		public void replay(ScriptRenderContext ctx) {
+			ScriptQuadDrawCall call = ScriptQuadDrawCall.create()
+					.texture(texture.toString())
+					.color(color)
+					.normal(nx, ny, nz)
+					.quad(new ScriptMath.Vector3f(corners[0][0], corners[0][1], corners[0][2]),
+							new ScriptMath.Vector3f(corners[1][0], corners[1][1], corners[1][2]),
+							new ScriptMath.Vector3f(corners[2][0], corners[2][1], corners[2][2]),
+							new ScriptMath.Vector3f(corners[3][0], corners[3][1], corners[3][2]));
+			ctx.drawQuad(call, z);
+		}
+
+		@Override
+		public String signature() {
+			final StringBuilder builder = new StringBuilder("Quad|").append(texture).append('|')
+					.append(String.format("%08X", color)).append('|')
+					.append(nx).append(',').append(ny).append(',').append(nz);
+			for (double[] corner : corners) {
+				builder.append('|').append(corner[0]).append(',').append(corner[1]).append(',').append(corner[2]);
+			}
+			return builder.toString();
+		}
+
+		@Override
+		public String describe() {
+			return "Quad(texture=" + texture + " color=" + String.format("%08X", color)
+					+ " normal=" + nx + "," + ny + "," + nz + ")";
 		}
 	}
 }

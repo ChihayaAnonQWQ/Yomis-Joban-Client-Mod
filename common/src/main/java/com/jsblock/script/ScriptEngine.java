@@ -485,6 +485,7 @@ public final class ScriptEngine {
 		ScriptableObject.putProperty(scope, "Text", new NativeJavaClass(scope, ScriptDrawCalls.Text.class));
 		ScriptableObject.putProperty(scope, "Texture", new NativeJavaClass(scope, ScriptDrawCalls.Texture.class));
 		ScriptableObject.putProperty(scope, "Rectangle", new NativeJavaClass(scope, ScriptDrawCalls.Rectangle.class));
+		ScriptableObject.putProperty(scope, "QuadDrawCall", new NativeJavaClass(scope, ScriptQuadDrawCall.class));
 		/* A canvas a script draws into at runtime and then uses as a texture. JCM 2.x has it as a
 		   global of the same name and shape; see GraphicsTexture for what this port changed (the GPU
 		   side is built on the first upload, so it is usable with no game running) and why. */
