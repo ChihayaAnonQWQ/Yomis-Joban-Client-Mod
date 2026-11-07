@@ -3,21 +3,14 @@ package com.jsblock.amberui.gui.widget;
 import com.jsblock.amberui.gui.ClipStack;
 import com.jsblock.amberui.gui.GuiHelper;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
- * A vertical list of {@link AbstractListItem}s.
- *
- * <p>Row controls are not drawn by the list. They are real screen children registered by
- * {@code BlockConfigListScreen}, which keeps Minecraft's own focus, keyboard and narration
- * handling intact; the list positions them and sets their visibility from the scroll position.
- * That is the one structural difference from AmberUI's MTR 4 implementation, where the controls
- * lived inside the list's own {@code ClickableWidgetExtension}.</p>
+ * A scrollable list of entries.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.widget.ListViewWidget}.
  */
 public class ListViewWidget extends AbstractScrollViewWidget implements GuiHelper {
 	public static final int ENTRY_PADDING = 5;
@@ -33,14 +26,14 @@ public class ListViewWidget extends AbstractScrollViewWidget implements GuiHelpe
 	public void setXYSize(int x, int y, int width, int height) {
 		setX(x);
 		setY(y);
-		this.width = width;
+		setWidth(width);
 		this.height = height;
 		setScroll(currentScroll);
 		positionWidgets(currentScroll);
 		refreshDisplayedList();
 	}
 
-	public void add(Component text, MappedWidget widget) {
+	public void add(Component text, WidgetHost widget) {
 		add(new ContentItem(text, widget));
 	}
 
@@ -60,70 +53,60 @@ public class ListViewWidget extends AbstractScrollViewWidget implements GuiHelpe
 	}
 
 	public void setSearchTerm(String searchTerm) {
-		this.searchTerm = searchTerm == null ? "" : searchTerm;
+		this.searchTerm = searchTerm;
 		refreshDisplayedList();
-	}
-
-	/** All controls owned by the rows, in display order, ready for {@code addDrawableChild}. */
-	public List<AbstractWidget> getWidgets() {
-		final List<AbstractWidget> widgets = new ArrayList<>();
-		for (final AbstractListItem item : entryList) {
-			if (item instanceof ContentItem) {
-				final MappedWidget widget = ((ContentItem) item).widget;
-				if (widget != null) {
-					widget.collectWidgets(widgets);
-				}
-			}
-		}
-		return widgets;
 	}
 
 	private void refreshDisplayedList() {
 		displayedEntryList.clear();
-		for (final AbstractListItem entry : entryList) {
-			if (entry.matchQuery(searchTerm)) {
-				entry.shown();
-				displayedEntryList.add(entry);
+
+		entryList.forEach(e -> {
+			if(e.matchQuery(searchTerm)) {
+				e.shown();
+				displayedEntryList.add(e);
 			} else {
-				entry.hidden();
+				e.hidden();
 			}
-		}
+		});
+
 		positionWidgets();
+
+		// Update scrolling so that it will rubber-band back if scrolled area are beyond viewport
 		setScroll(currentScroll);
 	}
 
 	@Override
 	public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float tickDelta) {
-		GuiHelper.drawRectangle(guiGraphics, getX(), getY(), width, height, 0x4F4C4C4C);
+		GuiHelper.drawRectangle(guiGraphics, getX(), getY(), getWidth(), getHeight(), 0x4F4C4C4C);
 		super.renderWidget(guiGraphics, mouseX, mouseY, tickDelta);
 	}
 
 	@Override
 	public void renderContent(GuiGraphics guiGraphics, int mouseX, int mouseY, float tickDelta) {
-		elapsed += tickDelta / 20.0;
+		elapsed += (tickDelta / 20);
 
 		int incY = 0;
-		for (final AbstractListItem item : displayedEntryList) {
-			ClipStack.ensureStateCorrect(guiGraphics);
 
+		for(AbstractListItem abstractListItem : displayedEntryList) {
+			ClipStack.ensureStateCorrect();
 			final int entryX = getX();
 			final int entryY = getY() + incY - (int) currentScroll;
-			final int rowHeight = item.getHeight();
-			final boolean rowInSight = entryY + rowHeight > getY() && entryY < getY() + getHeight();
-
 			boolean widgetVisible = false;
-			if (item instanceof ContentItem) {
-				final ContentItem contentItem = (ContentItem) item;
-				if (contentItem.widget != null) {
-					widgetVisible = contentItem.widget.getY() >= getY()
-							&& contentItem.widget.getY() + contentItem.widget.getHeight() <= getY() + getHeight();
-					contentItem.widget.setVisible(widgetVisible);
+			final boolean rowInSight = inRectangle(entryX, entryY, getX(), getY(), getWidth(), getHeight()) || inRectangle(entryX, entryY + abstractListItem.getHeight(), getX(), getY(), getWidth(), getHeight());
+
+			if(abstractListItem instanceof ContentItem) {
+				final ContentItem contentItem = (ContentItem) abstractListItem;
+
+				if(contentItem.widget != null) {
+					final boolean topLeftVisible = inRectangle(contentItem.widget.getX(), contentItem.widget.getY(), getX(), getY(), getWidth(), getHeight());
+					final boolean bottomRightVisible = inRectangle(contentItem.widget.getX() + contentItem.widget.getWidth(), contentItem.widget.getY() + contentItem.widget.getHeight(), getX(), getY(), getWidth(), getHeight());
+					widgetVisible = topLeftVisible && bottomRightVisible;
 				}
 			}
 
-			item.draw(guiGraphics, entryX, entryY, width - getScrollbarOffset(), height,
-					mouseX, mouseY, widgetVisible, rowInSight, elapsed, tickDelta);
-			incY += rowHeight;
+			abstractListItem.draw(guiGraphics, entryX, entryY, getWidth() - getScrollbarOffset(), getHeight(), mouseX, mouseY, widgetVisible, rowInSight, elapsed, tickDelta);
+
+			incY += abstractListItem.getHeight();
 		}
 	}
 
@@ -136,9 +119,11 @@ public class ListViewWidget extends AbstractScrollViewWidget implements GuiHelpe
 	@Override
 	protected int getContentHeight() {
 		int entryHeight = 0;
-		for (final AbstractListItem entry : displayedEntryList) {
+
+		for(AbstractListItem entry : displayedEntryList) {
 			entryHeight += entry.getHeight();
 		}
+
 		return entryHeight;
 	}
 
@@ -151,16 +136,12 @@ public class ListViewWidget extends AbstractScrollViewWidget implements GuiHelpe
 		final int startY = getY();
 
 		int incY = 0;
-		for (final AbstractListItem listItem : displayedEntryList) {
+
+		for(AbstractListItem listItem : displayedEntryList) {
 			final int entryY = startY + incY;
-			final int x = (startX + width - getScrollbarOffset()) - ENTRY_PADDING;
+			final int x = (startX + getWidth() - getScrollbarOffset()) - ENTRY_PADDING;
 			listItem.positionChanged(x, (int) -scroll + entryY);
 			incY += listItem.getHeight();
 		}
-	}
-
-	/** Exposed for screens that want to lay out rows against the same width the list uses. */
-	public List<AbstractListItem> getEntries() {
-		return Collections.unmodifiableList(entryList);
 	}
 }

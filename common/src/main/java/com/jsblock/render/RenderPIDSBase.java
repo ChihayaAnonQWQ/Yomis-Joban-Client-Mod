@@ -82,6 +82,14 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
         final String presetID = ((JobanPIDSBase.TileEntityBlockJobanPIDS)entity).getPresetID();
         PIDSPreset preset = JobanCustomResources.PIDSPresets.getOrDefault(presetID, null);
 
+        /* A freshly placed 1A board had no preset, so it fell back to the Railway Vision layout --
+           the wrong artwork on the wrong block, and the reason the README used to tell players to
+           pick a preset by hand. The 1A board's own preset is the sensible default; an explicit
+           choice on the block still wins. */
+        if (preset == null && entity instanceof com.jsblock.block.PIDS1A.TileEntityBlockPIDS1A) {
+            preset = JobanCustomResources.PIDSPresets.get("pids_1a");
+        }
+
         /* Auto-switch presets based on train arrival/departure time */
         final JobanPIDSBase.TileEntityBlockJobanPIDS jobanEntity = (JobanPIDSBase.TileEntityBlockJobanPIDS) entity;
         if (jobanEntity.getDepAutoSwitchEnabled() || jobanEntity.getAutoSwitchEnabled()) {
@@ -586,6 +594,15 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
     protected void renderScripted(T entity, Level world, PIDSPreset preset, String[] customMessages,
                                   boolean[] hideArrivals, List<Long> platformIds, boolean hidePlatforms, float delta,
                                   PoseStack matrices, MultiBufferSource vertexConsumers) {
+        /* The settings screen can switch scripting off entirely (JCM 2.3's "disable scripting").
+           Draw the preset's own background so the panel still looks like a panel, and say why once,
+           rather than running a preset the player asked not to run. */
+        if (ClientConfig.getSkipScriptParsing()) {
+            reportPanelOnce(entity.getBlockPos(), "scripting is disabled in the client settings: preset=" + preset.id);
+            drawPresetBackground(preset, getLayoutGeometry(), IBlock.getStatePropertySafe(world, entity.getBlockPos(), HorizontalDirectionalBlock.FACING), matrices, vertexConsumers);
+            return;
+        }
+
         final PIDSGeometry geometry = getLayoutGeometry();
         if (geometry == null) {
             return;

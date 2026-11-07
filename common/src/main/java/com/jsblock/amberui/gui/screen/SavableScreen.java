@@ -1,52 +1,52 @@
 package com.jsblock.amberui.gui.screen;
 
 import com.jsblock.amberui.gui.GuiHelper;
-import mtr.client.IDrawing;
+import com.jsblock.amberui.gui.widget.WidgetSet;
 import mtr.mappings.Text;
-import mtr.mappings.UtilitiesClient;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.network.chat.Component;
 
 /**
- * A titled screen with a Save / Cancel row along the bottom.
- *
- * <p>AmberUI saved on every close unless the Discard button had been pressed. That behaviour is
- * preserved: closing with Escape saves, which is what every other configuration screen in this
- * mod does. The button captions use this mod's own {@code gui.jsblock.*} keys rather than JCM's
- * {@code block_config.*} namespace.</p>
+ * A screen with a save/discard bottom row.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.screen.SavableScreen}.
  */
 public abstract class SavableScreen extends TitledScreen implements GuiHelper {
 	protected Button saveButton;
 	protected Button discardButton;
 	protected boolean discardConfig = false;
 
-	protected SavableScreen(boolean animatable) {
-		super(animatable);
+	public SavableScreen(Component title, boolean animatable) {
+		super(title, animatable);
 	}
 
 	protected void addBottomRowEntry(int x, int y, int width, int height) {
-		final int buttonHeight = 20;
-		final int buttonWidth = Math.max(40, (width - 6) / 2);
+		final WidgetSet bottomEntryWidget = new WidgetSet(20);
 
-		saveButton = UtilitiesClient.newButton(Text.translatable("gui.jsblock.save"), button -> onClose());
-		discardButton = UtilitiesClient.newButton(Text.translatable("gui.jsblock.cancel"), button -> {
+		this.saveButton = Button.builder(Text.translatable("gui.jsblock.block_config.save"), btn -> onClose2()).bounds(0, 0, 0, 20).build();
+		this.discardButton = Button.builder(Text.translatable("gui.jsblock.block_config.discard"), btn -> {
 			discardConfig = true;
-			onClose();
-		});
+			onClose2();
+		}).bounds(0, 0, 0, 20).build();
 
-		IDrawing.setPositionAndWidth(saveButton, x, y, buttonWidth);
-		IDrawing.setPositionAndWidth(discardButton, x + width - buttonWidth, y, buttonWidth);
-		addDrawableChild(saveButton);
-		addDrawableChild(discardButton);
+		addWidget(saveButton);
+		addWidget(discardButton);
+		addRenderableWidget(bottomEntryWidget);
+
+		bottomEntryWidget.addWidget(saveButton);
+		bottomEntryWidget.addWidget(discardButton);
+		bottomEntryWidget.setXYSize(x, y, width, height);
 	}
 
 	@Override
-	public void onClose() {
-		if (!discardConfig) {
+	public void onClose2() {
+		// Save config by default, unless explicitly requested not to
+		if(!discardConfig) {
 			onSave();
 		} else {
 			onDiscard();
 		}
-		super.onClose();
+
+		super.onClose2();
 	}
 
 	protected abstract void onSave();

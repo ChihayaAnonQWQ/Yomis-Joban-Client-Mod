@@ -33,6 +33,12 @@ public class ClientConfig {
     private static boolean scriptDebugMode = false;
     /** Whether to let PIDS scripts reach arbitrary Java classes. See {@code ScriptClassShutter}. */
     private static boolean scriptRestrictionsDisabled = false;
+    /** JCM 2.3's "disable scripting": parse nothing and run nothing. */
+    private static boolean skipScriptParsing = false;
+    /** JCM 2.3's "show log source": whether script log lines carry their source file. */
+    private static boolean scriptShowLogSource = false;
+    /** Whether PIDS blocks open the pre-AmberUI config screens. */
+    private static boolean legacyConfigUi = false;
 
     /**
      * Pixel scale per preset id, for the whole-screen pixelation feature.
@@ -83,6 +89,18 @@ public class ClientConfig {
     /**
      * This loads the config file and sets the variable internally
      */
+    /** Restores the shipped defaults, the way JCM 2.3's config screen's Reset button does. */
+    public static void loadDefaults() {
+        renderDisabled = false;
+        bypassServerVersionCheck = false;
+        debugMode = false;
+        scriptErrorNotifications = true;
+        scriptDebugMode = false;
+        scriptRestrictionsDisabled = false;
+        skipScriptParsing = false;
+        scriptShowLogSource = false;
+    }
+
     public static void loadConfig() {
         if (!Files.exists(Paths.get(CONFIG_PATH))) {
             Joban.LOGGER.warn("[Joban Client] Config file not found, generating one...");
@@ -120,6 +138,15 @@ public class ClientConfig {
                 scriptDebugMode = jsonConfig.get("scriptDebugMode").getAsBoolean();
             }
 
+            if(jsonConfig.has("skipScriptParsing")) {
+                skipScriptParsing = jsonConfig.get("skipScriptParsing").getAsBoolean();
+            }
+            if(jsonConfig.has("legacyConfigUi")) {
+                legacyConfigUi = jsonConfig.get("legacyConfigUi").getAsBoolean();
+            }
+            if(jsonConfig.has("scriptShowLogSource")) {
+                scriptShowLogSource = jsonConfig.get("scriptShowLogSource").getAsBoolean();
+            }
             if(jsonConfig.has("scriptRestrictionsDisabled")) {
                 scriptRestrictionsDisabled = jsonConfig.get("scriptRestrictionsDisabled").getAsBoolean();
             }
@@ -205,6 +232,9 @@ public class ClientConfig {
         jsonConfig.addProperty("scriptErrorNotifications", scriptErrorNotifications);
         jsonConfig.addProperty("scriptDebugMode", scriptDebugMode);
         jsonConfig.addProperty("scriptRestrictionsDisabled", scriptRestrictionsDisabled);
+        jsonConfig.addProperty("skipScriptParsing", skipScriptParsing);
+        jsonConfig.addProperty("scriptShowLogSource", scriptShowLogSource);
+        jsonConfig.addProperty("legacyConfigUi", legacyConfigUi);
 
         if (!pixelScaleByPreset.isEmpty()) {
             final JsonObject pixelScales = new JsonObject();
@@ -306,6 +336,42 @@ public class ClientConfig {
      * @return whether PIDS scripts may reach arbitrary Java classes. When {@code true} the
      * class shutter is off, exactly as JCM 2.x behaves once the player accepts the warning.
      */
+    /** @return whether PIDS blocks open the pre-AmberUI config screens */
+    public static boolean isLegacyConfigUi() {
+        return legacyConfigUi;
+    }
+
+    public static void setLegacyConfigUi(boolean legacy) {
+        legacyConfigUi = legacy;
+    }
+
+    /** @return whether PIDS scripts are disabled entirely (JCM 2.3's "disable scripting") */
+    public static boolean getSkipScriptParsing() {
+        return skipScriptParsing;
+    }
+
+    public static void setSkipScriptParsing(boolean skip) {
+        skipScriptParsing = skip;
+    }
+
+    /** @return whether PIDS scripts may use arbitrary Java classes (inverse of the restriction flag) */
+    public static boolean getDisableScriptRestrictions() {
+        return scriptRestrictionsDisabled;
+    }
+
+    public static void setDisableScriptRestrictions(boolean disabled) {
+        scriptRestrictionsDisabled = disabled;
+    }
+
+    /** @return whether script log lines carry their source file */
+    public static boolean getScriptShowLogSource() {
+        return scriptShowLogSource;
+    }
+
+    public static void setScriptShowLogSource(boolean enabled) {
+        scriptShowLogSource = enabled;
+    }
+
     public static boolean getScriptRestrictionsDisabled() {
         return scriptRestrictionsDisabled;
     }

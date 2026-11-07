@@ -1,71 +1,106 @@
 package com.jsblock.amberui.gui;
 
-import net.minecraft.client.gui.GuiGraphics;
+import com.mojang.blaze3d.systems.RenderSystem;
+import net.minecraft.client.Minecraft;
 
-import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Keeps track of nested GUI scissors.
- *
- * <p>Use {@link #push} to start clipping, {@link #add} to clip inside the current rectangle, and
- * {@link #pop} when done. {@link GuiGraphics} owns the actual scissor stack: {@code enableScissor}
- * pushes and {@code disableScissor} pops back to the previous rectangle, so the two must stay
- * balanced. This class mirrors that stack only to clamp {@link #add} and to let a screen drop a
- * stale stack on {@code init}.</p>
- *
- * <p>MTR 4's original drove {@code RenderSystem} directly and re-applied the previous rectangle on
- * every pop; doing that with {@code GuiGraphics} would push an extra entry each time instead of
- * restoring one. The implementation is therefore simpler here, not more complex.</p>
+ * Keeps track of applied OpenGL scissors, this should be the primary way to apply clipping to the GUI.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.ClipStack}.
  */
 public class ClipStack {
-	private static final List<Rectangle> STACKS = new ArrayList<>();
+	private static final List<Rect> stacks = new ArrayList<>();
 
-	private ClipStack() {
-	}
-
-	/** Clears the Java-side mirror. The {@link GuiGraphics} stack is per-frame, so this is only
-	 *  for a screen that is being rebuilt. */
-	public static void reset() {
-		STACKS.clear();
-	}
-
-	public static void push(GuiGraphics guiGraphics, int x, int y, int width, int height) {
-		STACKS.add(new Rectangle(x, y, width, height));
-		guiGraphics.enableScissor(x, y, x + Math.max(0, width), y + Math.max(0, height));
+	/**
+	 * Push and apply a new clipping area.<br>
+	 * GUI scaling is already taken account for, there is no need to multiply the scale by yourself.
+	 */
+	public static void push(int x, int y, int width, int height) {
+		stacks.add(new Rect(x, y, width, height));
+		enableClip(x, y, width, height);
 	}
 
 	/**
-	 * Pushes a clip area clamped inside the previous one. If nothing is on the stack this behaves
-	 * like {@link #push}.
+	 * Push and apply a new clipping area.
+	 * The clipping area will be clamped <i>within</i> the previous clipped stack.
 	 */
-	public static void add(GuiGraphics guiGraphics, int x, int y, int width, int height) {
-		if (STACKS.isEmpty()) {
-			push(guiGraphics, x, y, width, height);
+	public static void add(int x, int y, int width, int height) {
+		if(stacks.isEmpty()) {
+			push(x, y, width, height);
 			return;
 		}
 
-		final Rectangle old = STACKS.get(STACKS.size() - 1);
-		final int clampedX = Math.max(old.x, x);
-		final int clampedY = Math.max(old.y, y);
-		final int oldEndX = old.x + old.width;
-		final int oldEndY = old.y + old.height;
-		final int clampedWidth = Math.max(0, Math.min(width, oldEndX - clampedX));
-		final int clampedHeight = Math.max(0, oldEndY - clampedY);
-		push(guiGraphics, clampedX, clampedY, clampedWidth, clampedHeight);
+		final Rect oldStack = stacks.get(stacks.size() - 1);
+		final int clampedX = Math.max(oldStack.x, x);
+		final int clampedY = Math.max(oldStack.y, y);
+		final int oldEndY = oldStack.y + oldStack.height;
+		final int clampedHeight = oldEndY - clampedY;
+		final Rect rect = new Rect(clampedX, clampedY, width, clampedHeight);
+		stacks.add(rect);
+		enableClip(rect.x, rect.y, rect.width, rect.height);
 	}
 
-	public static void pop(GuiGraphics guiGraphics) {
-		if (STACKS.isEmpty()) {
-			return;
+	public static void pop() {
+		if(stacks.isEmpty()) return;
+
+		stacks.remove(stacks.size() - 1);
+		if(stacks.isEmpty()) {
+			disableClip();
+		} else {
+			final Rect remainingLast = stacks.get(stacks.size() - 1);
+			enableClip(remainingLast.x, remainingLast.y, remainingLast.width, remainingLast.height);
 		}
-		STACKS.remove(STACKS.size() - 1);
-		guiGraphics.disableScissor();
 	}
 
-	/** Kept for source compatibility with the MTR 4 port; {@link GuiGraphics} already restores
-	 *  the previous rectangle on {@code disableScissor}, so there is nothing to repair. */
-	public static void ensureStateCorrect(GuiGraphics guiGraphics) {
+	/**
+	 * Ensure the clip is applied appropriately (in case something else changed the GL state).
+	 */
+	public static void ensureStateCorrect() {
+		if(stacks.isEmpty()) {
+			disableClip();
+		} else {
+			final Rect latestStack = stacks.get(stacks.size() - 1);
+			enableClip(latestStack.x, latestStack.y, latestStack.width, latestStack.height);
+		}
+	}
+
+	/**
+	 * Drop every clip that may have been left over from the previous frame.
+	 */
+	public static void reset() {
+		stacks.clear();
+		disableClip();
+	}
+
+	private static void enableClip(int x, int y, int width, int height) {
+		final Minecraft minecraft = Minecraft.getInstance();
+		final double scale = minecraft.getWindow().getGuiScale();
+		final int windowHeight = minecraft.getWindow().getHeight();
+		RenderSystem.enableScissor(
+				(int) (x * scale),
+				(int) (windowHeight - (y + height) * scale),
+				Math.max(0, (int) (width * scale)),
+				Math.max(0, (int) (height * scale))
+		);
+	}
+
+	private static void disableClip() {
+		RenderSystem.disableScissor();
+	}
+
+	private static class Rect {
+		private final int x;
+		private final int y;
+		private final int width;
+		private final int height;
+
+		private Rect(int x, int y, int width, int height) {
+			this.x = x;
+			this.y = y;
+			this.width = width;
+			this.height = height;
+		}
 	}
 }

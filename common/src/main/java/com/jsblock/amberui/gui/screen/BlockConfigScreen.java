@@ -10,40 +10,39 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
 /**
- * Base for a block's configuration screen: it knows which block is being configured and draws
- * that block's position (and station, when it is inside one) as the subtitle.
+ * GUI Screen for configuring block settings, you should extend this class for your own block config screen.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.screen.BlockConfigScreen}.
  */
 public abstract class BlockConfigScreen extends SavableScreen implements GuiHelper {
 	protected final BlockPos blockPos;
-	private Component cachedSubtitle;
 
-	protected BlockConfigScreen(BlockPos blockPos) {
-		super(false);
+	public BlockConfigScreen(BlockPos blockPos) {
+		super(Component.empty(), false);
 		this.blockPos = blockPos;
 	}
 
 	protected int getContentWidth() {
-		return (int) Math.min(width * 0.75, MAX_CONTENT_WIDTH);
+		return (int) Math.min((width * 0.75), MAX_CONTENT_WIDTH);
 	}
 
 	@Override
 	public Component getScreenSubtitle() {
-		/* The title is drawn every frame; looking the station up every frame would walk MTR's
-		   station set for a value that cannot change while the screen is open. */
-		if (cachedSubtitle != null) {
-			return cachedSubtitle;
-		}
+		final Station atStation = RailwayData.getStation(ClientData.STATIONS, ClientData.DATA_CACHE, blockPos);
 
-		final Station station = RailwayData.getStation(ClientData.STATIONS, ClientData.DATA_CACHE, blockPos);
-
-		if (station != null) {
-			cachedSubtitle = Text.translatable("gui.jsblock.block_config.subtitle_with_station",
+		/* A station whose name has not been synced yet must not take the whole screen down: the
+		   subtitle is rendered through a translatable whose argument would be null, and that throws
+		   inside vanilla's TranslatableContents rather than at this call site. Fall back to the
+		   position-only subtitle when there is no name to show. */
+		final String stationName = atStation == null ? null : atStation.name;
+		if(atStation != null && stationName != null && !stationName.isEmpty()) {
+			return Text.translatable("gui.jsblock.block_config.subtitle_with_station",
 					blockPos.getX(), blockPos.getY(), blockPos.getZ(),
-					IGui.formatStationName(station.name));
+					IGui.formatStationName(stationName)
+			);
 		} else {
-			cachedSubtitle = Text.translatable("gui.jsblock.block_config.subtitle",
-					blockPos.getX(), blockPos.getY(), blockPos.getZ());
+			return Text.translatable("gui.jsblock.block_config.subtitle",
+					blockPos.getX(), blockPos.getY(), blockPos.getZ()
+			);
 		}
-		return cachedSubtitle;
 	}
 }

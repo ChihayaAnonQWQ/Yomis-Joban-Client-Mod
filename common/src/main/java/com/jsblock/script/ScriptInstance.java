@@ -88,7 +88,15 @@ public final class ScriptInstance {
 	}
 
 	private final ScriptEngine.Program program;
-	private final Map<Long, Half> halves = new ConcurrentHashMap<>();
+	/**
+	 * One recorded frame for the whole panel, shared by both faces.
+	 *
+	 * <p>A two-block PIDS renders the same panel from both halves. When each half kept its own
+	 * list they could sit one frame apart — one face showing the new canvas, the other the
+	 * previous one — and since both are drawn at the same place that reads as flicker. One
+	 * list makes the two faces identical by construction, and halves the script work.</p>
+	 */
+	private final Half half = new Half();
 	/** The last failure, or {@code null} after a successful pass. */
 	private volatile String lastError;
 	/** Wall time of the last completed pass. */
@@ -110,7 +118,7 @@ public final class ScriptInstance {
 	}
 
 	private Half half(BlockPos pos) {
-		return halves.computeIfAbsent(pos.asLong(), ignored -> new Half());
+		return half;
 	}
 
 	/** @return the compiled script this instance owns. */
@@ -231,12 +239,7 @@ public final class ScriptInstance {
 
 	/** @return whether any half has a pass in flight. */
 	public boolean isRunning() {
-		for (Half half : halves.values()) {
-			if (half.running.get()) {
-				return true;
-			}
-		}
-		return false;
+		return half.running.get();
 	}
 
 	/** @return whether any pass has completed without throwing. */
@@ -246,11 +249,7 @@ public final class ScriptInstance {
 
 	/** @return how many times the synchronous first frame has run across every half. */
 	public int firstFrameRuns() {
-		int total = 0;
-		for (Half half : halves.values()) {
-			total += half.firstFrameRuns.get();
-		}
-		return total;
+		return half.firstFrameRuns.get();
 	}
 
 	/** @return how many times the synchronous first frame ran for one half. */

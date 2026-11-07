@@ -1,24 +1,23 @@
 package com.jsblock.amberui.gui.widget;
 
-import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
-import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Holds a set of widgets in one row, tiled horizontally with a fixed margin.
- *
- * <p>Unlike {@link WidgetSet}, the width of each child is not redistributed: the caller (or
- * {@link #computeWidth()}) decides how wide the row is, and children keep their own widths.</p>
+ * Holds a set of widget within a defined area.
+ * Able to tile the widgets horizontally.<br>
+ * Unlike {@link WidgetSet}, this widget does not automatically distribute the widget evenly
+ * and you can control the width of each element.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.widget.HorizontalWidgetSet}.
  */
-public class HorizontalWidgetSet extends AbstractWidget implements WidgetsWrapper {
+public class HorizontalWidgetSet extends WidgetSet {
 	public final int widgetXMargin;
 	private final List<MappedWidget> widgets = new ArrayList<>();
 
 	public HorizontalWidgetSet(int widgetXMargin) {
-		super(0, 0, 0, 20, Component.empty());
+		super(20, widgetXMargin);
 		this.widgetXMargin = widgetXMargin;
 	}
 
@@ -26,66 +25,56 @@ public class HorizontalWidgetSet extends AbstractWidget implements WidgetsWrappe
 		this(5);
 	}
 
-	public void setXYSize(int x, int y, int width, int height) {
-		setX(x);
-		setY(y);
-		this.width = width <= 0 ? computeWidth() : width;
-		this.height = height;
-		positionWidgets();
-	}
-
-	public int computeWidth() {
-		int total = 0;
-		for (final MappedWidget widget : widgets) {
-			total += widget.getWidth() + widgetXMargin;
-		}
-		return total > widgetXMargin ? total - widgetXMargin : total;
-	}
-
+	@Override
 	public void addWidget(MappedWidget widget) {
 		widgets.add(widget);
 	}
 
-	public void positionWidgets() {
+	@Override
+	public void addWidget(AbstractWidget widget) {
+		addWidget(new MappedWidget(widget));
+	}
+
+	@Override
+	public void reset() {
+		widgets.clear();
+	}
+
+	@Override
+	public int getWidth() {
+		int total = 0;
+
+		for(MappedWidget mappedWidget : widgets) {
+			total += mappedWidget.getWidth();
+			total += widgetXMargin;
+		}
+
+		if(total > 1) {
+			total -= widgetXMargin;
+		}
+
+		return total;
+	}
+
+	@Override
+	protected List<MappedWidget> getAllWidgets() {
+		return widgets;
+	}
+
+	@Override
+	protected void positionWidgets() {
 		int accX = 0;
-		for (final MappedWidget widget : widgets) {
+
+		for(MappedWidget widget : widgets) {
 			widget.setX(getX() + accX);
 			widget.setY(getY());
-			final int clampedWidth = Math.min(getWidth() - accX, widget.getWidth());
-			widget.setWidth(Math.max(0, clampedWidth));
-			accX += widget.getWidth() + widgetXMargin;
+			final int clampedWidth = Math.min(getSetWidth() - accX, widget.getWidth());
+			widget.setWidth(clampedWidth);
+			accX += clampedWidth + widgetXMargin;
 		}
 	}
 
-	@Override
-	public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float delta) {
-		for (final MappedWidget widget : widgets) {
-			widget.render(guiGraphics, mouseX, mouseY, delta);
-		}
-	}
-
-	@Override
-	public void setAllX(int newX) {
-		setX(newX);
-		positionWidgets();
-	}
-
-	@Override
-	public void setAllY(int newY) {
-		setY(newY);
-		positionWidgets();
-	}
-
-	@Override
-	public List<AbstractWidget> getChildWidgets() {
-		final List<AbstractWidget> children = new ArrayList<>();
-		for (final MappedWidget widget : widgets) {
-			widget.collectWidgets(children);
-		}
-		return children;
-	}
-
-	@Override
-	protected void updateWidgetNarration(net.minecraft.client.gui.narration.NarrationElementOutput narrationElementOutput) {
+	private int getSetWidth() {
+		return super.getWidth();
 	}
 }

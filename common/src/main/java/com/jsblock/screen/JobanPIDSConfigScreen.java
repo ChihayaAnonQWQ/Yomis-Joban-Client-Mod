@@ -1,61 +1,50 @@
 package com.jsblock.screen;
 
-import com.jsblock.block.JobanPIDSBase;
 import com.jsblock.packet.PacketClient;
-import mtr.mappings.Text;
-import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.entity.BlockEntity;
-
-import java.util.Set;
 
 /**
- * Configuration screen for the 1A / LCD PIDS blocks.
- *
- * <p>All of the layout and behaviour lives in {@link PIDSScreen}; this class only chooses the
- * screen title, reads the block entity when the screen was opened without packet data, and sends
- * the packet this block type expects. The constructor signature is the one
- * {@code PacketClient} has always used.</p>
+ * Config screen of the Joban PIDS blocks (non-Railway-Vision variants).<br>
+ * The entry layout comes from JCM 2.3's {@code PIDSScreen}, the auto-switch categories are
+ * exclusive to this fork.
  */
 public class JobanPIDSConfigScreen extends PIDSScreen {
-	public JobanPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals,
-								 String[] packetMessages, boolean[] packetRowHidden, Set<Long> packetPlatformIds,
-								 String presetID,
+
+	public JobanPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals, String presetID,
 								 boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
 								 boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
-		super(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds,
-				presetID, false, false,
+		super(pos1, pos2, maxArrivals, false, false, presetID == null ? "" : presetID,
 				autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
-				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose,
-				Text.translatable("gui.jsblock.pids_config.title"));
+				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
 	}
 
-	@Override
-	protected void loadBlockEntityFallback() {
-		final Level world = Minecraft.getInstance().level;
-		if (world == null) {
-			return;
-		}
-		final BlockEntity entity = world.getBlockEntity(pos1);
-		if (!(entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS)) {
-			return;
-		}
-
-		final JobanPIDSBase.TileEntityBlockJobanPIDS pids = (JobanPIDSBase.TileEntityBlockJobanPIDS) entity;
-		filterPlatformIds.clear();
-		filterPlatformIds.addAll(pids.getPlatformIds());
-		for (int i = 0; i < maxArrivals; i++) {
-			messages[i] = pids.getMessage(i);
-			hideArrival[i] = pids.getHideArrival(i);
-		}
+	/**
+	 * The overload the server packet uses: it already carries the panel's text, hidden rows and
+	 * platforms, so the screen opens with those rather than reading a possibly stale client copy of
+	 * the block entity.
+	 */
+	public JobanPIDSConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals,
+			String[] messages, boolean[] rowHidden, java.util.Set<Long> platformIds,
+			String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+			boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+		super(pos1, pos2, maxArrivals, false, false, presetID == null ? "" : presetID,
+				messages, rowHidden, platformIds,
+				autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
 	}
 
 	@Override
 	protected void onSave() {
-		captureAll();
-		PacketClient.sendJobanPIDSConfigC2S(pos1, pos2, copyMessages(), copyHiddenRows(), copyPlatformIds(), presetID,
-				autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
-				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
+		PacketClient.sendJobanPIDSConfigC2S(pos1, pos2, collectCustomMessages(), collectRowHidden(), filteredPlatforms,
+				presetId == null ? "" : presetId,
+				isAutoSwitchEnabled(),
+				getAutoSwitchPreset() == null ? "" : getAutoSwitchPreset(),
+				getAutoSwitchCountdown(),
+				getAutoSwitchDuration(),
+				isDepAutoSwitchEnabled(),
+				getDepAutoSwitchPreset() == null ? "" : getDepAutoSwitchPreset(),
+				getDepAutoSwitchCountdown(),
+				getDepAutoSwitchDuration(),
+				isDepAutoSwitchUntilClose());
 	}
 }

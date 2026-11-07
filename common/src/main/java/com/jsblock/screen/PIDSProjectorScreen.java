@@ -1,115 +1,201 @@
 package com.jsblock.screen;
 
-import com.jsblock.amberui.gui.widget.DoubleTextField;
-import com.jsblock.amberui.gui.widget.HorizontalWidgetSet;
 import com.jsblock.amberui.gui.widget.ListViewWidget;
 import com.jsblock.amberui.gui.widget.MappedWidget;
+import com.jsblock.amberui.gui.widget.WidgetSet;
+import com.jsblock.block.PIDSProjector;
 import com.jsblock.packet.PacketClient;
 import mtr.mappings.Text;
+import mtr.screen.WidgetBetterTextField;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
 
 import java.util.Set;
 
 /**
- * Configuration screen for the PIDS projector.
+ * Configuration of the PIDS Projector, on the same AmberUI list as the other PIDS screens.
  *
- * <p>The projector has the same shared half as every other PIDS board -- preset, platform filter,
- * platform-number switch, custom messages and hidden rows -- plus the seven numbers that place
- * the projection in the air: offset x/y/z, rotation x/y/z and scale. Those seven use AmberUI's
- * {@link DoubleTextField}, which accepts decimals and nudges them with the scroll wheel.</p>
+ * <p>A projector has no companion block, so it cannot reuse the two-block PIDS screen; it shares
+ * everything that screen offers that a projector can use -- the preset, the platform filter, the
+ * custom messages and the hidden rows -- and adds its own placement entries (offset, rotation,
+ * scale) above them. Everything is sent to the server when the screen is saved.</p>
  *
- * <p>The custom-message / hidden-row half is wired to the same fields as the other screens; it is
- * not a leftover: a script reads the text back through {@code pids.getCustomMessage(i)} and the
- * rows through {@code pids.isRowHidden(i)}, so a projector that could not be told what to show
- * would only be announcing the timetable.</p>
+ * <p>Unlike the other PIDS screens, typing here moves the real panel on this client as it is typed,
+ * so a placement can be judged before it is saved; discarding puts the panel back.</p>
  */
 public class PIDSProjectorScreen extends PIDSBlockConfigScreen {
+	/** Offset X, offset Y, offset Z, rotation X, rotation Y, rotation Z, scale. */
 	private static final double[] DEFAULTS = {0, 0, 0, 0, 0, 0, 1};
-	private static final int COLUMN_WIDTH = 52;
-	private static final int COLUMN_GAP = 4;
+	/** Wide enough for three values side by side with a little room to type. */
+	private static final int FIELD_SET_WIDTH = 140;
+	private static final int FIELD_MAX_LENGTH = 16;
+	/** The scale is the only field on its row, so it is sized on its own. */
+	private static final int SCALE_INDEX = 6;
+	private static final int SCALE_FIELD_WIDTH = 60;
 
-	private final double[] currentValues = new double[7];
-	private final DoubleTextField[] numberFields = new DoubleTextField[7];
+	private final WidgetBetterTextField[] transformFields = new WidgetBetterTextField[DEFAULTS.length];
+	private final WidgetSet positionWidgetSet = new WidgetSet(20, 0);
+	private final WidgetSet rotationWidgetSet = new WidgetSet(20, 0);
+	/** What the screen opened with, so an unreadable field falls back to the block's own value. */
+	private final double[] initialValues = DEFAULTS.clone();
+	/** What the client's panel is showing right now, so a half-typed box does not snap it around. */
+	private final double[] previewed = DEFAULTS.clone();
 
 	public PIDSProjectorScreen(BlockPos pos, String presetID, String[] messages, boolean[] rowHidden,
 							   boolean hidePlatformNumber, Set<Long> platformIds,
 							   double offsetX, double offsetY, double offsetZ,
 							   double rotateX, double rotateY, double rotateZ, double scale) {
-		super(pos, pos,
-				messages == null || messages.length == 0 ? 4 : messages.length,
-				messages, rowHidden, platformIds, presetID, hidePlatformNumber, true,
-				Text.translatable("gui.jsblock.pids_projector"));
+		super(pos, PIDSProjector.TileEntityBlockPIDSProjector.MAX_ARRIVALS, true, presetID, hidePlatformNumber,
+				messages, rowHidden, platformIds);
 
-		currentValues[0] = offsetX;
-		currentValues[1] = offsetY;
-		currentValues[2] = offsetZ;
-		currentValues[3] = rotateX;
-		currentValues[4] = rotateY;
-		currentValues[5] = rotateZ;
-		currentValues[6] = scale;
+		initialValues[0] = offsetX;
+		initialValues[1] = offsetY;
+		initialValues[2] = offsetZ;
+		initialValues[3] = rotateX;
+		initialValues[4] = rotateY;
+		initialValues[5] = rotateZ;
+		initialValues[SCALE_INDEX] = scale <= 0 ? DEFAULTS[SCALE_INDEX] : scale;
+
+		for (int i = 0; i < transformFields.length; i++) {
+			transformFields[i] = TextFields.setValue(new WidgetBetterTextField("", FIELD_MAX_LENGTH), format(initialValues[i]));
+		}
+
+		/* The scale sits on its own, so it needs a width of its own: a text field is built zero wide. */
+		transformFields[SCALE_INDEX].setWidth(SCALE_FIELD_WIDTH);
+
+		/* Filled here rather than in addConfigEntries, which runs again whenever the screen is
+		   resized and would otherwise stack the fields up in the same row twice. */
+		positionWidgetSet.addWidget(transformFields[0]);
+		positionWidgetSet.addWidget(transformFields[1]);
+		positionWidgetSet.addWidget(transformFields[2]);
+
+		rotationWidgetSet.addWidget(transformFields[3]);
+		rotationWidgetSet.addWidget(transformFields[4]);
+		rotationWidgetSet.addWidget(transformFields[5]);
+
+		System.arraycopy(initialValues, 0, previewed, 0, previewed.length);
+
+		/* Attached after the boxes are seeded, because setting a value notifies the responder. */
+		for (WidgetBetterTextField transformField : transformFields) {
+			transformField.setResponder(value -> previewFromFields());
+		}
+	}
+
+	@Override
+	public Component getScreenTitle() {
+		return Text.translatable("gui.jsblock.pids_projector");
 	}
 
 	@Override
 	public void addConfigEntries(ListViewWidget listViewWidget) {
-		addGeneralEntries(listViewWidget);
-		addProjectorEntries(listViewWidget);
-		addDisplayEntries(listViewWidget);
-		addMessageEntries(listViewWidget);
-	}
+		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids.listview.category.projection"));
 
-	private void addProjectorEntries(ListViewWidget listViewWidget) {
-		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids_projector"));
+		/* Registered with the screen so the boxes can be typed into; the list entry below draws
+		   them through their widget set. */
+		for (WidgetBetterTextField transformField : transformFields) {
+			addWidget(transformField);
+		}
 
-		numberFields[0] = newTextField(0, -256, 256);
-		numberFields[1] = newTextField(1, -256, 256);
-		numberFields[2] = newTextField(2, -256, 256);
-		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.offset"),
-				new MappedWidget(row(numberFields[0], numberFields[1], numberFields[2])));
+		positionWidgetSet.setXYSize(0, 0, FIELD_SET_WIDTH, 20);
+		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.offset"), new MappedWidget(positionWidgetSet));
 
-		numberFields[3] = newTextField(3, -360, 360);
-		numberFields[4] = newTextField(4, -360, 360);
-		numberFields[5] = newTextField(5, -360, 360);
-		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.rotate"),
-				new MappedWidget(row(numberFields[3], numberFields[4], numberFields[5])));
+		rotationWidgetSet.setXYSize(0, 0, FIELD_SET_WIDTH, 20);
+		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.rotate"), new MappedWidget(rotationWidgetSet));
 
-		numberFields[6] = newTextField(6, 0.01, 16);
-		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.scale"),
-				new MappedWidget(numberFields[6]));
-	}
+		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.scale"), new MappedWidget(transformFields[SCALE_INDEX]));
 
-	private DoubleTextField newTextField(int index, double min, double max) {
-		final DoubleTextField field = new DoubleTextField(0, 0, COLUMN_WIDTH, 20, min, max, currentValues[index]);
-		field.setWidth(COLUMN_WIDTH);
-		return field;
-	}
-
-	private static HorizontalWidgetSet row(DoubleTextField first, DoubleTextField second, DoubleTextField third) {
-		final HorizontalWidgetSet row = new HorizontalWidgetSet(COLUMN_GAP);
-		row.addWidget(new MappedWidget(first));
-		row.addWidget(new MappedWidget(second));
-		row.addWidget(new MappedWidget(third));
-		row.setXYSize(0, 0, COLUMN_WIDTH * 3 + COLUMN_GAP * 2, 20);
-		return row;
+		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids.listview.category.pids"));
+		super.addConfigEntries(listViewWidget);
 	}
 
 	@Override
-	protected void captureAll() {
-		super.captureAll();
-		for (int i = 0; i < numberFields.length; i++) {
-			if (numberFields[i] != null) {
-				currentValues[i] = numberFields[i].getNumber();
-			}
+	public void tick() {
+		super.tick();
+
+		for (WidgetBetterTextField transformField : transformFields) {
+			transformField.tick();
 		}
 	}
 
 	@Override
 	protected void onSave() {
-		captureAll();
-		PacketClient.sendPIDSProjectorC2S(pos1, presetID, copyMessages(), copyHiddenRows(), hidePlatformNumber, copyPlatformIds(),
-				valueOr(0), valueOr(1), valueOr(2), valueOr(3), valueOr(4), valueOr(5), valueOr(6));
+		final double[] values = new double[transformFields.length];
+
+		for (int i = 0; i < values.length; i++) {
+			values[i] = parse(transformFields[i], initialValues[i]);
+		}
+
+		if (values[SCALE_INDEX] <= 0) {
+			values[SCALE_INDEX] = DEFAULTS[SCALE_INDEX];
+		}
+
+		PacketClient.sendPIDSProjectorC2S(pos1, presetId == null ? "" : presetId, collectCustomMessages(),
+				collectRowHidden(), isHidePlatformNumberSelected(), collectFilteredPlatforms(),
+				values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
+
+		/* What the server was told is what the panel should show until its sync comes back. */
+		System.arraycopy(values, 0, previewed, 0, previewed.length);
+		applyPreview();
 	}
 
-	private double valueOr(int index) {
-		return Double.isFinite(currentValues[index]) ? currentValues[index] : DEFAULTS[index];
+	@Override
+	protected void onDiscard() {
+		/* The panel moved while the player typed, so put it back where the screen found it. */
+		System.arraycopy(initialValues, 0, previewed, 0, previewed.length);
+		applyPreview();
+	}
+
+	/** Reads the boxes into {@link #previewed}, keeping the last readable value of a box being typed in. */
+	private void previewFromFields() {
+		for (int i = 0; i < previewed.length; i++) {
+			/* An unreadable box is one being typed in, such as a lone minus sign: keep what it had. */
+			previewed[i] = parse(transformFields[i], previewed[i]);
+		}
+
+		if (previewed[SCALE_INDEX] <= 0) {
+			previewed[SCALE_INDEX] = DEFAULTS[SCALE_INDEX];
+		}
+
+		applyPreview();
+	}
+
+	/**
+	 * Moves the projector's own panel on this client, which its renderer reads every frame.
+	 *
+	 * <p>The block entity's setter is safe to call from a screen: its data sync only does anything in
+	 * a server level, so this redraws and nothing more. The server hears about the placement when the
+	 * screen is saved.</p>
+	 */
+	private void applyPreview() {
+		final Level level = Minecraft.getInstance().level;
+
+		if (level == null) {
+			return;
+		}
+
+		final BlockEntity blockEntity = level.getBlockEntity(pos1);
+
+		if (!(blockEntity instanceof PIDSProjector.TileEntityBlockPIDSProjector)) {
+			return;
+		}
+
+		((PIDSProjector.TileEntityBlockPIDSProjector) blockEntity).setProjectorTransform(previewed[0], previewed[1],
+				previewed[2], previewed[3], previewed[4], previewed[5], previewed[SCALE_INDEX]);
+	}
+
+	/** Renders a whole number without a trailing {@code .0}, which is how a player would type it. */
+	private static String format(double value) {
+		return value == Math.floor(value) && !Double.isInfinite(value) ? String.valueOf((long) value) : String.valueOf(value);
+	}
+
+	private static double parse(WidgetBetterTextField field, double fallback) {
+		try {
+			return Double.parseDouble(field.getValue().trim());
+		} catch (NumberFormatException e) {
+			return fallback;
+		}
 	}
 }

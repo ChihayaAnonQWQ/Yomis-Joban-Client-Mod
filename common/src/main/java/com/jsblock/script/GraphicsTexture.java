@@ -297,15 +297,20 @@ public final class GraphicsTexture implements java.io.Closeable {
 			degrade("there is no client running");
 			return;
 		}
+		/* Snapshot on this thread, before handing the upload to the client thread. The script draws
+		   into this image on its own thread, so reading it later — after the next frame has begun
+		   writing — is a tear: the panel shows half of one frame and half of the next, which reads
+		   as flicker. The callback below owns an immutable copy. */
+		final int[] snapshot = snapshotPixels();
 		if (RenderSystem.isOnRenderThread()) {
-			applyUpload();
+			applyUpload(snapshot);
 		} else {
-			minecraft.execute(this::applyUpload);
+			minecraft.execute(() -> applyUpload(snapshot));
 		}
 	}
 
 	/** The GL half of {@link #upload()}; must run on the client thread. */
-	private void applyUpload() {
+	private void applyUpload(int[] argb) {
 		if (closed || failed) {
 			return;
 		}
@@ -320,7 +325,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 			}
 			final NativeImage pixels = texture.getPixels();
 			final long copyStart = CANVAS_STATS ? System.nanoTime() : 0L;
-			copyPixelsTo(pixels);
+			copySnapshotTo(pixels, argb);
 			final long copyNanos = CANVAS_STATS ? System.nanoTime() - copyStart : 0L;
 			texture.upload();
 			if (CANVAS_STATS) {
@@ -359,6 +364,38 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * {@code bufferedImage.getRGB(x, y)} loop: measured on this machine for a 1088x608 canvas,
 	 * 1.64 ms per upload before and 0.38 ms after (4.3x), byte-identical output.</p>
 	 */
+	/**
+	 * @return the canvas's pixels as a fresh ARGB array, copied on the calling thread
+	 *
+	 * <p>The copy is synchronized on the canvas: the script thread draws into it, and this is called
+	 * from that same thread right after a redraw, so the copy is a frame rather than a mixture of
+	 * two.</p>
+	 */
+	private int[] snapshotPixels() {
+		final int[] argb = new int[width * height];
+		synchronized (this) {
+			final BufferedImage image = this.bufferedImage;
+			if (image.getType() == BufferedImage.TYPE_INT_ARGB
+					&& image.getRaster().getDataBuffer() instanceof DataBufferInt) {
+				System.arraycopy(((DataBufferInt) image.getRaster().getDataBuffer()).getData(), 0,
+						argb, 0, argb.length);
+			} else {
+				image.getRGB(0, 0, width, height, argb, 0, width);
+			}
+		}
+		return argb;
+	}
+
+	/** Writes an ARGB snapshot into a {@code NativeImage}, swapping red and blue on the way. */
+	private void copySnapshotTo(NativeImage pixels, int[] argb) {
+		int i = 0;
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++, i++) {
+				pixels.setPixelRGBA(x, y, abgr(argb[i]));
+			}
+		}
+	}
+
 	synchronized void copyPixelsTo(NativeImage pixels) {
 		final BufferedImage image = this.bufferedImage;
 		if (image.getType() == BufferedImage.TYPE_INT_ARGB

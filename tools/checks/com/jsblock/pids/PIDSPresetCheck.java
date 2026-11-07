@@ -212,6 +212,19 @@ public final class PIDSPresetCheck {
 				final String id = json.get("id").getAsString();
 				try {
 					final PIDSPreset preset = PIDSPreset.fromJson(json);
+					/* JCM 2.3 ships two kinds of built-in preset: a components layout, and a plain
+					   background image (plus, for the 1A board, a script). Only the first kind has a
+					   layout to check; the second is valid when it has artwork or a script. */
+					if (!json.has("components")) {
+						if (preset.image == null && !preset.isScripted()) {
+							System.out.println("FAIL " + id + ": no components, no background and no script");
+							failures++;
+						} else {
+							System.out.println("OK   " + id + " (built-in, "
+									+ (preset.isScripted() ? "script preset" : "background preset") + ")");
+						}
+						continue;
+					}
 					if (preset.layout == null) {
 						System.out.println("FAIL " + id + ": layout == null, \"components\" was not parsed");
 						failures++;

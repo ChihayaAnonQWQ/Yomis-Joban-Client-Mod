@@ -1,14 +1,16 @@
 package com.jsblock.screen;
 
 import com.jsblock.amberui.gui.screen.BlockConfigListScreen;
+import com.jsblock.amberui.gui.widget.ContentItem;
 import com.jsblock.amberui.gui.widget.HorizontalWidgetSet;
 import com.jsblock.amberui.gui.widget.ListViewWidget;
 import com.jsblock.amberui.gui.widget.MappedWidget;
+import com.jsblock.block.BlockPIDSBaseHorizontal;
+import com.jsblock.block.JobanPIDSBase;
 import com.jsblock.client.JobanCustomResources;
-import com.jsblock.data.PIDSPreset;
-import mtr.data.IGui;
+import mtr.client.ClientData;
+import mtr.data.Platform;
 import mtr.mappings.Text;
-import mtr.mappings.UtilitiesClient;
 import mtr.screen.PIDSConfigScreen;
 import mtr.screen.WidgetBetterCheckbox;
 import mtr.screen.WidgetBetterTextField;
@@ -16,246 +18,246 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
- * The configuration shared by every PIDS block: the preset, the platform filter, the optional
- * platform-number switch, and one custom message plus one hidden-row box per arrival slot.
- *
- * <p>This is the AmberUI list-screen equivalent of what {@code JobanPIDSConfigScreen} and
- * {@code RVPIDSConfigScreen} used to lay out by hand. The screen itself owns the values; the
- * subclass supplies the packet it is saved with. Re-entering the screen (after MTR's platform
- * picker or the preset picker returns) re-initialises the widgets, so {@link #init()} copies the
- * current control values back into the fields first -- otherwise a half-typed message would be
- * lost every time a child screen was opened.</p>
+ * The configuration every PIDS block shares: the preset it draws, the platforms it draws for, one
+ * custom message and one hidden row per arrival, and the hide-platform-number option.<br>
+ * Subclasses add their own entries on top of these.
  */
-public abstract class PIDSBlockConfigScreen extends BlockConfigListScreen implements IGui {
-	protected static final int MESSAGE_MAX_LENGTH = 2048;
-	protected static final int WIDGET_COLUMN_WIDTH = 240;
-	protected static final int WIDE_FIELD_WIDTH = 170;
+public abstract class PIDSBlockConfigScreen extends BlockConfigListScreen {
+	protected static final int MAX_MESSAGE_LENGTH = 100;
+	protected static final int ROW_HIDDEN_WIDTH = 95;
+	protected static final int ROW_WIDGET_GAP = 18;
 
 	protected final BlockPos pos1;
-	protected final BlockPos pos2;
-	protected final int maxArrivals;
-	protected final String[] messages;
-	protected final boolean[] hideArrival;
-	protected final Set<Long> filterPlatformIds = new HashSet<>();
-	protected final boolean hadPacketMessages;
-	protected final boolean supportsHidePlatformNumber;
-	private final Component screenTitle;
+	protected final boolean withPlatformNumberOption;
 
-	protected String presetID;
-	protected boolean hidePlatformNumber;
+	protected final WidgetBetterTextField[] customMessagesWidgets;
+	protected final WidgetBetterCheckbox[] rowHiddenWidgets;
+	protected final WidgetBetterCheckbox selectAllCheckbox;
+	protected final WidgetBetterCheckbox hidePlatformNumberWidget;
+	protected final Button choosePresetButton;
+	protected final Button choosePlatformButton;
 
-	protected Button presetButton;
-	protected WidgetBetterCheckbox selectAllCheckbox;
-	protected Button filterButton;
-	protected WidgetBetterCheckbox hidePlatformNumberCheckbox;
-	protected WidgetBetterTextField[] messageFields;
-	protected WidgetBetterCheckbox[] rowHiddenBoxes;
+	/** The messages and hidden rows the screen was opened with, still unchecked by the player. */
+	protected final String[] customMessages;
+	protected final boolean[] rowHidden;
+	protected final Set<Long> filteredPlatforms;
+	protected String presetId;
 
-	private boolean initialisedOnce = false;
-	private boolean loadedFromBlockEntity = false;
-
-	protected PIDSBlockConfigScreen(BlockPos pos1, BlockPos pos2, int maxArrivals,
-									String[] packetMessages, boolean[] packetRowHidden, Set<Long> packetPlatformIds,
-									String presetID, boolean hidePlatformNumber, boolean supportsHidePlatformNumber,
-									Component screenTitle) {
+	/**
+	 * @param messages    the custom messages the screen starts with, or {@code null} to read them off the block entity
+	 * @param rowHidden   the hidden rows the screen starts with, or {@code null} to read them off the block entity
+	 * @param platformIds the platforms the screen starts with, or {@code null} to read them off the block entity
+	 */
+	protected PIDSBlockConfigScreen(BlockPos pos1, int maxArrivals, boolean withPlatformNumberOption, String presetId,
+									boolean hidePlatformNumber, String[] messages, boolean[] rowHidden, Set<Long> platformIds) {
 		super(pos1);
 		this.pos1 = pos1;
-		this.pos2 = pos2 == null ? pos1 : pos2;
-		this.maxArrivals = Math.max(1, maxArrivals);
-		this.hadPacketMessages = packetMessages != null;
-		this.supportsHidePlatformNumber = supportsHidePlatformNumber;
-		this.screenTitle = screenTitle;
+		this.withPlatformNumberOption = withPlatformNumberOption;
+		this.presetId = presetId == null ? "" : presetId;
 
-		this.messages = new String[this.maxArrivals];
-		this.hideArrival = new boolean[this.maxArrivals];
-		this.presetID = presetID == null ? "" : presetID;
-		this.hidePlatformNumber = hidePlatformNumber;
+		final int arrivalCount = Math.max(1, maxArrivals);
+		final Level level = Minecraft.getInstance().level;
+		final BlockEntity blockEntity = level == null ? null : level.getBlockEntity(pos1);
+		final JobanPIDSBase.TileEntityBlockJobanPIDS pidsEntity = blockEntity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS
+				? (JobanPIDSBase.TileEntityBlockJobanPIDS) blockEntity
+				: null;
 
-		for (int i = 0; i < this.maxArrivals; i++) {
-			this.messages[i] = "";
-		}
-		if (packetMessages != null) {
-			for (int i = 0; i < this.maxArrivals && i < packetMessages.length; i++) {
-				this.messages[i] = packetMessages[i] == null ? "" : packetMessages[i];
-				if (packetRowHidden != null && i < packetRowHidden.length) {
-					this.hideArrival[i] = packetRowHidden[i];
-				}
+		if (messages == null) {
+			messages = new String[arrivalCount];
+
+			for (int i = 0; i < arrivalCount; i++) {
+				messages[i] = pidsEntity != null && i < pidsEntity.getMaxArrivals() ? pidsEntity.getMessage(i) : "";
 			}
 		}
-		if (packetPlatformIds != null) {
-			this.filterPlatformIds.addAll(packetPlatformIds);
+
+		if (rowHidden == null) {
+			rowHidden = new boolean[arrivalCount];
+
+			for (int i = 0; i < arrivalCount; i++) {
+				rowHidden[i] = pidsEntity != null && i < pidsEntity.getMaxArrivals() && pidsEntity.getHideArrival(i);
+			}
 		}
+
+		if (platformIds == null) {
+			platformIds = blockEntity instanceof BlockPIDSBaseHorizontal.TileEntityBlockPIDSBaseHorizontal
+					? ((BlockPIDSBaseHorizontal.TileEntityBlockPIDSBaseHorizontal) blockEntity).getPlatformIds()
+					: new HashSet<>();
+		}
+
+		this.customMessages = Arrays.copyOf(messages, arrivalCount);
+		this.rowHidden = Arrays.copyOf(rowHidden, arrivalCount);
+		this.filteredPlatforms = new HashSet<>(platformIds);
+
+		this.customMessagesWidgets = new WidgetBetterTextField[arrivalCount];
+		this.rowHiddenWidgets = new WidgetBetterCheckbox[arrivalCount];
+
+		for (int i = 0; i < arrivalCount; i++) {
+			final WidgetBetterTextField messageField = new WidgetBetterTextField("", MAX_MESSAGE_LENGTH);
+			messageField.setHint(Text.translatable("gui.jsblock.pids.listview.widget.custom_message"));
+			TextFields.setValue(messageField, this.customMessages[i]);
+			this.customMessagesWidgets[i] = messageField;
+
+			final WidgetBetterCheckbox rowHiddenCheckbox = new WidgetBetterCheckbox(0, 0, ROW_HIDDEN_WIDTH, SQUARE_SIZE, Text.translatable("gui.jsblock.pids.listview.widget.row_hidden"), checked -> {
+			});
+			rowHiddenCheckbox.setChecked(this.rowHidden[i]);
+			this.rowHiddenWidgets[i] = rowHiddenCheckbox;
+		}
+
+		this.hidePlatformNumberWidget = new WidgetBetterCheckbox(0, 0, SQUARE_SIZE, SQUARE_SIZE, Component.empty(), checked -> {
+		});
+		this.hidePlatformNumberWidget.setChecked(hidePlatformNumber);
+
+		this.selectAllCheckbox = new WidgetBetterCheckbox(0, 0, SQUARE_SIZE, SQUARE_SIZE, Text.translatable("gui.mtr.automatically_detect_nearby_platform"), checked -> {
+		});
+		this.selectAllCheckbox.setChecked(this.filteredPlatforms.isEmpty());
+
+		this.choosePresetButton = Button.builder(Text.translatable("gui.jsblock.pids.listview.widget.choose_preset"), btn -> openPresetPicker())
+				.bounds(0, 0, 60, 20)
+				.build();
+
+		this.choosePlatformButton = PIDSConfigScreen.getPlatformFilterButton(pos1, selectAllCheckbox, this.filteredPlatforms, this);
+		this.choosePlatformButton.setMessage(Text.translatable("gui.jsblock.pids.listview.widget.change_platform"));
+		this.choosePlatformButton.setWidth(60);
 	}
 
 	@Override
 	public Component getScreenTitle() {
-		return screenTitle;
+		final Level level = Minecraft.getInstance().level;
+
+		if (level != null) {
+			return Text.translatable(level.getBlockState(pos1).getBlock().getDescriptionId());
+		}
+
+		return Text.translatable("block.jsblock.pids_1a");
 	}
 
-	@Override
-	protected void init() {
-		if (initialisedOnce) {
-			// Returning from MTR's platform picker or our preset picker re-runs init(); keep what
-			// the player has typed instead of resetting every field to the last saved values.
-			captureAll();
-		} else if (!hadPacketMessages && !loadedFromBlockEntity) {
-			loadBlockEntityFallback();
-			loadedFromBlockEntity = true;
+	private void openPresetPicker() {
+		Minecraft.getInstance().setScreen(new PIDSPresetScreen(pos1, presetId, preset -> this.presetId = preset).withPreviousScreen(this));
+	}
+
+	/**
+	 * A row label of the form "Label (Current: name)".
+	 *
+	 * <p>The current preset used to live on the button to the right, which made that button as wide
+	 * as the longest preset name. The label is where a reader looks for it, and a label can be
+	 * truncated; a button cannot without hiding its own purpose.</p>
+	 */
+	protected static Component withCurrent(String labelKey, String currentId, String patternKey) {
+		final com.jsblock.data.PIDSPresetEntry entry = JobanCustomResources.getPresetEntry(currentId);
+		final String name = entry == null ? "-" : entry.getName();
+		return Text.translatable(patternKey, truncate(name, 24));
+	}
+
+	/** Shortens a preset name so a long resource-pack name cannot push the row out of shape. */
+	protected static String truncate(String text, int maxChars) {
+		if (text == null) {
+			return "-";
 		}
-		super.init();
-		initialisedOnce = true;
+		return text.length() <= maxChars ? text : text.substring(0, Math.max(1, maxChars - 1)) + "\u2026";
 	}
 
 	@Override
 	public void addConfigEntries(ListViewWidget listViewWidget) {
-		addGeneralEntries(listViewWidget);
-		addDisplayEntries(listViewWidget);
-		addMessageEntries(listViewWidget);
-	}
+		// Preset button
+		addWidget(choosePresetButton);
+		final ContentItem presetEntry = new ContentItem(withCurrent("gui.jsblock.pids.listview.title.pids_preset", presetId,
+				"gui.jsblock.pids.listview.title.pids_preset_with_current"), new MappedWidget(choosePresetButton), 26);
+		presetEntry.setIconCallback((guiGraphics, startX, startY, width, height) -> PIDSPresetScreen.drawPIDSPreview(JobanCustomResources.getPresetEntry(presetId), guiGraphics, startX, startY, width, height, true));
+		listViewWidget.add(presetEntry);
 
-	protected void addGeneralEntries(ListViewWidget listViewWidget) {
-		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids_section.general"));
+		// Filter Platform button
+		final List<String> platformList = new ArrayList<>();
 
-		presetButton = UtilitiesClient.newButton(presetText(), button -> openPresetSelector());
-		presetButton.setMessage(presetText());
-		presetButton.setWidth(150);
-		listViewWidget.add(Text.translatable("gui.jsblock.pids_preset"), new MappedWidget(presetButton));
+		for (long filteredPlatform : filteredPlatforms) {
+			String platformName = null;
 
-		selectAllCheckbox = new WidgetBetterCheckbox(0, 0, 150, SQUARE_SIZE,
-				Text.translatable("gui.mtr.automatically_detect_nearby_platform"), checked -> {
-		});
-		selectAllCheckbox.setChecked(filterPlatformIds.isEmpty());
-		selectAllCheckbox.setWidth(150);
+			for (Platform platform : ClientData.PLATFORMS) {
+				if (platform.id == filteredPlatform) {
+					platformName = platform.name;
+					break;
+				}
+			}
 
-		filterButton = PIDSConfigScreen.getPlatformFilterButton(pos1, selectAllCheckbox, filterPlatformIds, this);
-		filterButton.setMessage(Text.translatable("selectWorld.edit"));
-		filterButton.setWidth(80);
-
-		final HorizontalWidgetSet filterRow = new HorizontalWidgetSet(4);
-		filterRow.addWidget(new MappedWidget(selectAllCheckbox));
-		filterRow.addWidget(new MappedWidget(filterButton));
-		filterRow.setXYSize(0, 0, WIDGET_COLUMN_WIDTH, 20);
-		listViewWidget.add(Text.translatable("gui.jsblock.pids_filter_platforms"), new MappedWidget(filterRow));
-	}
-
-	protected void addDisplayEntries(ListViewWidget listViewWidget) {
-		if (!supportsHidePlatformNumber) {
-			return;
+			platformList.add(platformName == null ? "?" : platformName);
 		}
 
-		hidePlatformNumberCheckbox = new WidgetBetterCheckbox(0, 0, WIDGET_COLUMN_WIDTH, SQUARE_SIZE,
-				Text.translatable("gui.jsblock.hide_platform_number"), checked -> {
-		});
-		hidePlatformNumberCheckbox.setChecked(hidePlatformNumber);
-		hidePlatformNumberCheckbox.setWidth(WIDGET_COLUMN_WIDTH);
-		listViewWidget.add(null, new MappedWidget(hidePlatformNumberCheckbox));
-	}
+		final Component filteredPlatformTitle = filteredPlatforms.isEmpty()
+				? Text.translatable("gui.jsblock.pids.listview.title.filtered_platform.nearby")
+				: Text.translatable("gui.jsblock.pids.listview.title.filtered_platform", String.join(",", platformList));
+		listViewWidget.add(filteredPlatformTitle, new MappedWidget(choosePlatformButton));
+		addWidget(choosePlatformButton);
 
-	protected void addMessageEntries(ListViewWidget listViewWidget) {
-		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids_section.messages"));
+		// One row per arrival: custom message + hide arrival
+		for (int i = 0; i < customMessagesWidgets.length; i++) {
+			addWidget(customMessagesWidgets[i]);
+			addWidget(rowHiddenWidgets[i]);
 
-		messageFields = new WidgetBetterTextField[maxArrivals];
-		rowHiddenBoxes = new WidgetBetterCheckbox[maxArrivals];
+			final int rowWidth = listViewWidget.getWidth();
+			rowHiddenWidgets[i].setWidth(ROW_HIDDEN_WIDTH);
+			customMessagesWidgets[i].setWidth(rowWidth - rowHiddenWidgets[i].getWidth() - ROW_WIDGET_GAP);
 
-		final Component hideRowText = Text.translatable("gui.jsblock.pids_row_hidden");
-		final int hideWidth = Math.max(60, font.width(hideRowText) + SQUARE_SIZE + IGui.TEXT_PADDING);
+			final HorizontalWidgetSet widgetSet = new HorizontalWidgetSet();
+			widgetSet.addWidget(new MappedWidget(customMessagesWidgets[i]));
+			widgetSet.addWidget(new MappedWidget(rowHiddenWidgets[i]));
+			widgetSet.setXYSize(listViewWidget.getX(), 20, listViewWidget.getWidth(), 20);
+			listViewWidget.add((Component) null, new MappedWidget(widgetSet));
+		}
 
-		for (int i = 0; i < maxArrivals; i++) {
-			final WidgetBetterTextField messageField = new WidgetBetterTextField("", MESSAGE_MAX_LENGTH);
-			messageField.setMaxLength(MESSAGE_MAX_LENGTH);
-			messageField.setValue(messages[i]);
-			messageField.setWidth(WIDE_FIELD_WIDTH);
-			messageFields[i] = messageField;
-
-			final WidgetBetterCheckbox hideBox = new WidgetBetterCheckbox(0, 0, hideWidth, SQUARE_SIZE, hideRowText,
-					checked -> {
-					});
-			hideBox.setChecked(hideArrival[i]);
-			hideBox.setWidth(hideWidth);
-			rowHiddenBoxes[i] = hideBox;
-
-			final HorizontalWidgetSet row = new HorizontalWidgetSet(4);
-			row.addWidget(new MappedWidget(messageField));
-			row.addWidget(new MappedWidget(hideBox));
-			row.setXYSize(0, 0, WIDE_FIELD_WIDTH + 4 + hideWidth, 20);
-			listViewWidget.add(Text.translatable("gui.jsblock.pids_custom_message", i + 1), new MappedWidget(row));
+		if (withPlatformNumberOption) {
+			addWidget(hidePlatformNumberWidget);
+			listViewWidget.add(Text.translatable("gui.jsblock.pids.listview.title.hide_platform_number"), new MappedWidget(hidePlatformNumberWidget));
 		}
 	}
 
-	/** Reads the block entity when the screen was opened without a packet payload. */
-	protected void loadBlockEntityFallback() {
-	}
+	@Override
+	public void tick() {
+		super.tick();
 
-	protected void captureAll() {
-		captureMessages();
-		capturePlatforms();
-		if (hidePlatformNumberCheckbox != null) {
-			hidePlatformNumber = hidePlatformNumberCheckbox.selected();
+		for (WidgetBetterTextField textField : customMessagesWidgets) {
+			textField.tick();
 		}
 	}
 
-	protected void captureMessages() {
-		if (messageFields == null || rowHiddenBoxes == null) {
-			return;
+	protected String[] collectCustomMessages() {
+		final String[] collected = new String[customMessagesWidgets.length];
+
+		for (int i = 0; i < collected.length; i++) {
+			collected[i] = customMessagesWidgets[i].getValue();
 		}
-		for (int i = 0; i < maxArrivals && i < messageFields.length; i++) {
-			messages[i] = messageFields[i].getValue();
-			hideArrival[i] = rowHiddenBoxes[i].selected();
+
+		return collected;
+	}
+
+	protected boolean[] collectRowHidden() {
+		final boolean[] collected = new boolean[rowHiddenWidgets.length];
+
+		for (int i = 0; i < collected.length; i++) {
+			collected[i] = rowHiddenWidgets[i].selected();
 		}
+
+		return collected;
 	}
 
-	protected void capturePlatforms() {
-		if (selectAllCheckbox != null && selectAllCheckbox.selected()) {
-			filterPlatformIds.clear();
+	protected boolean isHidePlatformNumberSelected() {
+		return hidePlatformNumberWidget.selected();
+	}
+
+	/** The platforms as the player left them: an empty set means "every platform nearby". */
+	protected Set<Long> collectFilteredPlatforms() {
+		if (selectAllCheckbox.selected()) {
+			filteredPlatforms.clear();
 		}
-	}
 
-	protected Component presetText() {
-		return presetText(presetID);
-	}
-
-	protected Component presetText(String id) {
-		if (id == null || id.isEmpty()) {
-			return Text.translatable("gui.jsblock.pids_preset_none");
-		}
-		final PIDSPreset preset = JobanCustomResources.PIDSPresets.get(id);
-		return Text.literal(preset == null ? id : preset.displayName());
-	}
-
-	protected void openPresetSelector() {
-		openPresetSelector(presetID, selected -> presetID = selected);
-	}
-
-	protected void openPresetSelector(String currentPreset, java.util.function.Consumer<String> onSelected) {
-		Minecraft.getInstance().setScreen(new PIDSPresetScreen(this, currentPreset, onSelected));
-	}
-
-	protected static int parseInteger(WidgetBetterTextField field, int fallback) {
-		try {
-			return Integer.parseInt(field.getValue().trim());
-		} catch (Exception e) {
-			return fallback;
-		}
-	}
-
-	protected String[] copyMessages() {
-		final String[] copy = new String[maxArrivals];
-		System.arraycopy(messages, 0, copy, 0, maxArrivals);
-		return copy;
-	}
-
-	protected boolean[] copyHiddenRows() {
-		final boolean[] copy = new boolean[maxArrivals];
-		System.arraycopy(hideArrival, 0, copy, 0, maxArrivals);
-		return copy;
-	}
-
-	protected Set<Long> copyPlatformIds() {
-		return new HashSet<>(filterPlatformIds);
+		return filteredPlatforms;
 	}
 }

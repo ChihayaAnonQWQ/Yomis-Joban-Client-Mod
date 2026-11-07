@@ -1,6 +1,6 @@
 package com.jsblock.mappings;
 
-import com.jsblock.screen.ConfigScreen;
+import com.jsblock.screen.ClientConfigScreen;
 import net.minecraftforge.client.ConfigScreenHandler;
 import net.minecraftforge.fml.ModLoadingContext;
 
@@ -31,7 +31,7 @@ public class ForgeConfig {
 	public static void registerConfig() {
 		ModLoadingContext.get().registerExtensionPoint(
 				ConfigScreenHandler.ConfigScreenFactory.class,
-				() -> new ConfigScreenHandler.ConfigScreenFactory((minecraft, parent) -> new ConfigScreen())
+				() -> new ConfigScreenHandler.ConfigScreenFactory((minecraft, parent) -> new ClientConfigScreen())
 		);
 	}
 }

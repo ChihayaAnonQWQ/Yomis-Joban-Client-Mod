@@ -32,7 +32,36 @@ import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SUBSIDY_CONFIG;
  * @since 1.0.0
  */
 public class Joban {
-    private static final String VERSION = "1.2.2";
+    /**
+     * The version the loader reports for this jar.
+     *
+     * <p>Hard-coding it meant the settings screen could say "1.2.2" while Forge's mod list said
+     * "1.2.12-JSPIDS-2.10+mc1.20" — the same mod, two versions. The loader metadata is generated
+     * from {@code mod_version} at build time, so reading it back is what keeps the two in step.</p>
+     */
+    private static final String VERSION = readModVersion();
+
+    private static String readModVersion() {
+        final String fromFabric = firstMatch("/fabric.mod.json", "\"version\"\\s*:\\s*\"([^\"]+)\"");
+        if (fromFabric != null) {
+            return fromFabric;
+        }
+        final String fromForge = firstMatch("/META-INF/mods.toml", "(?m)^\\s*version\\s*=\\s*\"([^\"]+)\"");
+        return fromForge != null ? fromForge : "1.2.2";
+    }
+
+    private static String firstMatch(String resource, String regex) {
+        try (java.io.InputStream stream = Joban.class.getResourceAsStream(resource)) {
+            if (stream == null) {
+                return null;
+            }
+            final String text = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            final java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(regex).matcher(text);
+            return matcher.find() ? matcher.group(1) : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
     private static int gameTick = 0;
     public static final String MIN_MTR_VERSION = "3.2.2";
     public static final String MOD_ID = "jsblock";

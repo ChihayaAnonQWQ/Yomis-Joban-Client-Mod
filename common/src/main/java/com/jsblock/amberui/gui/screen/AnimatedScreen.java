@@ -1,40 +1,53 @@
 package com.jsblock.amberui.gui.screen;
 
+import com.jsblock.amberui.gui.ClipStack;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.network.chat.Component;
 
 /**
- * A screen whose title and subtitle slide in when it opens.
- *
- * <p>The original also animated the close by delaying {@code onClose2}; MTR 3's save-on-close
- * screens cannot defer closing without swallowing the save, so only the opening animation is
- * kept and closing is immediate.</p>
+ * A screen that plays a slide-in animation when opened, and a slide-out animation when closed.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.screen.AnimatedScreen}.
  */
-public abstract class AnimatedScreen extends ScreenBase {
+public class AnimatedScreen extends ScreenBase {
 	protected double linearAnimationProgress = 0;
 	protected double animationProgress;
 	protected boolean closing = false;
 	private final boolean shouldAnimate;
 
-	protected AnimatedScreen(boolean animatable) {
-		super();
+	public AnimatedScreen(Component title, boolean animatable) {
+		super(title);
 		this.shouldAnimate = animatable;
 		this.animationProgress = animatable ? 0 : 1;
-		if (!animatable) {
-			this.linearAnimationProgress = 1;
-		}
 	}
 
 	@Override
 	public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float tickDelta) {
+		ClipStack.reset();
 		super.render(guiGraphics, mouseX, mouseY, tickDelta);
 
-		final double frameDelta = tickDelta / 20.0;
-		if (!shouldAnimate) {
+		final double frameDelta = (tickDelta / 20);
+
+		if(!shouldAnimate) {
 			linearAnimationProgress = 1;
-		} else if (!closing) {
-			linearAnimationProgress = Math.min(1, linearAnimationProgress + frameDelta);
+		} else {
+			linearAnimationProgress = closing ? Math.max(0, linearAnimationProgress - frameDelta) : Math.min(1, linearAnimationProgress + frameDelta);
+
+			if(linearAnimationProgress <= 0 && closing) {
+				onClose2();
+			}
 		}
+
 		animationProgress = getEaseAnimation();
+		ClipStack.reset();
+	}
+
+	@Override
+	public void onClose2() {
+		if(closing || !shouldAnimate) {
+			super.onClose2();
+		} else {
+			closing = true;
+		}
 	}
 
 	private double getEaseAnimation() {

@@ -1,44 +1,44 @@
 {
-	"schemaVersion": 1,
-	"id": "jsblock",
-	"version": "${version}",
-	"name": "Yomi's Joban Client Mod",
-	"description": "Add static signal light, PIDS and HK-Specific decoration blocks to the MTR Mod.",
-	"authors": [
-		"LX86",
-		"StrikeSNC",
-		"AozoraSky",
-		"Yomi_307"
-	],
-	"contact": {
-		"homepage": "https://discord.gg/FNc2rgWmP2",
-		"sources": ""
-	},
-	"license": "All Rights Reserved",
-	"icon": "icon.png",
-	"environment": "*",
-	"entrypoints": {
-		"main": [
-			"com.jsblock.JobanFabric"
-		],
-		"client": [
-			"com.jsblock.JobanFabricClient"
-		],
-		"modmenu": [
-			"com.jsblock.ModMenuConfig"
-		]
-	},
-	"mixins": [
-		"jsblock-common.mixins.json"
-	],
-	"depends": {
-		"fabricloader": "*",
-		"fabric": "*",
-		"mtr": "*",
-		"architectury": ">=9",
-		"minecraft": ">=1.20 <=1.20.1"
-	},
-	"suggests": {
-		"another-mod": "*"
-	}
+  "schemaVersion": 1,
+  "id": "jsblock",
+  "version": "${version}",
+  "name": "Yomi's Joban Client Mod",
+  "description": "Add static signal light, PIDS and HK-Specific decoration blocks to the MTR Mod.",
+  "authors": [
+    "LX86",
+    "StrikeSNC",
+    "AozoraSky",
+    "Yomi_307"
+  ],
+  "contact": {
+    "homepage": "https://discord.gg/FNc2rgWmP2",
+    "sources": ""
+  },
+  "license": "All Rights Reserved",
+  "icon": "icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.jsblock.JobanFabric"
+    ],
+    "client": [
+      "com.jsblock.JobanFabricClient"
+    ],
+    "modmenu": [
+      "com.jsblock.ModMenuConfig"
+    ]
+  },
+  "mixins": [
+    "jsblock-common.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "*",
+    "fabric": "*",
+    "mtr": "*",
+    "architectury": ">=9",
+    "minecraft": ">=1.20 <=1.20.1"
+  },
+  "suggests": {
+    "another-mod": "*"
+  }
 }

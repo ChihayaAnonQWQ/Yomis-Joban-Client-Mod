@@ -1,48 +1,51 @@
 package com.jsblock.amberui.gui.screen;
 
-import com.jsblock.amberui.gui.ClipStack;
 import mtr.mappings.ScreenMapper;
-import mtr.mappings.Text;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
- * A screen that remembers the screen it was opened from and returns there when closed.
- *
- * <p>AmberUI's MTR 4 version extended {@code ScreenExtension} and hooked {@code onClose2}. MTR 3
- * has only the vanilla {@link Screen}, whose {@code onClose} is the one hook every caller uses, so
- * that is the method overridden here.</p>
+ * A screen that can return to a previous screen when closed.<br>
+ * Ported from JCM 2.3's {@code com.lx862.amberui.gui.screen.ScreenBase}.
  */
-public abstract class ScreenBase extends ScreenMapper {
-	private Screen previousScreen = null;
+public class ScreenBase extends ScreenMapper {
+	private Screen previousScreen;
 
-	protected ScreenBase() {
-		super(Text.literal(""));
-	}
-
-	protected ScreenBase(Component title) {
+	public ScreenBase(Component title) {
 		super(title);
 	}
 
 	public ScreenBase withPreviousScreen(Screen screen) {
-		this.previousScreen = screen;
+		previousScreen = screen;
 		return this;
-	}
-
-	public Screen getPreviousScreen() {
-		return previousScreen;
 	}
 
 	@Override
 	protected void init() {
 		super.init();
-		// A screen rebuilt while a previous render left a clip behind must not inherit it.
-		ClipStack.reset();
+		init2();
+	}
+
+	/**
+	 * Called after the screen has been (re-)initialised.
+	 */
+	protected void init2() {
+	}
+
+	/**
+	 * Called when the screen is "closed", i.e. the escape key is pressed or the screen is replaced.
+	 */
+	public void onClose2() {
+		Minecraft.getInstance().setScreen(previousScreen);
+	}
+	@Override
+	public void onClose() {
+		onClose2();
 	}
 
 	@Override
-	public void onClose() {
-		Minecraft.getInstance().setScreen(previousScreen);
+	public boolean isPauseScreen() {
+		return false;
 	}
 }

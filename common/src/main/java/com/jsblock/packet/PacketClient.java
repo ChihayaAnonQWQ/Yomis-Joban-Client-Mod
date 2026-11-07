@@ -11,6 +11,9 @@ import com.jsblock.block.SubsidyMachine1;
 import com.jsblock.client.ClientConfig;
 import com.jsblock.screen.ButterflyLightScreen;
 import com.jsblock.screen.FareSaverScreen;
+import com.jsblock.screen.LegacyJobanPIDSConfigScreen;
+import com.jsblock.screen.LegacyRVPIDSConfigScreen;
+import com.jsblock.screen.LegacyPIDSProjectorScreen;
 import com.jsblock.screen.JobanPIDSConfigScreen;
 import com.jsblock.screen.PIDSProjectorScreen;
 import com.jsblock.screen.RVPIDSConfigScreen;
@@ -207,8 +210,12 @@ public class PacketClient {
 
         if (minecraft.level.getBlockEntity(pos1) instanceof PIDSRVBase.TileEntityBlockRVPIDS) {
             minecraft.execute(() -> {
-                if (!(minecraft.screen instanceof RVPIDSConfigScreen)) {
-                    UtilitiesClient.setScreen(minecraft, new RVPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, hidePlatformNumber, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
+                if (!(minecraft.screen instanceof RVPIDSConfigScreen) && !(minecraft.screen instanceof LegacyRVPIDSConfigScreen)) {
+                    /* The classic screen is the fallback the settings screen offers; both read the
+                       same packet data, so switching only changes the widgets. */
+                    UtilitiesClient.setScreen(minecraft, com.jsblock.client.ClientConfig.isLegacyConfigUi()
+                            ? new LegacyRVPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, hidePlatformNumber, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose)
+                            : new RVPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, hidePlatformNumber, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
                 }
             });
         }
@@ -249,8 +256,10 @@ public class PacketClient {
 
         if (minecraft.level.getBlockEntity(pos1) instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
             minecraft.execute(() -> {
-                if (!(minecraft.screen instanceof JobanPIDSConfigScreen)) {
-                    UtilitiesClient.setScreen(minecraft, new JobanPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
+                if (!(minecraft.screen instanceof JobanPIDSConfigScreen) && !(minecraft.screen instanceof LegacyJobanPIDSConfigScreen)) {
+                    UtilitiesClient.setScreen(minecraft, com.jsblock.client.ClientConfig.isLegacyConfigUi()
+                            ? new LegacyJobanPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose)
+                            : new JobanPIDSConfigScreen(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
                 }
             });
         }
@@ -401,8 +410,10 @@ public class PacketClient {
 		final double scale = packet.readDouble();
 		if (minecraft.level.getBlockEntity(pos) instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
 			minecraft.execute(() -> {
-				if (!(minecraft.screen instanceof PIDSProjectorScreen)) {
-					UtilitiesClient.setScreen(minecraft, new PIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale));
+				if (!(minecraft.screen instanceof PIDSProjectorScreen) && !(minecraft.screen instanceof LegacyPIDSProjectorScreen)) {
+                    UtilitiesClient.setScreen(minecraft, com.jsblock.client.ClientConfig.isLegacyConfigUi()
+                            ? new LegacyPIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale)
+                            : new PIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale));
 				}
 			});
 		}

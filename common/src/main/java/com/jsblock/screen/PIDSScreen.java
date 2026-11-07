@@ -1,66 +1,95 @@
 package com.jsblock.screen;
 
-import com.jsblock.amberui.gui.widget.IntegerTextField;
 import com.jsblock.amberui.gui.widget.ListViewWidget;
+import com.jsblock.amberui.gui.widget.ContentItem;
 import com.jsblock.amberui.gui.widget.MappedWidget;
+import com.jsblock.client.JobanCustomResources;
 import mtr.mappings.Text;
-import mtr.mappings.UtilitiesClient;
 import mtr.screen.WidgetBetterCheckbox;
+import mtr.screen.WidgetBetterTextField;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.network.chat.Component;
 import net.minecraft.core.BlockPos;
 
 import java.util.Set;
 
-/**
- * A PIDS configuration screen with the YJCM-only automatic preset switching.
- *
- * <p>Two independent rules are kept: one for an arriving train and one for a departing one. Each
- * has an enable switch, a preset, a countdown (seconds before the event) and a duration; the
- * departure rule additionally has "until the doors close", which disables its duration field.
- * These are YJCM features that JCM 2.3 does not have, so they are added on top of the shared
- * {@link PIDSBlockConfigScreen} list rather than being folded into it.</p>
- */
+// 基于 AmberUI 和 JCM 2.3 的屏幕移植
 public abstract class PIDSScreen extends PIDSBlockConfigScreen {
-	protected boolean autoSwitchEnabled;
+	protected static final int AUTO_SWITCH_PRESET_WIDTH = 120;
+	/** The same width as the main preset row's Choose button. */
+	protected static final int CHOOSE_BUTTON_WIDTH = 60;
+	protected static final int AUTO_SWITCH_NUMBER_WIDTH = 52;
+
+	protected final BlockPos pos2;
+
+	protected final WidgetBetterCheckbox autoSwitchCheckbox;
+	protected final Button autoSwitchPresetButton;
 	protected String autoSwitchPreset;
-	protected int autoSwitchCountdown;
-	protected int autoSwitchDuration;
-	protected boolean depAutoSwitchEnabled;
+	protected final WidgetBetterTextField autoSwitchCountdownTextField;
+	protected final WidgetBetterTextField autoSwitchDurationTextField;
+	protected final WidgetBetterCheckbox depAutoSwitchCheckbox;
+	protected final Button depAutoSwitchPresetButton;
 	protected String depAutoSwitchPreset;
-	protected int depAutoSwitchCountdown;
-	protected int depAutoSwitchDuration;
-	protected boolean depAutoSwitchUntilClose;
+	protected final WidgetBetterTextField depAutoSwitchCountdownTextField;
+	protected final WidgetBetterTextField depAutoSwitchDurationTextField;
+	protected final WidgetBetterCheckbox depAutoSwitchUntilCloseCheckbox;
 
-	protected WidgetBetterCheckbox autoSwitchCheckbox;
-	protected Button autoSwitchPresetButton;
-	protected IntegerTextField autoSwitchCountdownField;
-	protected IntegerTextField autoSwitchDurationField;
-	protected WidgetBetterCheckbox depAutoSwitchCheckbox;
-	protected Button depAutoSwitchPresetButton;
-	protected IntegerTextField depAutoSwitchCountdownField;
-	protected IntegerTextField depAutoSwitchDurationField;
-	protected WidgetBetterCheckbox depAutoSwitchUntilCloseCheckbox;
+	private final int autoSwitchCountdown;
+	private final int autoSwitchDuration;
+	private final int depAutoSwitchCountdown;
+	private final int depAutoSwitchDuration;
 
-	protected PIDSScreen(BlockPos pos1, BlockPos pos2, int maxArrivals,
-						 String[] packetMessages, boolean[] packetRowHidden, Set<Long> packetPlatformIds,
-						 String presetID, boolean hidePlatformNumber, boolean supportsHidePlatformNumber,
-						 boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
-						 boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration,
-						 boolean depAutoSwitchUntilClose,
-						 net.minecraft.network.chat.Component screenTitle) {
-		super(pos1, pos2, maxArrivals, packetMessages, packetRowHidden, packetPlatformIds,
-				presetID, hidePlatformNumber, supportsHidePlatformNumber, screenTitle);
+	public PIDSScreen(BlockPos pos1, BlockPos pos2, int maxArrivals, boolean withPlatformNumberOption, boolean hidePlatformNumber, String presetId,
+					  boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+					  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+		this(pos1, pos2, maxArrivals, withPlatformNumberOption, hidePlatformNumber, presetId, null, null, null,
+				autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
+	}
 
-		this.autoSwitchEnabled = autoSwitchEnabled;
-		this.autoSwitchPreset = autoSwitchPreset == null ? "" : autoSwitchPreset;
+	public PIDSScreen(BlockPos pos1, BlockPos pos2, int maxArrivals, boolean withPlatformNumberOption, boolean hidePlatformNumber, String presetId,
+					  String[] messages, boolean[] rowHidden, Set<Long> platformIds,
+					  boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+					  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+		super(pos1, maxArrivals, withPlatformNumberOption, presetId, hidePlatformNumber, messages, rowHidden, platformIds);
+		this.pos2 = pos2;
 		this.autoSwitchCountdown = autoSwitchCountdown > 0 ? autoSwitchCountdown : 10;
 		this.autoSwitchDuration = autoSwitchDuration > 0 ? autoSwitchDuration : 10;
-		this.depAutoSwitchEnabled = depAutoSwitchEnabled;
-		this.depAutoSwitchPreset = depAutoSwitchPreset == null ? "" : depAutoSwitchPreset;
 		this.depAutoSwitchCountdown = depAutoSwitchCountdown > 0 ? depAutoSwitchCountdown : 10;
 		this.depAutoSwitchDuration = depAutoSwitchDuration > 0 ? depAutoSwitchDuration : 10;
-		this.depAutoSwitchUntilClose = depAutoSwitchUntilClose;
-	}
+
+		this.autoSwitchCheckbox = new WidgetBetterCheckbox(0, 0, SQUARE_SIZE, SQUARE_SIZE, Text.translatable("gui.jsblock.auto_switch_enabled"), checked -> {
+		});
+		this.autoSwitchCheckbox.setChecked(autoSwitchEnabled);
+
+		this.autoSwitchPreset = autoSwitchPreset == null ? "" : autoSwitchPreset;
+		this.autoSwitchPresetButton = Button.builder(Text.translatable("gui.jsblock.pids.listview.widget.choose_preset"),
+				button -> openPresetPicker(false)).bounds(0, 0, CHOOSE_BUTTON_WIDTH, 20).build();
+
+		this.autoSwitchCountdownTextField = new WidgetBetterTextField("", 4);
+		TextFields.setValue(this.autoSwitchCountdownTextField, String.valueOf(this.autoSwitchCountdown));
+		this.autoSwitchDurationTextField = new WidgetBetterTextField("", 4);
+		TextFields.setValue(this.autoSwitchDurationTextField, String.valueOf(this.autoSwitchDuration));
+
+		this.depAutoSwitchCheckbox = new WidgetBetterCheckbox(0, 0, SQUARE_SIZE, SQUARE_SIZE, Text.translatable("gui.jsblock.dep_auto_switch_enabled"), checked -> {
+		});
+		this.depAutoSwitchCheckbox.setChecked(depAutoSwitchEnabled);
+
+		this.depAutoSwitchPreset = depAutoSwitchPreset == null ? "" : depAutoSwitchPreset;
+		this.depAutoSwitchPresetButton = Button.builder(Text.translatable("gui.jsblock.pids.listview.widget.choose_preset"),
+				button -> openPresetPicker(true)).bounds(0, 0, CHOOSE_BUTTON_WIDTH, 20).build();
+
+		this.depAutoSwitchCountdownTextField = new WidgetBetterTextField("", 4);
+		TextFields.setValue(this.depAutoSwitchCountdownTextField, String.valueOf(this.depAutoSwitchCountdown));
+		this.depAutoSwitchDurationTextField = new WidgetBetterTextField("", 4);
+		TextFields.setValue(this.depAutoSwitchDurationTextField, String.valueOf(this.depAutoSwitchDuration));
+		this.depAutoSwitchDurationTextField.setEditable(!depAutoSwitchUntilClose);
+
+		this.depAutoSwitchUntilCloseCheckbox = new WidgetBetterCheckbox(0, 0, SQUARE_SIZE, SQUARE_SIZE, Text.translatable("gui.jsblock.dep_auto_switch_until_close"), checked -> {
+		});
+		this.depAutoSwitchUntilCloseCheckbox.setChecked(depAutoSwitchUntilClose);
+		}
 
 	@Override
 	public void addConfigEntries(ListViewWidget listViewWidget) {
@@ -68,76 +97,135 @@ public abstract class PIDSScreen extends PIDSBlockConfigScreen {
 		addAutoSwitchEntries(listViewWidget);
 	}
 
-	protected void addAutoSwitchEntries(ListViewWidget listViewWidget) {
+	/**
+	 * Fork-only auto preset switching settings, appended after the 2.3 entries.
+	 */
+	/**
+	 * One row of the auto-switch section: a preset preview, its label, and a Choose button.
+	 *
+	 * <p>This replaced a free-text field the player had to type a preset id into — the same
+	 * information, but picked from the same preview list the main preset uses.</p>
+	 */
+	private void addPresetRow(ListViewWidget listViewWidget, Component label, Button chooseButton,
+							  java.util.function.Supplier<String> currentPreset) {
+		final ContentItem row = new ContentItem(label, new MappedWidget(chooseButton), 26);
+		row.setIconCallback((guiGraphics, startX, startY, width, height) -> PIDSPresetScreen.drawPIDSPreview(
+				JobanCustomResources.getPresetEntry(currentPreset.get()), guiGraphics, startX, startY, width, height, true));
+		listViewWidget.add(row);
+	}
+
+	/** @return the preset's display name, or the localised None when nothing is selected */
+	private static Component presetLabel(String id) {
+		final com.jsblock.data.PIDSPresetEntry entry = JobanCustomResources.getPresetEntry(id);
+		return entry == null ? Text.translatable("gui.jsblock.pids_preset_none") : Text.literal(entry.getName());
+	}
+
+	/** Opens the preview picker for one of the auto-switch presets. */
+	private void openPresetPicker(boolean departure) {
+		final String current = departure ? depAutoSwitchPreset : autoSwitchPreset;
+		Minecraft.getInstance().setScreen(new PIDSPresetScreen(pos1, current, selected -> {
+			if (departure) {
+				depAutoSwitchPreset = selected == null ? "" : selected;
+			} else {
+				autoSwitchPreset = selected == null ? "" : selected;
+			}
+		}).withPreviousScreen(this));
+	}
+
+	private void addAutoSwitchEntries(ListViewWidget listViewWidget) {
 		listViewWidget.addCategory(Text.translatable("gui.jsblock.arrival_switch_section"));
 
-		autoSwitchCheckbox = new WidgetBetterCheckbox(0, 0, WIDGET_COLUMN_WIDTH, SQUARE_SIZE,
-				Text.translatable("gui.jsblock.auto_switch_enabled"), checked -> updateAutoSwitchEnabledStates());
-		autoSwitchCheckbox.setChecked(autoSwitchEnabled);
-		autoSwitchCheckbox.setWidth(WIDGET_COLUMN_WIDTH);
-		listViewWidget.add(null, new MappedWidget(autoSwitchCheckbox));
+		addWidget(autoSwitchCheckbox);
+		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_enabled"), new MappedWidget(autoSwitchCheckbox));
 
-		autoSwitchPresetButton = UtilitiesClient.newButton(presetText(autoSwitchPreset),
-				button -> openPresetSelector(autoSwitchPreset, selected -> autoSwitchPreset = selected));
-		autoSwitchPresetButton.setWidth(150);
-		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_preset"), new MappedWidget(autoSwitchPresetButton));
+		addWidget(autoSwitchPresetButton);
+		addPresetRow(listViewWidget,
+				withCurrent("gui.jsblock.auto_switch_preset", autoSwitchPreset,
+						"gui.jsblock.auto_switch_preset_with_current"),
+				autoSwitchPresetButton, () -> autoSwitchPreset);
 
-		autoSwitchCountdownField = new IntegerTextField(0, 0, 80, 20, 0, 3600, autoSwitchCountdown);
-		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_countdown"), new MappedWidget(autoSwitchCountdownField));
+		autoSwitchCountdownTextField.setWidth(AUTO_SWITCH_NUMBER_WIDTH);
+		addWidget(autoSwitchCountdownTextField);
+		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_countdown"), new MappedWidget(autoSwitchCountdownTextField));
 
-		autoSwitchDurationField = new IntegerTextField(0, 0, 80, 20, 0, 3600, autoSwitchDuration);
-		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_duration"), new MappedWidget(autoSwitchDurationField));
+		autoSwitchDurationTextField.setWidth(AUTO_SWITCH_NUMBER_WIDTH);
+		addWidget(autoSwitchDurationTextField);
+		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_duration"), new MappedWidget(autoSwitchDurationTextField));
 
 		listViewWidget.addCategory(Text.translatable("gui.jsblock.departure_switch_section"));
 
-		depAutoSwitchCheckbox = new WidgetBetterCheckbox(0, 0, WIDGET_COLUMN_WIDTH, SQUARE_SIZE,
-				Text.translatable("gui.jsblock.dep_auto_switch_enabled"), checked -> updateAutoSwitchEnabledStates());
-		depAutoSwitchCheckbox.setChecked(depAutoSwitchEnabled);
-		depAutoSwitchCheckbox.setWidth(WIDGET_COLUMN_WIDTH);
-		listViewWidget.add(null, new MappedWidget(depAutoSwitchCheckbox));
+		addWidget(depAutoSwitchCheckbox);
+		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_enabled"), new MappedWidget(depAutoSwitchCheckbox));
 
-		depAutoSwitchPresetButton = UtilitiesClient.newButton(presetText(depAutoSwitchPreset),
-				button -> openPresetSelector(depAutoSwitchPreset, selected -> depAutoSwitchPreset = selected));
-		depAutoSwitchPresetButton.setWidth(150);
-		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_preset"), new MappedWidget(depAutoSwitchPresetButton));
+		addWidget(depAutoSwitchPresetButton);
+		addPresetRow(listViewWidget,
+				withCurrent("gui.jsblock.dep_auto_switch_preset", depAutoSwitchPreset,
+						"gui.jsblock.dep_auto_switch_preset_with_current"),
+				depAutoSwitchPresetButton, () -> depAutoSwitchPreset);
 
-		depAutoSwitchCountdownField = new IntegerTextField(0, 0, 80, 20, 0, 3600, depAutoSwitchCountdown);
-		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_countdown"), new MappedWidget(depAutoSwitchCountdownField));
+		depAutoSwitchCountdownTextField.setWidth(AUTO_SWITCH_NUMBER_WIDTH);
+		addWidget(depAutoSwitchCountdownTextField);
+		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_countdown"), new MappedWidget(depAutoSwitchCountdownTextField));
 
-		depAutoSwitchDurationField = new IntegerTextField(0, 0, 80, 20, 0, 3600, depAutoSwitchDuration);
-		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_duration"), new MappedWidget(depAutoSwitchDurationField));
+		depAutoSwitchDurationTextField.setWidth(AUTO_SWITCH_NUMBER_WIDTH);
+		addWidget(depAutoSwitchDurationTextField);
+		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_duration"), new MappedWidget(depAutoSwitchDurationTextField));
 
-		depAutoSwitchUntilCloseCheckbox = new WidgetBetterCheckbox(0, 0, WIDGET_COLUMN_WIDTH, SQUARE_SIZE,
-				Text.translatable("gui.jsblock.dep_auto_switch_until_close"), checked -> updateAutoSwitchEnabledStates());
-		depAutoSwitchUntilCloseCheckbox.setChecked(depAutoSwitchUntilClose);
-		depAutoSwitchUntilCloseCheckbox.setWidth(WIDGET_COLUMN_WIDTH);
-		listViewWidget.add(null, new MappedWidget(depAutoSwitchUntilCloseCheckbox));
-
-		updateAutoSwitchEnabledStates();
-	}
-
-	private void updateAutoSwitchEnabledStates() {
-		if (depAutoSwitchUntilCloseCheckbox == null || depAutoSwitchDurationField == null) {
-			return;
-		}
-		final boolean untilClose = depAutoSwitchUntilCloseCheckbox.selected();
-		depAutoSwitchDurationField.active = !untilClose;
-		depAutoSwitchDurationField.setEditable(!untilClose);
+		addWidget(depAutoSwitchUntilCloseCheckbox);
+		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_until_close"), new MappedWidget(depAutoSwitchUntilCloseCheckbox));
 	}
 
 	@Override
-	protected void captureAll() {
-		super.captureAll();
-		if (autoSwitchCheckbox == null) {
-			return;
-		}
+	public void tick() {
+		super.tick();
 
-		autoSwitchEnabled = autoSwitchCheckbox.selected();
-		autoSwitchCountdown = parseInteger(autoSwitchCountdownField, 10);
-		autoSwitchDuration = parseInteger(autoSwitchDurationField, 10);
-		depAutoSwitchEnabled = depAutoSwitchCheckbox.selected();
-		depAutoSwitchCountdown = parseInteger(depAutoSwitchCountdownField, 10);
-		depAutoSwitchDuration = parseInteger(depAutoSwitchDurationField, 10);
-		depAutoSwitchUntilClose = depAutoSwitchUntilCloseCheckbox.selected();
+		autoSwitchCountdownTextField.tick();
+		autoSwitchDurationTextField.tick();
+		depAutoSwitchCountdownTextField.tick();
+		depAutoSwitchDurationTextField.tick();
+	}
+
+	protected boolean isAutoSwitchEnabled() {
+		return autoSwitchCheckbox.selected();
+	}
+
+	protected String getAutoSwitchPreset() {
+		return autoSwitchPreset;
+	}
+
+	protected int getAutoSwitchCountdown() {
+		return parseInteger(autoSwitchCountdownTextField, 10);
+	}
+
+	protected int getAutoSwitchDuration() {
+		return parseInteger(autoSwitchDurationTextField, 10);
+	}
+
+	protected boolean isDepAutoSwitchEnabled() {
+		return depAutoSwitchCheckbox.selected();
+	}
+
+	protected String getDepAutoSwitchPreset() {
+		return depAutoSwitchPreset;
+	}
+
+	protected int getDepAutoSwitchCountdown() {
+		return parseInteger(depAutoSwitchCountdownTextField, 10);
+	}
+
+	protected int getDepAutoSwitchDuration() {
+		return parseInteger(depAutoSwitchDurationTextField, 10);
+	}
+
+	protected boolean isDepAutoSwitchUntilClose() {
+		return depAutoSwitchUntilCloseCheckbox.selected();
+	}
+
+	private static int parseInteger(WidgetBetterTextField textField, int fallback) {
+		try {
+			return Integer.parseInt(textField.getValue().trim());
+		} catch (NumberFormatException e) {
+			return fallback;
+		}
 	}
 }
