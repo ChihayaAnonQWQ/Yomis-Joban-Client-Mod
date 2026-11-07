@@ -15,6 +15,15 @@ public class PIDSPreset {
     /** The key this preset is registered under in {@code JobanCustomResources.PIDSPresets}. */
     public String id;
     public ResourceLocation image;
+    /**
+     * Preview texture for the preset picker.
+     *
+     * <p>JCM 2.x lets a pack ship a separate thumbnail; when it does not, the full background is
+     * used instead so every preset still has something to show. {@link #fromJson} reads the
+     * optional {@code thumbnail} key and the constructor seeds it from {@code image} for the
+     * built-in presets, which have no JSON entry of their own.</p>
+     */
+    public ResourceLocation thumbnail;
     public Integer color;
     public String font;
     private Int2IntArrayMap carLengthColorMap;
@@ -134,6 +143,9 @@ public class PIDSPreset {
 
     public PIDSPreset(ResourceLocation image, boolean showWeather, boolean showClock, boolean customTextPushArrival, boolean[] visibility, Integer color, String font, Int2IntArrayMap carLengthColorMap) {
         this.image = image;
+        /* Default the preview to the background: a preset without an explicit thumbnail still
+           has a usable preview, and the built-in presets never go through fromJson(). */
+        this.thumbnail = image;
         this.showWeather = showWeather;
         this.showClock = showClock;
         this.visibility = visibility;
@@ -180,6 +192,11 @@ public class PIDSPreset {
         final ResourceLocation background = element.getAsJsonObject().has("background")
                 ? new ResourceLocation(element.getAsJsonObject().get("background").getAsString())
                 : null;
+        /* Optional separate preview for the preset picker. Absent (or null) falls back to the
+           background, so packs written before this key existed keep a usable preview. */
+        final ResourceLocation thumbnail = presetObject.has("thumbnail") && !presetObject.get("thumbnail").isJsonNull()
+                ? new ResourceLocation(presetObject.get("thumbnail").getAsString())
+                : background;
 
         Int2IntArrayMap carLengthColorMap = null;
 
@@ -206,6 +223,7 @@ public class PIDSPreset {
             }
         }
         final PIDSPreset preset = new PIDSPreset(background, showWeather, showClock, customTextPushArrival, hideRowArray, color, fonts, carLengthColorMap);
+        preset.thumbnail = thumbnail;
         /* Optional component-based layout. A preset without a "components" array keeps
            layout == null and is drawn by the built-in renderers as before. */
         if (element.isJsonObject()) {

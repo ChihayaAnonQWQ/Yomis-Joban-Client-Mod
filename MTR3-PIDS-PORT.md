@@ -2848,3 +2848,72 @@ false 时渲染器不会创建/提交实例，`create()+render()` 仍在渲染�
 6. **实机确认项**：首帧不再闪空、异步后翻牌音效/动画仍按预期、双面面板两面内容不串、
    资源重载后画布释放正常。无头检查只能覆盖录制/重放、线程门和状态快照，GL/FBO 与真实
    帧时序仍需进游戏看。
+
+### 4.24 AmberUI 与列表式 PIDS 配置界面（2.10）
+
+三块 PIDS 的配置界面原来是手写的三份滚动画布：各自计算行位置、各自画滚动条、各自复制一份
+"自定义信息 / 隐藏行" 的逻辑。投影仪那块最糟 —— 2.7 给它补自定义信息时又抄了一遍，离再次丢失只差一步。
+
+JCM 2.3 把这些界面建在 **AmberUI**（它自己的 GUI 工具库）上，界面本身只剩一个构造函数加一个 `onSave`。
+本轮把 AmberUI 移植进来，界面重建在它上面：
+
+| 类 | 行数 | 角色 |
+|---|---|---|
+| `PIDSBlockConfigScreen` | 261 | 所有 PIDS 共用的抽象列表界面：预设、月台筛选、可选的隐藏月台号开关、自定义信息 ×N、隐藏行 ×N |
+| `PIDSScreen` | 143 | JCM 2.3 的条目 + **YJCM 专属的自动切换**（到达/出发各一组，共 2 个分区标题 + 9 个控件）|
+| `PIDSPresetScreen` | 188 | 缩略图选择页：网格、缩略图、名称，点选回填 `presetId` |
+| `JobanPIDSConfigScreen` | 61 | 1A / LCD 的薄子类 |
+| `RVPIDSConfigScreen` | 59 | RV / SIL 的薄子类（多一个隐藏月台号）|
+| `PIDSProjectorScreen` | 115 | 投影仪：预设 + 7 个数字框（偏移/旋转/缩放）+ 信息/隐藏行/隐藏月台号 |
+
+合计 **827 行**，替换掉原来 374 + 391 + 277 = **1042 行**手写界面，且新增了缩略图选择。
+
+#### 移植范围与 MTR 4 → MTR 3 映射
+
+AmberUI 取自 JCM 2.3 的 MIT 源码（`com.lx862.amberui`，24 个类），改包名为 `com.jsblock.amberui`。
+源代码按 MTR 4 的映射层写，MTR 3.6.3 没有这些类，逐项替换：
+
+| 源（MTR 4） | 目标（MTR 3 / 原版） |
+|---|---|
+| `ScreenExtension` | `mtr.mappings.ScreenMapper`（extends 原版 `Screen`）|
+| `ButtonWidgetExtension` | 原版 `Button` |
+| `CheckboxWidgetExtension` | `mtr.screen.WidgetBetterCheckbox` |
+| `TextFieldWidgetExtension` | `mtr.screen.WidgetBetterTextField` |
+| `Text` / `MutableText` | `Component` / `MutableComponent` |
+| `TextCase` | 无对应物，改用普通字符串 + 长度上限 |
+| `MinecraftClient` | `Minecraft.getInstance()` |
+| `RenderSystem` | `com.mojang.blaze3d.systems.RenderSystem` |
+
+`ListViewWidget` 自带滚动（替代我们手写的滚动条与 `contentHeight/maxScroll` 逻辑）。
+
+#### 保留的 YJCM 功能（逐项）
+
+- 到达自动切换：启用 / 预设 / 倒计时 / 时长
+- 出发自动切换：启用 / 预设 / 倒计时 / 时长 / 直到关闭
+- 自定义信息（逐行）、隐藏行（逐行）
+- 隐藏月台号（RV / 投影仪）
+- 月台多选筛选（沿用 `mtr.screen.PIDSConfigScreen.getPlatformFilterButton`）
+- 投影仪 7 个数字框
+- 保存仍走原有的 `PacketClient.send*C2S`，网络包格式未改
+
+#### 缩略图字段
+
+`PIDSPreset` 之前只读 `background`，**不读 `thumbnail`**。本轮补上：
+
+- 新增 `public ResourceLocation thumbnail`，构造时默认等于 `image`
+- `fromJson` 读 `thumbnail`，缺省回退 `background`
+- 选择页优先用 `thumbnail`，没有就用 `background`，再没有画占位色块
+- `PIDSPresetCheck` 增加两条断言：显式 thumbnail 生效、缺失时回退 background
+
+#### 语言键
+
+沿用现有 `gui.jsblock.*` 命名，补齐中英两份（选择预设、自定义信息、隐藏行、隐藏月台号、保存、取消、分区标题等），
+没有引入 JCM 2.3 的 `pids.listview.*` 体系。
+
+#### 验证与已知限制
+
+- `gradle build` 通过；`tools/run-pids-check.ps1` → `RESULT: ALL CHECKS PASSED`；`PIDSPresetCheck` 的 thumbnail 断言通过
+- **界面本身无法无头验证**（需要真实 MC 客户端），必须实机逐项确认：三种方块的界面能打开、分区齐全、
+  预设选择页能点选回填、保存后生效、投影仪 7 个数字框能改
+- AmberUI 是**改编**而非逐字移植：`AnimatedScreen` 的动画、`WidgetHost` 的焦点管理与原版有细微差异，
+  滚动惯性也由 `ListViewWidget` 自己的实现决定

@@ -1,6 +1,6 @@
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.10
 
-> 本轮不发布：`gradle.properties` 的版本号仍是 `1.2.12-JSPIDS-2.9`，留到发布提交再升。
+> 2.10 包含两组改动：脚本执行移出渲染线程（§4.23），以及 AmberUI 列表界面（§4.24）。
 
 ## Compatible MTR Version
 MTR
@@ -72,6 +72,50 @@ What remains is recorded in `MTR3-PIDS-PORT.md` §4.23: true zero-copy replay, a
 cross-world sweep, moving the second half's first `render()` off the first frame, asynchronous
 pixelation, and `Text.measureWidth()` — the one script-visible API that still reads the game font
 from the script thread.
+
+MTR
+
+## The PIDS config screens are list screens now, and every preset has a preview
+
+The three PIDS configuration screens were three copies of the same hand-laid-out scroll view:
+each one recomputed row positions, drew its own scrollbar, and kept its own copy of the
+message/hidden-row plumbing. The projector was the worst of them — it had grown its own copy of
+the custom-message fields after 2.7 and was one edit away from losing them again.
+
+This round ports **AmberUI** (JCM's MIT-licensed GUI toolkit, 24 classes) into
+`com.jsblock.amberui` and rebuilds the screens on top of it:
+
+| Class | Role |
+|---|---|
+| `PIDSBlockConfigScreen` | abstract list screen shared by every PIDS block: preset, platform filter, optional platform-number switch, custom messages ×N, hidden rows ×N |
+| `PIDSScreen` | adds YJCM's arrival / departure automatic preset switching |
+| `PIDSPresetScreen` | thumbnail grid; a click writes the preset id back to the screen that opened it |
+| `JobanPIDSConfigScreen` | 61 lines: constructor + packet, was 374 |
+| `RVPIDSConfigScreen` | 59 lines: constructor + packet + Hide Platform Number, was 391 |
+| `PIDSProjectorScreen` | 115 lines: preset, 7 numeric fields, messages, hidden rows, Hide Platform Number, was 277 |
+
+The projector's custom-message and hidden-row fields are wired again — the 2.7 fix is not
+regressed.
+
+**Preset previews.** `PIDSPreset` now reads an optional `thumbnail` key and falls back to
+`background`, and the built-in presets seed it from their background texture. The picker shows
+`thumbnail`, then `background`, then a flat placeholder, so a pack written before the key existed
+still has a preview.
+
+**AmberUI port.** The source is MTR 4's `org.mtr.mapping.*`; MTR 3.6.3 has none of those classes.
+The port replaces screens with `ScreenMapper`, widgets with `AbstractWidget` / `Button` /
+`WidgetBetterTextField` / `WidgetBetterCheckbox`, `GraphicsHolder`+`GuiDrawing` with
+`GuiGraphics`, text with `Component`/`FormattedCharSequence`, and scissor stacks with
+`GuiGraphics.enableScissor`. `MappedWidget`, the list widgets and `SavableScreen`'s close hook
+were the files that had to change shape rather than just names; the details are in
+`MTR3-PIDS-PORT.md` §4.24.
+
+```
+gradle build                 → BUILD SUCCESSFUL
+tools\run-pids-check.ps1     → RESULT: ALL CHECKS PASSED   (includes 3 new thumbnail assertions)
+```
+
+The GUI itself cannot be checked headlessly; the in-game checklist is in §4.24 and the README.
 
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.9
 
