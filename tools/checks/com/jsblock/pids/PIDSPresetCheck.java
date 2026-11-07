@@ -39,11 +39,73 @@ public final class PIDSPresetCheck {
 
 		failures += checkShippedPresets(args.length > 0 ? args[0] : DEFAULT_RESOURCE);
 		failures += checkMalformedPresetIsSurvivable();
+		failures += checkThumbnailFallback();
 		failures += checkRowMapping();
 
 		System.out.println();
 		System.out.println(failures == 0 ? "RESULT: ALL CHECKS PASSED" : "RESULT: " + failures + " FAILURE(S)");
 		System.exit(failures == 0 ? 0 : 1);
+	}
+
+	/**
+	 * Checks that a shipped preset's {@code thumbnail} matches its {@code thumbnail} key, and
+	 * falls back to {@code background} when the key is absent.
+	 */
+	private static int checkShippedThumbnail(String id, JsonObject json, PIDSPreset preset) {
+		final String expected;
+		if (json.has("thumbnail") && !json.get("thumbnail").isJsonNull()) {
+			expected = json.get("thumbnail").getAsString();
+		} else if (json.has("background") && !json.get("background").isJsonNull()) {
+			expected = json.get("background").getAsString();
+		} else {
+			return 0;
+		}
+
+		if (preset.thumbnail != null && preset.thumbnail.toString().equals(expected)) {
+			return 0;
+		}
+		System.out.println("FAIL " + id + ": thumbnail = " + preset.thumbnail + ", expected " + expected);
+		return 1;
+	}
+
+	/**
+	 * The preset picker draws {@code thumbnail}, then {@code image}. These three cases pin the
+	 * JSON contract: an explicit thumbnail wins, a missing one falls back to the background, and
+	 * a preset with neither leaves both null so the picker can draw its placeholder.
+	 */
+	private static int checkThumbnailFallback() {
+		System.out.println();
+		System.out.println("== preset thumbnail fallback ==");
+		int failures = 0;
+
+		failures += expectThumbnail("explicit thumbnail",
+				"{\"id\":\"__check_thumb\",\"background\":\"jsblock:textures/bg.png\","
+						+ "\"thumbnail\":\"jsblock:textures/thumb.png\"}",
+				"jsblock:textures/thumb.png");
+		failures += expectThumbnail("missing thumbnail falls back to background",
+				"{\"id\":\"__check_thumb_fallback\",\"background\":\"jsblock:textures/bg.png\"}",
+				"jsblock:textures/bg.png");
+		failures += expectThumbnail("no background and no thumbnail",
+				"{\"id\":\"__check_thumb_none\"}",
+				null);
+
+		return failures;
+	}
+
+	private static int expectThumbnail(String label, String json, String expected) {
+		try {
+			final PIDSPreset preset = PIDSPreset.fromJson(new JsonParser().parse(json));
+			final String actual = preset.thumbnail == null ? null : preset.thumbnail.toString();
+			if (expected == null ? actual == null : expected.equals(actual)) {
+				System.out.println("OK   " + label + " -> " + actual);
+				return 0;
+			}
+			System.out.println("FAIL " + label + " -> expected " + expected + ", actual " + actual);
+			return 1;
+		} catch (Exception e) {
+			System.out.println("FAIL " + label + " threw " + e);
+			return 1;
+		}
 	}
 
 	/**
@@ -163,8 +225,10 @@ public final class PIDSPresetCheck {
 					System.out.println("OK   " + id
 							+ "\n       canvas     = " + preset.layout.getDesignWidth() + " x " + preset.layout.getDesignHeight()
 							+ "\n       background = " + preset.image
+							+ "\n       thumbnail  = " + preset.thumbnail
 							+ "\n       font       = " + preset.font
 							+ "\n       components = " + preset.layout.describeComponents());
+					failures += checkShippedThumbnail(id, json, preset);
 				} catch (Exception e) {
 					System.out.println("FAIL " + id + ": " + e);
 					failures++;

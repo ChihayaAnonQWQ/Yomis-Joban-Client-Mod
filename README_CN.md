@@ -66,6 +66,10 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 预设通过 `Files` 把状态写进磁盘、投影仪与它的瞄准线、以及几个 PIDS 配置界面。
 日志见 `MTR3-PIDS-PORT.md` 的 §7.8 与 §7.9。
 
+**这一轮重建的 PIDS 配置界面还没有在游戏里打开过。** 它们能编译、无头检查通过，但列表交互
+（缩略图、滚动、焦点、保存/取消）不在无头检查能覆盖的范围内；逐条清单见
+`MTR3-PIDS-PORT.md` 的 §4.24.6。
+
 **Fabric 侧现在也在 Fabric 实例里启动过了。** 在 Fabric 1.20.1 实例上可以启动、正常使用（维护者实测）。
 `gradle build` 能编出它，合并步骤把它放进同一颗 jar，产物在：
 
@@ -125,9 +129,9 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 
 | 方块 | 界面 |
 |---|---|
-| `jsblock:pids_1a`、`jsblock:pids_4`（LCD PIDS） | Joban PIDS 界面：显示格式（预设）、月台筛选、逐行信息、逐行隐藏、自动切换（发车另有一套自动切换） |
+| `jsblock:pids_1a`、`jsblock:pids_4`（LCD PIDS） | Joban PIDS 界面：显示格式（预设，从缩略图选择界面里挑）、月台筛选、逐行自定义信息 + 隐藏行、自动切换（发车另有一套自动切换） |
 | `jsblock:pids_rv`、`jsblock:pids_rv_sil`、`jsblock:pids_rv_sil_2` | RV PIDS 界面，字段相同，另外多一个「隐藏月台号」 |
-| `jsblock:pids_projector` | 投影仪自己的界面：显示格式、偏移、旋转、缩放、逐行信息、逐行隐藏、隐藏月台号、月台筛选 |
+| `jsblock:pids_projector` | 投影仪自己的界面：显示格式（缩略图选择）、偏移、旋转、缩放、逐行信息、逐行隐藏、隐藏月台号、月台筛选 |
 | 模组本身 | `ConfigScreen` —— Fabric 从 ModMenu 进，Forge 从模组列表进。客户端设置都在这里，包括脚本调试开关 |
 
 > **不是每块板子都能给自定义信息。** 上游 JCM 2.x 自己也有几个 PIDS 界面不提供信息输入框 —— MTR 4 上一样 ——
@@ -414,10 +418,17 @@ const raining = MinecraftClient.worldIsRaining();     // 世界状态
 
 ### 配置界面
 
-预设选择框原本画在它的输入框**下面**，盖住了下面几行，而那几行又把标签画在它上面 —— 结果两边都读不了。
-现在它画在输入框**旁边**，带背景和边框，就是下图这样。两个 PIDS 配置界面共用这个控件，所以两边一起修好了。
+三个 PIDS 配置界面现在是一套界面，建立在随包移植的 AmberUI（`com.jsblock.amberui`）上。每个界面
+都是分区、可滚动的列表：预设行（点开新的缩略图选择界面）、MTR 的月台筛选、板子有的话再加「隐藏
+月台号」、每个到达行一组「自定义信息 + 隐藏行」，底部是保存 / 取消。1A/LCD 与 RV 界面还带 YJCM
+的到站、发车两套自动切换；投影仪则多出偏移、旋转、缩放七个数字框，并且保留自己的自定义信息与
+隐藏行字段。
 
-![预设列表画在输入框旁边，下面的行标签保持可读](docs/pids-config-preset-list.png)
+预设选择界面优先画 `thumbnail`，资源包没提供就画 `background`，两者都没有时画深灰占位块。点一格
+就把预设 id 写回原界面并返回。打开预设选择界面或 MTR 的月台列表再返回，已经输入的文字不会丢。
+
+GUI 无法无头验证，逐条交互检查清单见 [MTR3-PIDS-PORT.md](MTR3-PIDS-PORT.md) 的 §4.24.6；CI 覆盖的
+是构建与无头检查。
 
 ### 已知问题
 

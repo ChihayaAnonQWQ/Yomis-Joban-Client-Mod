@@ -68,6 +68,11 @@ the defects fixed below came from: the script pipeline drawing several resource 
 once, a preset writing its own state to disk through `Files`, the projector and its aim lines, and the
 PIDS config screens. `MTR3-PIDS-PORT.md` sections 7.8 and 7.9 are the logs from those runs.
 
+**The rebuilt PIDS configuration screens in this round have not been opened in game yet.** They
+compile, the headless checks pass, and the layout code is covered by those checks only as far as
+compilation goes; the list interaction (thumbnails, scrolling, focus, save/cancel) is on the
+in-game checklist in §4.24.6 of `MTR3-PIDS-PORT.md`.
+
 **The Fabric side has been launched in a Fabric instance as well.** It starts and works normally in a
 Fabric 1.20.1 instance (a maintainer's run). `gradle build` compiles it, the merge puts it in the same
 jar, and the artifacts are:
@@ -131,9 +136,9 @@ Each row is expanded further down; this is the map.
 
 | Block | Screen |
 |---|---|
-| `jsblock:pids_1a`, `jsblock:pids_4` (the LCD PIDS) | the Joban PIDS screen: display format (preset), platform filter, per-row text, per-row hide, auto-switch (and a second auto-switch for departures) |
+| `jsblock:pids_1a`, `jsblock:pids_4` (the LCD PIDS) | the Joban PIDS screen: display format (preset, chosen from a thumbnail picker), platform filter, per-row custom text + hide row, auto-switch (and a second auto-switch for departures) |
 | `jsblock:pids_rv`, `jsblock:pids_rv_sil`, `jsblock:pids_rv_sil_2` | the RV PIDS screen, the same fields plus hide-platform-numbers |
-| `jsblock:pids_projector` | the projector's own screen: display format, offset, rotation, scale, per-row text, per-row hide, hide-platform-numbers, platform filter |
+| `jsblock:pids_projector` | the projector's own screen: display format (thumbnail picker), offset, rotation, scale, per-row text, per-row hide, hide-platform-numbers, platform filter |
 | the mod itself | `ConfigScreen` -- from ModMenu on Fabric, from the mods list on Forge. The client settings live here, including the script debug switch |
 
 > **Not every board can be given its own text.** A few of JCM 2.x's own PIDS screens do not offer the
@@ -442,12 +447,21 @@ If a resource pack's PIDS does not work, send me the **game version**, the **gam
 
 ### Config screen
 
-The preset selection box was drawn under its text field and covered the rows below, while
-those rows drew their labels on top of it — so neither could be read. It is drawn **beside**
-the field now, with a background and a border, which is what the screenshot below shows.
-Both PIDS config screens share the widget, so both are fixed.
+The three PIDS configuration screens are one family now, built on the bundled AmberUI port
+(`com.jsblock.amberui`). Each is a sectioned, scrolling list: a preset row that opens the new
+thumbnail picker, MTR's platform filter, the platform-number switch where the board has one, one
+custom-message + hide-row pair per arrival slot, and Save / Cancel at the bottom. The 1A/LCD and
+RV screens add YJCM's arrival and departure automatic preset switching; the projector adds its
+seven placement numbers (offset, rotation, scale) and keeps its own custom-message and hidden-row
+fields.
 
-![The PIDS preset list drawn beside its field, with the row labels left readable](docs/pids-config-preset-list.png)
+The preset picker shows `thumbnail` when a pack supplies one, the background otherwise, and a
+flat placeholder when it has neither. Clicking a tile writes the preset id back and returns to
+the screen. Opening the picker or MTR's platform list does not discard text that has already been
+typed.
+
+The GUI can't be verified headlessly, so the interaction checklist is in §4.24.6 of
+[MTR3-PIDS-PORT.md](MTR3-PIDS-PORT.md); the build and headless checks are what CI covers.
 
 ### Known issues
 
