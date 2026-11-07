@@ -69,14 +69,26 @@ public final class ScriptSound {
 			}
 			final Minecraft minecraft = Minecraft.getInstance();
 			if (minecraft != null) {
-				((TickableSoundInstance) soundInstance).attach(minecraft);
+				final Runnable start = () -> ((TickableSoundInstance) soundInstance).attach(minecraft);
+				/* A script may now run on its own thread; the sound engine is client-thread only. */
+				if (com.mojang.blaze3d.systems.RenderSystem.isOnRenderThread()) {
+					start.run();
+				} else {
+					minecraft.execute(start);
+				}
 			}
 		}
 
 		/** {@code SoundManager.stop(instance)} -- stops it, leaving the script free to play it again. */
 		public void stop(Object soundInstance) {
 			if (soundInstance instanceof TickableSoundInstance) {
-				((TickableSoundInstance) soundInstance).detach();
+				final Runnable stop = () -> ((TickableSoundInstance) soundInstance).detach();
+				final Minecraft minecraft = Minecraft.getInstance();
+				if (minecraft != null && !com.mojang.blaze3d.systems.RenderSystem.isOnRenderThread()) {
+					minecraft.execute(stop);
+				} else {
+					stop.run();
+				}
 			}
 		}
 
@@ -131,7 +143,13 @@ public final class ScriptSound {
 						SoundInstance.createUnseededRandom(), false, 0,
 						relative ? SoundInstance.Attenuation.NONE : SoundInstance.Attenuation.LINEAR,
 						x, y, z, relative);
-				minecraft.getSoundManager().play(instance);
+				final Runnable start = () -> minecraft.getSoundManager().play(instance);
+				/* Off-thread scripts: the sound engine is client-thread only. */
+				if (com.mojang.blaze3d.systems.RenderSystem.isOnRenderThread()) {
+					start.run();
+				} else {
+					minecraft.execute(start);
+				}
 			} catch (Exception e) {
 				com.jsblock.Joban.LOGGER.warn("[Joban Client] PIDS script could not play sound {}: {}",
 						location, e.toString());

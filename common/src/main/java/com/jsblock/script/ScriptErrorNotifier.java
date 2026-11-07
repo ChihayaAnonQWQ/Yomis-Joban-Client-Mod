@@ -16,7 +16,8 @@ import java.util.List;
  */
 public final class ScriptErrorNotifier {
 
-	private final List<Runnable> queue = new ArrayList<>();
+	private final java.util.concurrent.ConcurrentLinkedQueue<Runnable> queue =
+			new java.util.concurrent.ConcurrentLinkedQueue<>();
 
 	/** Queues a notification for the next {@link #flush()}. */
 	public void queue(Runnable callback) {
@@ -42,9 +43,8 @@ public final class ScriptErrorNotifier {
 		if (queue.isEmpty()) {
 			return;
 		}
-		final List<Runnable> pending = new ArrayList<>(queue);
-		queue.clear();
-		for (Runnable callback : pending) {
+		Runnable callback;
+		while ((callback = queue.poll()) != null) {
 			try {
 				callback.run();
 			} catch (Exception e) {

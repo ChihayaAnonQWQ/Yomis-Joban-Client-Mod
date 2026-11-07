@@ -97,12 +97,16 @@ public class ScriptRenderContext {
 
 	/**
 	 * When set, {@link #draw(Object)} records what would have been drawn instead of touching
-	 * Minecraft's renderer. Used by the headless API check, which runs real preset scripts
-	 * through the real wrappers without a game.
+	 * Minecraft's renderer.
+	 *
+	 * <p>Two callers set it. The headless API check uses {@link #dryRun} to run real preset
+	 * scripts through the real wrappers without a game, and the asynchronous engine uses
+	 * {@link #recording} to capture a frame's calls on the script thread so the render thread can
+	 * replay them; see {@link RecordedCall}.</p>
 	 */
-	private final boolean dryRun;
-	/** Descriptions of the calls recorded in dry-run mode. */
-	private final List<String> recordedCalls;
+	private final boolean recording;
+	/** The calls captured while {@link #recording} is set, in call order. */
+	private final List<RecordedCall> recordedCalls;
 
 	/**
 	 * Whether this frame's draw calls should also be described into {@link #traceCalls}.
@@ -123,7 +127,7 @@ public class ScriptRenderContext {
 
 	private ScriptRenderContext(PoseStack matrices, MultiBufferSource vertexConsumers,
 								MultiBufferSource.BufferSource immediate, Direction facing, int light,
-								int panelWidth, int panelHeight, float scriptScale, boolean dryRun) {
+								int panelWidth, int panelHeight, float scriptScale, boolean recording) {
 		this.matrices = matrices;
 		this.vertexConsumers = vertexConsumers;
 		this.immediate = immediate;
@@ -132,9 +136,9 @@ public class ScriptRenderContext {
 		this.panelWidth = panelWidth;
 		this.panelHeight = panelHeight;
 		this.scriptScale = scriptScale;
-		this.dryRun = dryRun;
-		this.recordedCalls = dryRun ? new ArrayList<>() : null;
-		this.tracing = !dryRun && tracingEnabled();
+		this.recording = recording;
+		this.recordedCalls = recording ? new ArrayList<>() : null;
+		this.tracing = !recording && tracingEnabled();
 		this.traceCalls = tracing ? new ArrayList<>() : null;
 	}
 
@@ -190,9 +194,67 @@ public class ScriptRenderContext {
 		return context;
 	}
 
+	/**
+	 * Builds a context that captures a frame's draw calls for the asynchronous engine.
+	 *
+	 * <p>Only immutable frame data is held: the panel size, the facing and light the replay will
+	 * use, and the frame's {@link com.jsblock.pids.PIDSContext} for {@code ctx.parseComponent}.
+	 * There are no matrices, vertex sources or graphics because nothing is drawn on this context;
+	 * the render thread replays the captured calls into a live one.</p>
+	 *
+	 * <p>Safe to hand to a script thread: this object is written by that thread alone until the
+	 * completed list is published through {@code ScriptInstance.lastCalls}.</p>
+	 */
+	public static ScriptRenderContext recording(int panelWidth, int panelHeight, float scriptScale,
+												Direction facing, int light,
+												com.jsblock.pids.PIDSContext componentContext) {
+		final ScriptRenderContext context = new ScriptRenderContext(
+				null, null, null, facing, light, panelWidth, panelHeight, scriptScale, true);
+		context.componentContext = componentContext;
+		return context;
+	}
+
 	/** @return the descriptions recorded in dry-run mode, in call order. */
 	public List<String> recordedCalls() {
-		return recordedCalls == null ? Collections.emptyList() : Collections.unmodifiableList(recordedCalls);
+		if (recordedCalls == null) {
+			return Collections.emptyList();
+		}
+		final List<String> descriptions = new ArrayList<>(recordedCalls.size());
+		for (RecordedCall call : recordedCalls) {
+			descriptions.add(call.describe());
+		}
+		return Collections.unmodifiableList(descriptions);
+	}
+
+	/** @return whether this context captures draw calls instead of executing them. */
+	public boolean isRecording() {
+		return recording;
+	}
+
+	/**
+	 * @return the captured calls themselves, in call order, as an immutable snapshot.
+	 *
+	 * <p>The list is copied so that a later {@link #restartDrawCalls()} on a recording context
+	 * cannot change a list another thread is already holding.</p>
+	 */
+	public List<RecordedCall> recordedCallList() {
+		return recordedCalls == null ? Collections.emptyList() : List.copyOf(recordedCalls);
+	}
+
+	/**
+	 * Replays a captured frame into this (live) context, in order.
+	 *
+	 * <p>The depth stored in each call is used as-is, not recomputed: {@code setAutoZOrdering} and
+	 * {@code setZOrderStep} were applied when the frame was recorded, so replaying must not apply
+	 * the frame's call order to them a second time.</p>
+	 */
+	public void replay(List<RecordedCall> calls) {
+		if (calls == null) {
+			return;
+		}
+		for (RecordedCall call : calls) {
+			call.replay(this);
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -230,6 +292,11 @@ public class ScriptRenderContext {
 		drawCallIndex = 0;
 		if (traceCalls != null) {
 			traceCalls.clear();
+		}
+		/* The retry redraws the whole frame, so the failed attempt's partially-recorded calls must
+		   go too; otherwise a replay would draw the first attempt's prefix a second time. */
+		if (recordedCalls != null) {
+			recordedCalls.clear();
 		}
 	}
 
@@ -350,24 +417,44 @@ public class ScriptRenderContext {
 		final ScriptDrawCall drawCall = (ScriptDrawCall) call;
 		drawCall.validate();
 		final float z = autoZOrdering ? (float) (drawCallIndex++ * zOrderStep) : 0F;
-		if (dryRun) {
-			/* Record the depth this call would have used. Without this the dry run short-circuits
-			   before pushTransform, so every call describes itself as z=0 and the layer
-			   separation cannot be checked without launching the game. */
-			drawCall.z = z;
-			recordedCalls.add(drawCall.describe());
+		accept(drawCall, z);
+	}
+
+	/**
+	 * Records or draws one already-validated call at a fixed depth.
+	 *
+	 * <p>This is the single seam both the inline path and a replay go through. Recording it stores
+	 * a {@link RecordedCall} built from the builder's current field values; executing it keeps the
+	 * original code path, including the per-call statistics and the trace, untouched.</p>
+	 */
+	private void accept(ScriptDrawCall<?> drawCall, float z) {
+		drawCall.z = z;
+		if (recording) {
+			/* The depth is captured too: without it every recorded call would describe itself as
+			   z=0 and replay would stack everything at the same depth. */
+			recordedCalls.add(RecordedCall.of(drawCall, z));
 			return;
 		}
 		if (tracing) {
-			drawCall.z = z;
 			traceCalls.add(drawCall.describe());
 		}
-		/* Section C of the frame statistics: the geometry this call draws, here and now. In JCM
-		   2.x this is the replay of a queued call; in this port it happens inside the script's own
-		   call, which is why C is reported as a part of B rather than beside it. */
+		/* Section C of the frame statistics: the geometry this call draws, here and now. During a
+		   replay this is the queued call being executed, which is the same work JCM 2.x does in its
+		   replay pass. */
 		final long drawStart = PidsFrameStats.mark();
 		drawCall.draw(this, z);
 		PidsFrameStats.noteDrawCall(PidsFrameStats.mark() - drawStart);
+	}
+
+	/**
+	 * Replays one captured call, counting it in this context's call index.
+	 *
+	 * <p>Package-private: the only caller is {@link RecordedCall#replay(ScriptRenderContext)}, so a
+	 * replay cannot accidentally go through {@link #draw(Object)} and have its depth recomputed.</p>
+	 */
+	void acceptRecorded(ScriptDrawCall<?> drawCall, float z) {
+		drawCallIndex++;
+		accept(drawCall, z);
 	}
 
 	// ------------------------------------------------------------------
@@ -474,8 +561,13 @@ public class ScriptRenderContext {
 			throw new IllegalArgumentException("ctx.draw() was given no component");
 		}
 		final float z = autoZOrdering ? (float) (drawCallIndex++ * zOrderStep) : 0F;
-		if (dryRun) {
-			recordedCalls.add(component.describe());
+		acceptComponent(component, z);
+	}
+
+	/** The recording/execution seam for a parsed component; see {@link #accept}. */
+	private void acceptComponent(ScriptComponent component, float z) {
+		if (recording) {
+			recordedCalls.add(RecordedCall.ofComponent(component, z));
 			return;
 		}
 		if (tracing) {
@@ -496,5 +588,22 @@ public class ScriptRenderContext {
 			PidsFrameStats.noteDrawCall(PidsFrameStats.mark() - drawStart);
 			componentGraphics.matrices.popPose();
 		}
+	}
+
+	/**
+	 * Replays a captured component at its recorded depth.
+	 *
+	 * <p>The component object is the immutable parsed declaration; the frame data comes from this
+	 * context, which is why a record never keeps the {@code PIDSContext} of the frame it was made
+	 * in. On a recording context the component is captured again, which is what the round-trip
+	 * check uses.</p>
+	 */
+	void replayComponent(com.jsblock.pids.PIDSComponent component, String type, float z) {
+		drawCallIndex++;
+		if (recording) {
+			recordedCalls.add(new RecordedCall.ComponentCall(component, type, z));
+			return;
+		}
+		acceptComponent(new ScriptComponent(component, type, componentContext), z);
 	}
 }

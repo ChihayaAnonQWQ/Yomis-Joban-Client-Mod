@@ -116,4 +116,14 @@ public final class ScriptComponent {
 		return String.format("Component(type=%s pos=%s,%s size=%sx%s)",
 				type, x(), y(), width(), height());
 	}
+
+	/** @return the parsed component, for {@link RecordedCall} to capture by value. */
+	com.jsblock.pids.PIDSComponent component() {
+		return component;
+	}
+
+	/** @return the {@code component} key it was parsed from, for diagnostics and recording. */
+	String componentType() {
+		return type;
+	}
 }

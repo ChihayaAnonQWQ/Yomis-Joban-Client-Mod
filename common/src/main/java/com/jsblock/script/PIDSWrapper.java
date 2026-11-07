@@ -18,6 +18,19 @@ import java.util.List;
  * list is exposed through {@link Arrivals} / {@link Arrival}, which flatten MTR 3's
  * {@link ScheduleEntry} plus {@link PIDSData} lookups into the shape JCM 2.x scripts expect
  * from MTR 4's {@code ArrivalResponse}.</p>
+ *
+ * <h2>This object is an immutable snapshot, built on the render thread</h2>
+ * <p>It used to resolve route names, colours, numbers, station names, platform names and the
+ * calling pattern lazily, on each accessor call, from {@code ClientData} / {@code PIDSData}.
+ * That is no longer safe: the asynchronous engine hands this wrapper to a script thread while the
+ * render thread keeps writing those client caches. Every one of those values is therefore
+ * resolved in the constructor, which the renderer calls on the render thread, and stored in a
+ * final field. A script thread reads fields only — no {@code ClientData} map, no {@code PIDSData}
+ * lookup, no list that can be mutated under it.</p>
+ *
+ * <p>The public API is unchanged on purpose: the member names, signatures and return-value
+ * semantics a preset sees are identical. The only observable difference is that the values no
+ * longer change halfway through a frame.</p>
  */
 public class PIDSWrapper {
 
@@ -42,6 +55,13 @@ public class PIDSWrapper {
 	private final String[] customMessages;
 	private final boolean[] rowHidden;
 	private final List<ScheduleEntry> scheduleList;
+	/**
+	 * The panel's own station, resolved once when the wrapper is built.
+	 *
+	 * <p>Part of the immutable snapshot: see the class documentation. May be {@code null} when the
+	 * client's caches cannot name it, which is the same answer the lazy version gave.</p>
+	 */
+	private final StationInfo station;
 	private final Arrivals arrivals;
 	/** Whether this block is the panel's key half; see {@link #isKeyBlock()}. */
 	private final boolean keyBlock;
@@ -102,15 +122,69 @@ public class PIDSWrapper {
 		this.width = width;
 		this.height = height;
 		this.blockPos = blockPos;
-		this.platformIds = platformIds == null ? new ArrayList<>() : new ArrayList<>(platformIds);
+		this.platformIds = platformIds == null ? List.of() : List.copyOf(platformIds);
 		this.resolvedPlatformId = resolvedPlatformId;
-		this.customMessages = customMessages == null ? new String[0] : customMessages;
-		this.rowHidden = rowHidden == null ? new boolean[0] : rowHidden;
-		this.scheduleList = scheduleList == null ? new ArrayList<>() : new ArrayList<>(scheduleList);
+		this.customMessages = customMessages == null ? new String[0] : customMessages.clone();
+		this.rowHidden = rowHidden == null ? new boolean[0] : rowHidden.clone();
+		this.scheduleList = scheduleList == null ? List.of() : List.copyOf(scheduleList);
+		/* Everything below is resolved here, on the render thread, and never again. A script thread
+		   only ever reads the resulting finals; see the class documentation. */
+		this.station = resolveStation(blockPos, this.platformIds, resolvedPlatformId);
 		this.arrivals = new Arrivals(this.scheduleList, lenientArrivals);
 		this.keyBlock = keyBlock;
 		this.platformNumberHidden = platformNumberHidden;
 		this.lenientArrivals = lenientArrivals;
+	}
+
+	/**
+	 * The specialisation used by {@link #withLenientArrivals()}: it reuses the frame's already
+	 * resolved arrivals instead of reading the client caches again.
+	 */
+	private PIDSWrapper(PIDSWrapper source, boolean lenientArrivals) {
+		this.type = source.type;
+		this.rows = source.rows;
+		this.width = source.width;
+		this.height = source.height;
+		this.blockPos = source.blockPos;
+		this.platformIds = source.platformIds;
+		this.resolvedPlatformId = source.resolvedPlatformId;
+		this.customMessages = source.customMessages;
+		this.rowHidden = source.rowHidden;
+		this.scheduleList = source.scheduleList;
+		this.station = source.station;
+		this.arrivals = source.arrivals.withLenient(lenientArrivals);
+		this.keyBlock = source.keyBlock;
+		this.platformNumberHidden = source.platformNumberHidden;
+		this.lenientArrivals = lenientArrivals;
+	}
+
+	/**
+	 * Resolves the station the panel serves, exactly as the lazy version did: the renderer's
+	 * resolved platform first, then the nearest platform, then the first filtered platform whose
+	 * id actually names a station.
+	 */
+	private static StationInfo resolveStation(BlockPos blockPos, List<Long> platformIds, long resolvedPlatformId) {
+		long platformId = 0L;
+		if (resolvedPlatformId != 0L) {
+			final Station resolved = PIDSData.stationOf(resolvedPlatformId);
+			if (resolved != null) {
+				platformId = resolvedPlatformId;
+			}
+		}
+		if (platformId == 0L) {
+			final long closest = PIDSData.closestPlatformId(blockPos);
+			if (closest != 0L) {
+				final Station found = PIDSData.stationOf(closest);
+				if (found != null) {
+					platformId = closest;
+				}
+			}
+		}
+		if (platformId == 0L && !platformIds.isEmpty() && PIDSData.stationOf(platformIds.get(0)) != null) {
+			platformId = platformIds.get(0);
+		}
+		final Station station = PIDSData.stationOf(platformId);
+		return station == null ? null : new StationInfo(station);
 	}
 
 	/**
@@ -122,9 +196,12 @@ public class PIDSWrapper {
 	 * {@link ScriptEngine.Program#adoptLenientArrivals()}.</p>
 	 */
 	public PIDSWrapper withLenientArrivals() {
-		final PIDSWrapper copy = new PIDSWrapper(type, rows, width, height, blockPos, platformIds, customMessages,
-				rowHidden, scheduleList, keyBlock, platformNumberHidden, true, resolvedPlatformId);
-		return copy;
+		if (lenientArrivals) {
+			return this;
+		}
+		/* Copy constructor: the frame's arrival snapshots are reused, so this cannot observe a
+		   different client cache than the wrapper it was derived from. */
+		return new PIDSWrapper(this, true);
 	}
 
 	/** @return the platform the renderer resolved for this panel, or {@code 0} when it had none. */
@@ -300,10 +377,7 @@ public class PIDSWrapper {
 	 * this method did before it was passed an answer, so nothing that worked stops working.</p>
 	 */
 	public StationInfo station() {
-		final long api = PidsFrameStats.apiStart();
-		final Station station = PIDSData.stationOf(primaryPlatformId());
-		PidsFrameStats.apiEnd(api);
-		return station == null ? null : new StationInfo(station);
+		return station;
 	}
 
 	/**
@@ -313,9 +387,6 @@ public class PIDSWrapper {
 	 * routed through the same resolution for the same reason.</p>
 	 */
 	public String stationName() {
-		final long api = PidsFrameStats.apiStart();
-		final Station station = PIDSData.stationOf(primaryPlatformId());
-		PidsFrameStats.apiEnd(api);
 		return station == null || station.name == null ? "" : station.name;
 	}
 
@@ -378,48 +449,6 @@ public class PIDSWrapper {
 		}
 	}
 
-	/**
-	 * The platform this panel is standing at.
-	 *
-	 * <p>MTR's own answer, from {@code IPIDS.TileEntityPIDS#getPlatformId}: the platform closest
-	 * to the block, with the block entity's {@code platformIds} not consulted at all.</p>
-	 *
-	 * <p>This used to answer {@code platformIds.get(0)} whenever that set was non-empty, and the
-	 * set is a <b>{@code Set<Long>}</b> — copying it into a list gives hash order, not anything
-	 * meaningful. For a panel that serves several platforms the id that happened to land first
-	 * often belongs to a station at the other end of the line, so {@code pids.station()} named
-	 * that station instead of the one the panel is at. HKR's route-map strip starts its three
-	 * stops from the current station, so it then drew the line's opening stations — and the
-	 * platform number, the "arriving at this station" wording and anything else keyed off the
-	 * current station were wrong in the same way.</p>
-	 *
-	 * <p>The set is still the fallback for the case MTR cannot answer: no platform near enough
-	 * for {@code getClosePlatformId} to pick one. The renderer's own resolution, when it has one,
-	 * is consulted before both — see {@link #station()}.</p>
-	 */
-	private long primaryPlatformId() {
-		if (resolvedPlatformId != 0) {
-			final Station resolved = PIDSData.stationOf(resolvedPlatformId);
-			if (resolved != null) {
-				return resolvedPlatformId;
-			}
-		}
-		final long closest = PIDSData.closestPlatformId(blockPos);
-		if (closest != 0) {
-			final Station found = PIDSData.stationOf(closest);
-			if (found != null) {
-				return closest;
-			}
-		}
-		/* Last resort, and only when the id actually names a station: an unresolvable id answers
-		   0, which is the "no station" answer a preset already has to cope with, rather than an
-		   unrelated station's name. */
-		if (!platformIds.isEmpty() && PIDSData.stationOf(platformIds.get(0)) != null) {
-			return platformIds.get(0);
-		}
-		return 0;
-	}
-
 	// ==================================================================
 	// Arrival list
 	// ==================================================================
@@ -459,11 +488,25 @@ public class PIDSWrapper {
 		private final boolean lenient;
 
 		Arrivals(List<ScheduleEntry> scheduleList, boolean lenient) {
-			this.arrivals = new ArrayList<>();
+			final List<Arrival> built = new ArrayList<>(scheduleList.size());
+			/* One cache for the whole list: four arrivals on the same service share one route
+			   snapshot, and one walk of its stops, instead of four. */
+			final java.util.Map<Long, RouteInfo> routeCache = new java.util.HashMap<>();
 			for (ScheduleEntry entry : scheduleList) {
-				this.arrivals.add(new Arrival(entry));
+				built.add(new Arrival(entry, routeCache));
 			}
+			this.arrivals = List.copyOf(built);
 			this.lenient = lenient;
+		}
+
+		private Arrivals(List<Arrival> arrivals, boolean lenient, boolean alreadyResolved) {
+			this.arrivals = arrivals;
+			this.lenient = lenient;
+		}
+
+		/** @return the same snapshot with a different past-the-end rule; no client data is read. */
+		Arrivals withLenient(boolean lenient) {
+			return lenient == this.lenient ? this : new Arrivals(arrivals, lenient, true);
 		}
 
 		/**
@@ -524,7 +567,7 @@ public class PIDSWrapper {
 				if (platformId == 0 || !seen.add(platformId)) {
 					continue;
 				}
-				final PlatformInfo info = arrival.platform();
+				final PlatformInfo info = arrival.platformView();
 				if (info != null) {
 					result.add(info);
 				}
@@ -544,6 +587,20 @@ public class PIDSWrapper {
 	 * circular state; MTR 3's {@link ScheduleEntry} only carries ids and a time, so the rest
 	 * is resolved through {@link PIDSData}.</p>
 	 */
+	/**
+	 * One upcoming train, resolved once when the wrapper is built.
+	 *
+	 * <h2>Why every getter is a field read</h2>
+	 * <p>This used to hold the MTR 3 {@code ScheduleEntry} and resolve each fact through
+	 * {@link PIDSData} on demand. That is fine while the render thread is the only caller, but the
+	 * asynchronous engine runs the script on its own thread, and {@code PIDSData} reads
+	 * {@code ClientData}'s maps — which the render thread is writing. Every value a script can see
+	 * is therefore resolved in the constructor, on the render thread, and stored in a final field.
+	 * A script thread only ever touches immutable snapshots.</p>
+	 *
+	 * <p>The names, signatures and meanings of the accessors are unchanged; a preset cannot tell
+	 * the difference except that the values no longer change under it mid-frame.</p>
+	 */
 	public static class Arrival {
 
 		/**
@@ -555,12 +612,93 @@ public class PIDSWrapper {
 		 * stay the default — a guarded preset cannot tell this object from a real train except
 		 * by the empty fields, and HKR's board turned it into a row of "not in service".</p>
 		 */
-		private static final Arrival ABSENT = new Arrival(null);
+		private static final Arrival ABSENT = new Arrival();
 
-		private final ScheduleEntry entry;
+		/** Whether this is the lenient placeholder rather than a scheduled train. */
+		private final boolean absent;
+		/** Arrival time in milliseconds; ignored by {@link #arrivalTime()} when absent. */
+		private final long arrivalMillis;
+		private final int carCount;
+		private final long routeId;
+		private final String destination;
+		private final String routeName;
+		private final int routeColor;
+		private final String routeNumber;
+		private final String routeType;
+		private final boolean lightRail;
+		private final String circularState;
+		private final long platformId;
+		private final String platformName;
+		private final int currentStationIndex;
+		/** Dwell time in half-seconds, from the platform the train is heading to. */
+		private final int dwellHalfSeconds;
+		/** The route snapshot, or {@code null} when it cannot be resolved. */
+		private final RouteInfo route;
+		/** The destination platform snapshot, or {@code null}. */
+		private final PlatformInfo platform;
+
+		private Arrival() {
+			this.absent = true;
+			this.arrivalMillis = 0L;
+			this.carCount = 0;
+			this.routeId = 0L;
+			this.destination = "";
+			this.routeName = "";
+			this.routeColor = 0;
+			this.routeNumber = "";
+			this.routeType = "NORMAL";
+			this.lightRail = false;
+			this.circularState = "NONE";
+			this.platformId = 0L;
+			this.platformName = "";
+			this.currentStationIndex = 0;
+			this.dwellHalfSeconds = 0;
+			this.route = null;
+			this.platform = null;
+		}
 
 		Arrival(ScheduleEntry entry) {
-			this.entry = entry;
+			this(entry, new java.util.HashMap<>());
+		}
+
+		/**
+		 * @param routeCache per-wrapper cache, so four arrivals on the same service share one
+		 *                   route snapshot (and one walk of its stops) instead of four
+		 */
+		Arrival(ScheduleEntry entry, java.util.Map<Long, RouteInfo> routeCache) {
+			this.absent = entry == null;
+			this.arrivalMillis = entry == null ? 0L : entry.arrivalMillis;
+			this.carCount = entry == null ? 0 : entry.trainCars;
+			this.routeId = entry == null ? 0L : entry.routeId;
+			this.currentStationIndex = entry == null ? 0 : entry.currentStationIndex;
+
+			final Route resolvedRoute = entry == null ? null : PIDSData.route(entry.routeId);
+			this.destination = entry == null ? "" : PIDSData.destination(entry);
+			this.routeName = resolvedRoute == null || resolvedRoute.name == null ? "" : resolvedRoute.name;
+			this.routeColor = resolvedRoute == null ? 0 : resolvedRoute.color;
+			this.routeNumber = resolvedRoute == null || resolvedRoute.lightRailRouteNumber == null
+					? "" : resolvedRoute.lightRailRouteNumber;
+			this.routeType = resolvedRoute == null || resolvedRoute.routeType == null
+					? "NORMAL" : resolvedRoute.routeType.name();
+			this.lightRail = resolvedRoute != null && resolvedRoute.isLightRailRoute;
+			if (resolvedRoute == null || resolvedRoute.circularState == null) {
+				this.circularState = "NONE";
+			} else {
+				final String name = resolvedRoute.circularState.name();
+				this.circularState = "ANTICLOCKWISE".equals(name) ? "ANTI_CLOCKWISE" : name;
+			}
+
+			final Platform resolvedPlatform = entry == null
+					? null : PIDSData.platform(PIDSData.platformIdOf(entry));
+			this.platformId = resolvedPlatform == null ? 0L : resolvedPlatform.id;
+			this.platformName = resolvedPlatform == null || resolvedPlatform.name == null
+					? "" : resolvedPlatform.name;
+			this.dwellHalfSeconds = resolvedPlatform == null ? 0 : resolvedPlatform.getDwellTime();
+			this.platform = resolvedPlatform == null ? null : new PlatformInfo(resolvedPlatform);
+
+			this.route = resolvedRoute == null
+					? null
+					: routeCache.computeIfAbsent(entry.routeId, ignored -> new RouteInfo(resolvedRoute));
 		}
 
 		/** @return the placeholder handed out by a lenient wrapper */
@@ -569,40 +707,31 @@ public class PIDSWrapper {
 		}
 
 		public long arrivalTime() {
-			return entry == null ? System.currentTimeMillis() : entry.arrivalMillis;
+			return absent ? System.currentTimeMillis() : arrivalMillis;
 		}
 
 		public boolean arrived() {
-			return entry == null || arrivalTime() <= System.currentTimeMillis();
+			return absent || arrivalTime() <= System.currentTimeMillis();
 		}
 
 		public String destination() {
-			final long api = PidsFrameStats.apiStart();
-			final String destination = entry == null ? "" : PIDSData.destination(entry);
-			PidsFrameStats.apiEnd(api);
 			return destination;
 		}
 
 		public int carCount() {
-			return entry == null ? 0 : entry.trainCars;
+			return carCount;
 		}
 
 		public long routeId() {
-			return entry == null ? 0L : entry.routeId;
+			return routeId;
 		}
 
 		public String routeName() {
-			final long api = PidsFrameStats.apiStart();
-			final String name = entry == null ? "" : PIDSData.routeName(entry);
-			PidsFrameStats.apiEnd(api);
-			return name;
+			return routeName;
 		}
 
 		public int routeColor() {
-			final long api = PidsFrameStats.apiStart();
-			final int color = entry == null ? 0 : PIDSData.routeColor(entry, 0);
-			PidsFrameStats.apiEnd(api);
-			return color;
+			return routeColor;
 		}
 
 		/**
@@ -610,12 +739,7 @@ public class PIDSWrapper {
 		 * MTR 4 exposes this on the arrival itself; on MTR 3 it lives on the route.
 		 */
 		public String routeNumber() {
-			final long api = PidsFrameStats.apiStart();
-			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
-			final String number = route == null || route.lightRailRouteNumber == null
-					? "" : route.lightRailRouteNumber;
-			PidsFrameStats.apiEnd(api);
-			return number;
+			return routeNumber;
 		}
 
 		/**
@@ -629,14 +753,12 @@ public class PIDSWrapper {
 		 * written for JCM 2.x never looks.</p>
 		 */
 		public String routeType() {
-			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
-			return route == null || route.routeType == null ? "NORMAL" : route.routeType.name();
+			return routeType;
 		}
 
 		/** @return whether MTR 3 marks this route as light rail. */
 		public boolean isLightRailRoute() {
-			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
-			return route != null && route.isLightRailRoute;
+			return lightRail;
 		}
 
 		/**
@@ -647,33 +769,20 @@ public class PIDSWrapper {
 		 * against JCM 2.x keep working.</p>
 		 */
 		public String circularState() {
-			final Route route = entry == null ? null : PIDSData.route(entry.routeId);
-			if (route == null || route.circularState == null) {
-				return "NONE";
-			}
-			final String name = route.circularState.name();
-			return "ANTICLOCKWISE".equals(name) ? "ANTI_CLOCKWISE" : name;
+			return circularState;
 		}
 
 		public long platformId() {
-			final long api = PidsFrameStats.apiStart();
-			final Platform platform = platformRef();
-			final long id = platform == null ? 0L : platform.id;
-			PidsFrameStats.apiEnd(api);
-			return id;
+			return platformId;
 		}
 
 		public String platformName() {
-			final long api = PidsFrameStats.apiStart();
-			final Platform platform = platformRef();
-			final String name = platform == null || platform.name == null ? "" : platform.name;
-			PidsFrameStats.apiEnd(api);
-			return name;
+			return platformName;
 		}
 
 		/** @return the destination of the stop this train is heading to, when resolvable. */
 		public int currentStationIndex() {
-			return entry == null ? 0 : entry.currentStationIndex;
+			return currentStationIndex;
 		}
 
 		/**
@@ -688,12 +797,6 @@ public class PIDSWrapper {
 		 * also what {@code pids.arrivals().get(i)} reports for a row with no train
 		 */
 		public RouteInfo route() {
-			if (entry == null) {
-				return null;
-			}
-			final long api = PidsFrameStats.apiStart();
-			final RouteInfo route = new RouteInfo(PIDSData.route(entry.routeId));
-			PidsFrameStats.apiEnd(api);
 			return route;
 		}
 
@@ -715,9 +818,7 @@ public class PIDSWrapper {
 		 * {@code min(64, dwellTicks / 2 - 20)} ticks before departure.</p>
 		 */
 		public long departureTime() {
-			final Platform platform = platformRef();
-			final int halfSeconds = platform == null ? 0 : platform.getDwellTime();
-			return arrivalTime() + halfSeconds / 2 * 1000L;
+			return arrivalTime() + dwellHalfSeconds / 2 * 1000L;
 		}
 
 		public boolean departed() {
@@ -749,17 +850,17 @@ public class PIDSWrapper {
 
 		/** @return the platform as a small view, or {@code null} when it cannot be resolved. */
 		public PlatformInfo platform() {
-			final Platform platform = PIDSData.platform(PIDSData.platformIdOf(entry));
-			return platform == null ? null : new PlatformInfo(platform);
+			return platform;
+		}
+
+		/** @return the same snapshot without allocating; used by {@link Arrivals#platforms()}. */
+		PlatformInfo platformView() {
+			return platform;
 		}
 
 		/** @return an empty list; MTR 3 does not stream per-car details to the client. */
 		public java.util.List<Object> cars() {
 			return java.util.Collections.emptyList();
-		}
-
-		private Platform platformRef() {
-			return entry == null ? null : PIDSData.platform(PIDSData.platformIdOf(entry));
 		}
 	}
 
@@ -769,24 +870,32 @@ public class PIDSWrapper {
 	 * <p>HKR's route-map presets walk {@code getPlatforms()} in order and print each stop's
 	 * station name, so the list has to resolve names the way MTR 3 stores them: a route holds
 	 * platform ids, and the name lives on the station that platform belongs to.</p>
+	 *
+	 * <p>The whole calling pattern is resolved in the constructor, on the render thread. The
+	 * object is then immutable and can be handed to a script thread; see {@link Arrival}.</p>
 	 */
 	public static class RouteInfo {
-		private final Route route;
-
 		/** {@code route.name} — a field in MTR 4, and how the LCD packs read it. */
 		public final String name;
+		/** The stops, resolved to station snapshots once. */
+		private final List<RouteStopInfo> stops;
 
 		RouteInfo(Route route) {
-			this.route = route;
 			this.name = route == null || route.name == null ? "" : route.name;
+			if (route == null || route.platformIds == null || route.platformIds.isEmpty()) {
+				this.stops = List.of();
+				return;
+			}
+			final List<RouteStopInfo> built = new ArrayList<>(route.platformIds.size());
+			for (Route.RoutePlatform stop : route.platformIds) {
+				built.add(new RouteStopInfo(stop.platformId, this));
+			}
+			this.stops = List.copyOf(built);
 		}
 
 		/** {@code route.getPlatforms()} — the stops this service calls at, in order. */
 		public RouteStopList getPlatforms() {
-			final long api = PidsFrameStats.apiStart();
-			final RouteStopList stops = new RouteStopList(route);
-			PidsFrameStats.apiEnd(api);
-			return stops;
+			return new RouteStopList(stops, this);
 		}
 
 		/** {@code route.getName()} — MTR 4 spells it this way, so both are offered. */
@@ -808,20 +917,24 @@ public class PIDSWrapper {
 
 		/** @return the number of stops, or 0 when the route could not be resolved. */
 		public int getPlatformCount() {
-			return route == null || route.platformIds == null ? 0 : route.platformIds.size();
+			return stops.size();
 		}
 	}
 
 	/** The platform list of a {@link RouteInfo}, addressed as {@code get(i)} like JCM 2.x's. */
 	public static class RouteStopList {
-		private final Route route;
+		private final List<RouteStopInfo> stops;
+		private final RouteStopInfo emptyStop;
 
-		RouteStopList(Route route) {
-			this.route = route;
+		RouteStopList(List<RouteStopInfo> stops, RouteInfo route) {
+			this.stops = stops;
+			/* Built once: a loop that reads one past the end gets the same unnamed stop instead of
+			   resolving a station again. */
+			this.emptyStop = new RouteStopInfo(0L, route);
 		}
 
 		public int size() {
-			return route == null || route.platformIds == null ? 0 : route.platformIds.size();
+			return stops.size();
 		}
 
 		/**
@@ -829,15 +942,7 @@ public class PIDSWrapper {
 		 * because HKR's loops iterate to the list's own size and a null would abort the frame
 		 */
 		public RouteStopInfo get(int i) {
-			final long api = PidsFrameStats.apiStart();
-			final RouteStopInfo stop;
-			if (route == null || route.platformIds == null || i < 0 || i >= route.platformIds.size()) {
-				stop = new RouteStopInfo(0L, route);
-			} else {
-				stop = new RouteStopInfo(route.platformIds.get(i).platformId, route);
-			}
-			PidsFrameStats.apiEnd(api);
-			return stop;
+			return i < 0 || i >= stops.size() ? emptyStop : stops.get(i);
 		}
 
 		/**
@@ -849,13 +954,11 @@ public class PIDSWrapper {
 		 * array Rhino builds around a Java array.</p>
 		 */
 		public org.mozilla.javascript.NativeArray toArray() {
-			final int count = size();
-			final java.util.List<Object> stops = new java.util.ArrayList<>(count);
-			for (int i = 0; i < count; i++) {
-				stops.add(toScriptObject(get(i)));
+			final java.util.List<Object> wrapped = new java.util.ArrayList<>(stops.size());
+			for (RouteStopInfo stop : stops) {
+				wrapped.add(toScriptObject(stop));
 			}
-			final org.mozilla.javascript.NativeArray array = scriptArray(stops);
-			return array;
+			return scriptArray(wrapped);
 		}
 	}
 
@@ -885,27 +988,21 @@ public class PIDSWrapper {
 		 */
 		public final String stationName;
 
-		RouteStopInfo(long platformId, Route routeRef) {
+		RouteStopInfo(long platformId, RouteInfo routeRef) {
 			this.platformId = platformId;
 			final Station resolved = PIDSData.stationOf(platformId);
 			this.station = resolved == null ? null : new StationInfo(resolved);
-			this.route = routeRef == null ? null : new RouteInfo(routeRef);
+			this.route = routeRef;
 			this.stationName = this.station == null || this.station.name == null ? "" : this.station.name;
 		}
 
 		/** {@code getStationName()} — MTR 4's spelling; this is what HKR prints. */
 		public String getStationName() {
-			final long api = PidsFrameStats.apiStart();
-			final String name = station == null ? "" : station.name;
-			PidsFrameStats.apiEnd(api);
-			return name;
+			return stationName;
 		}
 
 		public long getPlatformId() {
-			final long api = PidsFrameStats.apiStart();
-			final long id = platformId;
-			PidsFrameStats.apiEnd(api);
-			return id;
+			return platformId;
 		}
 
 		/**
@@ -930,10 +1027,7 @@ public class PIDSWrapper {
 		 * existed, so a panel drawn while the caches are still filling looks the same.</p>
 		 */
 		public long getStationId() {
-			final long api = PidsFrameStats.apiStart();
-			final long id = station == null || station.id == 0L ? platformId : station.id;
-			PidsFrameStats.apiEnd(api);
-			return id;
+			return station == null || station.id == 0L ? platformId : station.id;
 		}
 
 		/**
@@ -951,23 +1045,25 @@ public class PIDSWrapper {
 
 	/** Minimal platform view, so JCM 2.x scripts can read a name without MTR 4's Platform type. */
 	public static class PlatformInfo {
-		private final Platform platform;
+		private final String name;
+		private final long id;
 
 		PlatformInfo(Platform platform) {
-			this.platform = platform;
+			this.name = platform.name == null ? "" : platform.name;
+			this.id = platform.id;
 		}
 
 		public String name() {
-			return platform.name == null ? "" : platform.name;
+			return name;
 		}
 
 		/** MTR 4 spells this {@code getName()}; both work here. */
 		public String getName() {
-			return name();
+			return name;
 		}
 
 		public long id() {
-			return platform.id;
+			return id;
 		}
 	}
 

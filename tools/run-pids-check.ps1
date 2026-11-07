@@ -39,6 +39,10 @@
 #                       world, at both ends of a three-station line. Pass -HkrPack to run the two
 #                       shipped presets through it as well; without it the check runs an embedded
 #                       preset that is that rule and nothing else.
+#   ScriptAsyncCheck    checks the asynchronous execution model: an inline frame and a recorded +
+#                       replayed frame must produce the same call sequence, a replay must not read
+#                       the script's state, a throw must keep the last good frame, a 50 ms script
+#                       must not block submitRender(), and the synchronous first frame runs once.
 #
 # ScriptApiCheck is run against every script in -Script (default: the built-in
 # jsblock:scripts/builtin/pids_1a.js) at several arrival counts, because a preset that
@@ -128,6 +132,7 @@ $checkSources = @(
     'tools\checks\com\jsblock\pids\PIDSPresetCheck.java',
     'tools\checks\com\jsblock\pids\PixelationCheck.java',
     'tools\checks\com\jsblock\script\ScriptApiCheck.java',
+    'tools\checks\com\jsblock\script\ScriptAsyncCheck.java',
     'tools\checks\com\jsblock\script\ScriptShutterCheck.java',
     'tools\checks\com\jsblock\script\ScriptImporterCheck.java',
     'tools\checks\com\jsblock\script\ScriptPathCheck.java',
@@ -258,6 +263,16 @@ Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
     '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptFontFallbackCheck'
 )
 if ($NativeExitCode -ne 0) { $failures += "ScriptFontFallbackCheck (exit $NativeExitCode)" }
+
+# The asynchronous model and its recorder/replayer. This runs before the HKR check because it
+# needs no MTR world, and because a failure here means every scripted panel is affected.
+Write-Host ''
+Write-Host '== asynchronous script execution (ScriptAsyncCheck) ==' -ForegroundColor Cyan
+Invoke-Native -FilePath "$env:JAVA_HOME\bin\java.exe" -Arguments @(
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8',
+    '-cp', "$classpath;$outDir", 'com.jsblock.script.ScriptAsyncCheck'
+)
+if ($NativeExitCode -ne 0) { $failures += "ScriptAsyncCheck (exit $NativeExitCode)" }
 
 # HKR's terminus rule, on a real MTR world: the same panel preset has to say "not in service" at
 # the last stop of the line and draw the real arrivals at a stop in the middle. Run last, because

@@ -54,6 +54,10 @@ public class JobanClient {
         ClientTickEvent.CLIENT_POST.register(client -> {
             ScriptEngine.shutter().setEnabled(!ClientConfig.getScriptRestrictionsDisabled());
             ScriptEngine.ERROR_NOTIFIER.flush();
+            /* Releases script instances and their canvases on disconnect as well as on a world
+               change; a block-entity renderer never runs in the main menu, so it cannot be the
+               only place this is noticed. */
+            com.jsblock.script.ScriptInstances.beginFrame(client.level);
         });
 
         /* Allow transparent texture for the block */

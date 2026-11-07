@@ -77,6 +77,22 @@ public final class PidsFrameStats {
 	/** The panel currently being rendered, or {@code null} between frames. */
 	private static Record current = null;
 
+	/**
+	 * The thread that opened the frame.
+	 *
+	 * <p>A scripted PIDS now runs its preset on a script thread while the render thread keeps its
+	 * frame open. The script thread calls into {@link PIDSWrapper}, whose accessors are instrumented
+	 * through {@link #apiStart()}; without this guard those calls would write the render thread's
+	 * {@link Record} concurrently. Only the opening thread is counted, so the numbers keep meaning
+	 * "time spent on the render thread".</p>
+	 */
+	private static Thread owner = null;
+
+	/** @return whether the current thread owns the open frame. */
+	private static boolean onOwnerThread() {
+		return ACTIVE && Thread.currentThread() == owner;
+	}
+
 	/** One panel's counters for one reporting window. */
 	private static final class Record {
 		final String label;
@@ -92,6 +108,12 @@ public final class PidsFrameStats {
 		boolean frameRedraw;
 		/** Whether the frame being timed ran {@code create()}. */
 		long frameCreate;
+		/** Whether the frame submitted an asynchronous script task. */
+		boolean frameSubmitted;
+		/** Whether the frame waited for the one-time synchronous first frame. */
+		boolean frameFirstFrameSync;
+		/** How many recorded calls this frame replayed. */
+		int frameReplayCalls;
 
 		int frames;
 		long totalNanos;
@@ -184,13 +206,17 @@ public final class PidsFrameStats {
 		record.frameB = 0L;
 		record.frameRedraw = false;
 		record.frameCreate = 0L;
+		record.frameSubmitted = false;
+		record.frameFirstFrameSync = false;
+		record.frameReplayCalls = 0;
 		current = record;
+		owner = Thread.currentThread();
 		ACTIVE = true;
 	}
 
 	/** Closes the frame's section A: everything up to the script call. */
 	public static void endSectionA() {
-		if (!ACTIVE) {
+		if (!onOwnerThread()) {
 			return;
 		}
 		final Record record = current;
@@ -199,12 +225,12 @@ public final class PidsFrameStats {
 
 	/** @return a mark for {@link #addSectionB(long)}, or {@code 0} when no frame is open. */
 	public static long mark() {
-		return ACTIVE ? System.nanoTime() : 0L;
+		return onOwnerThread() ? System.nanoTime() : 0L;
 	}
 
 	/** Adds the span since {@code startNanos} to the frame's section B (the script call). */
 	public static void addSectionB(long startNanos) {
-		if (!ACTIVE || startNanos == 0L) {
+		if (!onOwnerThread() || startNanos == 0L) {
 			return;
 		}
 		current.frameB += System.nanoTime() - startNanos;
@@ -212,10 +238,39 @@ public final class PidsFrameStats {
 
 	/** Records how long the frame's {@code create()} took; the frame itself is normal. */
 	public static void addCreate(long nanos) {
-		if (!ACTIVE || nanos <= 0L) {
+		if (!onOwnerThread() || nanos <= 0L) {
 			return;
 		}
 		current.frameCreate += nanos;
+	}
+
+	/**
+	 * Records that this frame handed a render pass to the script thread.
+	 *
+	 * <p>Printed beside {@code async=on/off} so a reading of the line can tell "the script did not
+	 * run on this thread" apart from "the script ran and was cheap".</p>
+	 */
+	public static void noteAsyncSubmit() {
+		if (!onOwnerThread()) {
+			return;
+		}
+		current.frameSubmitted = true;
+	}
+
+	/** Records that this frame paid the one-time synchronous first-frame run. */
+	public static void noteAsyncFirstFrameSync() {
+		if (!onOwnerThread()) {
+			return;
+		}
+		current.frameFirstFrameSync = true;
+	}
+
+	/** Records how many recorded calls this frame replayed. */
+	public static void noteReplayCalls(int calls) {
+		if (!onOwnerThread()) {
+			return;
+		}
+		current.frameReplayCalls = Math.max(0, calls);
 	}
 
 	/**
@@ -225,10 +280,11 @@ public final class PidsFrameStats {
 	 * instrumentation: whatever the two named spans do not cover is the rest of the frame.</p>
 	 */
 	public static void end() {
-		if (!ACTIVE) {
+		if (!onOwnerThread()) {
 			return;
 		}
 		ACTIVE = false;
+		owner = null;
 		final Record record = current;
 		current = null;
 		if (record == null) {
@@ -280,7 +336,7 @@ public final class PidsFrameStats {
 
 	/** Marks the current frame as one that repainted (and uploaded) its canvas. */
 	public static void noteCanvasUpload() {
-		if (!ACTIVE) {
+		if (!onOwnerThread()) {
 			return;
 		}
 		current.frameRedraw = true;
@@ -292,7 +348,7 @@ public final class PidsFrameStats {
 	 * @param nanos time spent in {@code ScriptDrawCall.draw}, or in a parsed component's draw
 	 */
 	public static void noteDrawCall(long nanos) {
-		if (!ACTIVE) {
+		if (!onOwnerThread()) {
 			return;
 		}
 		final Record record = current;
@@ -305,7 +361,7 @@ public final class PidsFrameStats {
 
 	/** @return a mark for {@link #apiEnd(long)}, or {@code 0} when the statistics are off. */
 	public static long apiStart() {
-		return ACTIVE ? System.nanoTime() : 0L;
+		return onOwnerThread() ? System.nanoTime() : 0L;
 	}
 
 	/**
@@ -316,7 +372,7 @@ public final class PidsFrameStats {
 	 * interpretation, not to be added to B as if the two were disjoint.</p>
 	 */
 	static void apiEnd(long startNanos) {
-		if (!ACTIVE || startNanos == 0L) {
+		if (!onOwnerThread() || startNanos == 0L) {
 			return;
 		}
 		final Record record = current;
@@ -361,6 +417,7 @@ public final class PidsFrameStats {
 						+ " | redrawFrames=%d (B avg=%.2f)"
 						+ " | api avg=%.2f max=%.2f calls=%d/s"
 						+ " | drawCalls avg=%.1f"
+						+ " | async=%s submit=%d firstSync=%d replay=%d"
 						+ " | worst=%s,%.2f",
 				record.label, Math.round(frames * 1e9 / elapsedNanos),
 				record.totalNanos / 1e6 / frames, record.maxTotalNanos / 1e6,
@@ -374,6 +431,10 @@ public final class PidsFrameStats {
 				record.apiNanos / 1e6 / frames, record.maxApiNanos / 1e6,
 				Math.round(record.apiCalls * 1e9 / elapsedNanos),
 				record.drawCalls / (double) frames,
+				ScriptInstances.asyncEnabled() ? "on" : "off",
+				record.frameSubmitted ? 1 : 0,
+				record.frameFirstFrameSync ? 1 : 0,
+				record.frameReplayCalls,
 				worstSection, worstNanos / 1e6));
 
 		record.windowStart = System.nanoTime();

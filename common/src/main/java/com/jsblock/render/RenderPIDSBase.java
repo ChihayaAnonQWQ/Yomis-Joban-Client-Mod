@@ -729,9 +729,24 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
            See PidsFrameStats for what each section means. */
         com.jsblock.script.PidsFrameStats.endSectionA();
 
-        final long createStart = com.jsblock.script.PidsFrameStats.mark();
-        program.start(wrapper);
-        com.jsblock.script.PidsFrameStats.addCreate(com.jsblock.script.PidsFrameStats.mark() - createStart);
+        /* Which panel instances belong to which world. A world change has no event this branch
+           listens to, and an instance left behind would keep its Rhino scope and canvases for the
+           rest of the session. One identity comparison per panel per frame. */
+        com.jsblock.script.ScriptInstances.beginFrame(world);
+
+        final boolean async = com.jsblock.script.ScriptInstances.asyncEnabled();
+
+        /* Synchronous paths, both deliberate:
+           - asyncScript=false is the user's one-line rollback;
+           - a pixelated preset is drawn into an offscreen framebuffer whose lifetime is this
+             frame, and replaying into it would mean holding that target across frames. Pixelated
+             presets are low-resolution by definition, so the interpretation cost there is small;
+             see MTR3-PIDS-PORT.md §4.23. */
+        if (!async || pixelTarget != null) {
+            final long createStart = com.jsblock.script.PidsFrameStats.mark();
+            program.start(wrapper);
+            com.jsblock.script.PidsFrameStats.addCreate(com.jsblock.script.PidsFrameStats.mark() - createStart);
+        }
 
         if (pixelTarget != null && drawPixelatedPanel(preset, wrapper, program, facing, matrices, vertexConsumers, canvasWidth, canvasHeight, pixelTarget, pixelScale, pixelShape, pixelDots, frameContext)) {
             /* B was timed around the script calls inside the offscreen pass; the framebuffer work
@@ -756,41 +771,53 @@ public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockE
                         preset.font == null ? geometry.defaultFont : preset.font,
                         1F));
 
-        final long renderStart = com.jsblock.script.PidsFrameStats.mark();
-        if (!program.renderOrFail(ctx, program.usesLenientArrivals() ? wrapper.withLenientArrivals() : wrapper)) {
-            /* The script threw, very likely before it reached its own background call, which is
-               why a script error used to leave the panel completely black.
-               
-               The most common cause by far is a preset that reads arrivals().get(i) past the end
-               without checking, which JCM 2.x answers with null and then breaks on as well -- the
-               CRT pack does it for the second train. The pack cannot be edited from here, so the
-               frame is retried once with a placeholder there instead: a board showing a
-               placeholder row beats a board showing nothing. The choice sticks for this program,
-               so the retry happens once and not every frame. A preset that guards, as HKR's
-               board does, never gets here and keeps its empty rows empty.
-               
-               Only a throw that mentions null is retried: that is what an unguarded
-               arrivals().get(i) produces ("Cannot call method ... of null"), and a failure with
-               some other cause should not be re-run under a different arrivals contract. */
-            if (mentionsNull(program.getLastError()) && program.adoptLenientArrivals()) {
-                ctx.restartDrawCalls();
-                if (program.renderOrFail(ctx, wrapper.withLenientArrivals())) {
-                    /* Drawn after all, so the player does not need the red line. The throw stays
-                       in the log for the preset author, and one line explains what was done. */
-                    program.discardFailureNotice();
-                    program.reportLenientFallback();
-                } else {
-                    /* The null was not an arrival -- sound_transit.js dies on a null station
-                       instead -- so the panel really is broken and says so. */
-                    program.flushFailureNotice();
-                    drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
-                }
-            } else {
-                program.flushFailureNotice();
+        if (!async) {
+            final long renderStart = com.jsblock.script.PidsFrameStats.mark();
+            if (!program.renderRecovering(ctx, wrapper)) {
+                /* The script threw before it reached its own background -- the panel keeps the
+                   preset image instead of going black. Same policy as before this change. */
                 drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
             }
+            com.jsblock.script.PidsFrameStats.addSectionB(renderStart);
+        } else {
+            final com.jsblock.script.ScriptInstance instance =
+                    com.jsblock.script.ScriptInstances.instanceFor(program);
+            /* The recording context is a per-frame value object: panel geometry, facing, light and
+               the frame's PIDSContext for ctx.parseComponent. It holds no matrices and no vertex
+               source, so it is safe to hand to the script thread. */
+            final com.jsblock.script.ScriptRenderContext recording =
+                    com.jsblock.script.ScriptRenderContext.recording(
+                            canvasWidth, canvasHeight, scriptScale, facing, MAX_LIGHT_GLOWING, frameContext);
+
+            final long firstFrameStart = com.jsblock.script.PidsFrameStats.mark();
+            if (instance.runFirstFrame(recording, wrapper, pos)) {
+                /* The one synchronous run, so the first frame is not blank. Measured as create()
+                   because it is a startup cost, not a per-frame one. */
+                com.jsblock.script.PidsFrameStats.addCreate(
+                        com.jsblock.script.PidsFrameStats.mark() - firstFrameStart);
+                com.jsblock.script.PidsFrameStats.noteAsyncFirstFrameSync();
+            } else if (instance.submitRender(recording, wrapper, pos)) {
+                com.jsblock.script.PidsFrameStats.noteAsyncSubmit();
+            }
+
+            final long replayStart = com.jsblock.script.PidsFrameStats.mark();
+            final java.util.List<com.jsblock.script.RecordedCall> calls = instance.lastCalls(pos);
+            if (!calls.isEmpty()) {
+                com.jsblock.script.PidsFrameStats.noteReplayCalls(calls.size());
+                ctx.replay(calls);
+                if (instance.lastPassRedrew(pos)) {
+                    /* The upload happened on the script thread, where the frame statistics do not
+                       run; attribute the redraw to the frame that is showing its result. */
+                    com.jsblock.script.PidsFrameStats.noteCanvasUpload();
+                }
+                program.traceReplayedFrame(ctx, wrapper);
+            } else if (instance.lastError() != null) {
+                /* Nothing good has ever been recorded -- draw the preset background rather than a
+                   black panel, exactly as the inline path did on a first-frame throw. */
+                drawPresetBackground(preset, geometry, facing, matrices, vertexConsumers);
+            }
+            com.jsblock.script.PidsFrameStats.addSectionB(replayStart);
         }
-        com.jsblock.script.PidsFrameStats.addSectionB(renderStart);
 
         immediate.endBatch();
         matrices.popPose();

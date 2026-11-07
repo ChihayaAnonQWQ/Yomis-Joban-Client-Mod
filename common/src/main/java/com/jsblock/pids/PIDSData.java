@@ -55,12 +55,21 @@ public final class PIDSData {
 
 	/** @return the route with the given id, or {@code null}. */
 	public static Route route(long routeId) {
-		return ClientData.DATA_CACHE.routeIdMap.get(routeId);
+		try {
+			return ClientData.DATA_CACHE.routeIdMap.get(routeId);
+		} catch (Throwable t) {
+			/* Headless checks and the first moments after a disconnect have no cache at all. */
+			return null;
+		}
 	}
 
 	/** @return the platform with the given id, or {@code null}. */
 	public static Platform platform(long platformId) {
-		return ClientData.DATA_CACHE.platformIdMap.get(platformId);
+		try {
+			return ClientData.DATA_CACHE.platformIdMap.get(platformId);
+		} catch (Throwable t) {
+			return null;
+		}
 	}
 
 	/** Set once the cache sizes have been reported, so the log is not flooded per frame. */
@@ -78,13 +87,15 @@ public final class PIDSData {
 		if (reportedCache) {
 			return;
 		}
-		reportedCache = true;
 		try {
 			com.jsblock.Joban.LOGGER.info("[Joban Client] [PIDS] client data: routes={} platforms={} stations={} platformIdToStation={}",
 					ClientData.DATA_CACHE.routeIdMap.size(),
 					ClientData.DATA_CACHE.platformIdMap.size(),
 					ClientData.STATIONS.size(),
 					ClientData.DATA_CACHE.platformIdToStation.size());
+			/* Only once the read succeeded: a headless check has no cache, and marking it reported
+			   would suppress the one diagnostic a real client needs. */
+			reportedCache = true;
 		} catch (Throwable t) {
 			com.jsblock.Joban.LOGGER.warn("[Joban Client] [PIDS] could not read the client data caches: {}", t.toString());
 		}
@@ -93,7 +104,11 @@ public final class PIDSData {
 	/** @return the station the platform belongs to, or {@code null}. */
 	public static Station stationOf(long platformId) {
 		reportCacheOnce();
-		return ClientData.DATA_CACHE.platformIdToStation.get(platformId);
+		try {
+			return ClientData.DATA_CACHE.platformIdToStation.get(platformId);
+		} catch (Throwable t) {
+			return null;
+		}
 	}
 
 	/**

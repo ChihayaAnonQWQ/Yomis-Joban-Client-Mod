@@ -1,3 +1,78 @@
+# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.10
+
+> 本轮不发布：`gradle.properties` 的版本号仍是 `1.2.12-JSPIDS-2.9`，留到发布提交再升。
+
+## Compatible MTR Version
+MTR
+
+## The script leaves the render thread: JCM 2.x's execute-off-thread / replay-last-frame model
+
+This round is the change the previous one's measurements asked for. On a real client, 98% of a
+scripted PIDS frame was section B — the preset's own interpreted JavaScript — and 98% of that was
+the preset, not the port's Java. Nothing done on the render thread can remove that cost; the only
+way to remove it from the frame is to not run it there.
+
+JCM 2.x/v2 does exactly that: `ScriptManager.scriptThread` runs the script, one `ScriptInstance`
+task at a time, and the renderer submits a pass and replays the previous frame's `drawCalls`. This
+port now has the same shape:
+
+* `com.jsblock.script.ScriptInstances` / `ScriptInstance` — one instance per panel, a shared
+  bounded executor (2-4 daemon threads) and a per-half `AtomicBoolean` gate, so a slow preset
+  misses frames instead of queueing them.
+* The first frame of each half is still synchronous and is replayed in the same frame, so a panel
+  never flashes empty. Every later pass is submitted without blocking and the previous recorded
+  list is replayed immediately.
+* A throw on the script thread is caught, stored in `lastError`, and the last good frame keeps
+  being replayed. Nothing is rethrown onto the render thread.
+* `-Djsblock.pids.asyncScript=false` restores the old inline execution exactly; it is the
+  one-line rollback for a user who hits a script the new model exposes.
+
+The data the script reads had to become a snapshot: `PIDSWrapper` and its `Arrival`/`RouteInfo`/
+`RouteStopList`/`RouteStopInfo`/`PlatformInfo` now resolve route names, numbers, colours, types,
+station and platform names, dwell times and the calling pattern **in the constructor**, on the
+render thread, and expose only final fields. `PIDSContext` precomputes its primary platform and
+station names for the same reason. The public script API is unchanged.
+
+Drawing is now captured as immutable `RecordedCall`s (Text, Texture, Rectangle, parsed Component)
+with every parameter by value, including a copy of the `Matrices` transform and the recorded z.
+Replay rebuilds the original builder and executes the original draw path with that z, so order,
+blending and layering are the same as inline. Pixelated presets deliberately stay synchronous:
+their offscreen FBO is a per-frame target, and moving its lifetime into the replay is a larger
+risk than the low-resolution interpretation cost it would save.
+
+`ScriptAsyncCheck` is new and runs in `tools/run-pids-check.ps1`. It compares an inline frame with
+a record+replay frame call by call (descriptions and full signatures), proves replay does not read
+the script's `state`, proves a throw keeps the last good frame, measures that a 50 ms preset does
+not block `submitRender()` (measured **0.19-0.36 ms** for the submit call), and proves the
+synchronous first frame runs once.
+
+The frame statistics line now carries the mode:
+
+```
+[Joban Client] PIDS script stats async-check@12,65,-34: frames=400/s total avg=0.09 max=14.57
+ | A avg=0.06 max=14.50 | B avg=0.03 max=0.36 (create 0.00 once) | C avg=0.00 max=0.00, in B
+ | D avg=0.00 max=0.19 | redrawFrames=0 (B avg=0.00) | api avg=0.00 max=0.00 calls=0/s
+ | drawCalls avg=0.0 | async=on submit=1 firstSync=0 replay=1 | worst=A,14.50
+```
+
+`B` is now the replay and submission work only; the interpretation is on the script thread and
+does not appear in the render thread's frame. `firstSync=1` marks the one frame that paid the
+synchronous first run.
+
+Verification:
+
+```
+gradle build                      → BUILD SUCCESSFUL
+tools\\run-pids-check.ps1          → RESULT: ALL CHECKS PASSED (incl. ScriptAsyncCheck)
+next_train.js 0/1/2/4 arrivals    → RESULT: SCRIPT OK
+_v2api\\run-all.ps1（11 包）       → see §4.23 / result-ALL.txt
+```
+
+What remains is recorded in `MTR3-PIDS-PORT.md` §4.23: true zero-copy replay, a stronger
+cross-world sweep, moving the second half's first `render()` off the first frame, asynchronous
+pixelation, and `Text.measureWidth()` — the one script-visible API that still reads the game font
+from the script thread.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.9
 
 ## Compatible MTR Version

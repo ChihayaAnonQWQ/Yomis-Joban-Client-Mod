@@ -63,9 +63,7 @@ public class PlatformComponent extends PIDSComponent {
 	}
 
 	private String describe(PIDSContext context) {
-		final long platformId = context.primaryPlatformId();
-		final Platform platform = PIDSData.platform(platformId);
-		final String name = platform == null || platform.name == null ? "" : platform.name;
+		final String name = context.primaryPlatformName;
 		if (name.isEmpty()) {
 			return prefix + fallback;
 		}

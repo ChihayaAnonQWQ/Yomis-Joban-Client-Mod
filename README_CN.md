@@ -175,11 +175,20 @@ MTR 3 上，本 fork 就是还在继续做 PIDS 的那条线。
 | 1A PIDS 预设 | `jsblock:pids_1a` 拿到了 LCD / RV PIDS 早就有的预设存储、自动切换和配置界面 |
 | 贴图 | JCM 2.x 的 PIDS 素材（`weather_*`、`plat_circle`、`rv_default`、`black`） |
 | 检查程序 | `tools/run-pids-check.ps1` —— 三个无头检查，用真实引擎跑真实预设 |
-| 诊断 | `-Djsblock.pids.trace=true` 记录预设发出的每一次绘制调用（类型、深度、颜色、文字）；`-Djsblock.pids.canvasStats=true` 每秒为每张 `GraphicsTexture` 打一行：脚本请求上传几次、真正拷贝像素几次、拷贝与 GL 上传各多少毫秒 |
+| 诊断 | `-Djsblock.pids.trace=true` 记录预设发出的每一次绘制调用（类型、深度、颜色、文字）；`-Djsblock.pids.canvasStats=true` 每秒输出画布上传/拷贝/GL 耗时**以及**帧内分段，并带 `async=on/off`、`submit`、`firstSync`、`replay` 标记。`-Djsblock.pids.asyncScript=false` 可退回内联执行，用于排障 |
 | 文档 | `MTR3-PIDS-PORT.md` |
 | PIDS 投影仪 | `jsblock:pids_projector` —— JCM 2.x 的投影仪：面板悬在空中，自带显示格式、偏移、旋转、缩放、逐行信息与隐藏月台号 |
 
 既不声明 `components` 也不声明 `scriptFiles` 的预设，仍然走原来那套硬编码渲染路径，未做改动。
+
+### 脚本执行模型
+
+脚本预设跑在共享的脚本线程上，同一面板的每个半块同一时刻最多一个任务。渲染线程只提交下一
+帧任务，并重放上一帧录下的绘制调用；每个半块只有首帧同步执行，且结果在同一帧重放，所以面板
+不会闪一帧空白。失败的一帧保留上一次的好结果并记日志，不会把异常抛到渲染线程。`pids` 包装
+对象是渲染线程构造的不可变快照（线路/车站/站台名、颜色、停靠顺序都在构造时解析完），脚本
+线程不会在渲染线程写 `ClientData` 时去读它。`-Djsblock.pids.asyncScript=false` 可退回内联
+执行；`-Djsblock.pids.canvasStats=true` 会输出帧内分段与当前模式。
 
 ### PIDS 投影仪
 

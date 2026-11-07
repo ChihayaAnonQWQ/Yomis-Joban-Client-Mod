@@ -186,12 +186,23 @@ Full write-up, in Chinese, with the decompiled evidence and the in-game logs:
 | 1A PIDS presets | `jsblock:pids_1a` gets the preset storage, auto-switch and config screen the LCD/RV PIDS already had |
 | Textures | JCM 2.x's PIDS artwork (`weather_*`, `plat_circle`, `rv_default`, `black`) |
 | Checks | `tools/run-pids-check.ps1` — three headless checks that run real presets through the real engine |
-| Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text; `-Djsblock.pids.canvasStats=true` logs, once a second per `GraphicsTexture`, how often the script uploaded it, how often pixels were really copied, and the copy/GL timings |
+| Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text; `-Djsblock.pids.canvasStats=true` logs, once a second, the canvas upload/copy/GL timings **and** the per-frame section breakdown, with `async=on/off`, `submit`, `firstSync` and `replay` markers. `-Djsblock.pids.asyncScript=false` restores inline script execution for troubleshooting |
 | Docs | `MTR3-PIDS-PORT.md` |
 | PIDS Projector | `jsblock:pids_projector` — JCM 2.x's projector: the panel hangs in the air, with its own format, offset, rotation, scale, per-row text and hide-platform switch |
 
 A preset that declares neither `components` nor `scriptFiles` keeps the old hard-coded
 render path, unchanged.
+
+### Script execution
+
+A scripted preset runs on a shared script thread, one pass per panel half at a time. The render
+thread submits the next pass and replays the previous frame's recorded draw calls; only the first
+frame of each half runs synchronously, and its result is replayed in that same frame so the panel
+never flashes empty. A failed pass keeps the last good frame and logs the failure. The `pids`
+wrapper is an immutable snapshot built on the render thread (route/station/platform names, colours
+and the calling pattern are resolved in its constructor), so the script thread never reads
+`ClientData` while the render thread is writing it. `-Djsblock.pids.asyncScript=false` restores
+inline execution; `-Djsblock.pids.canvasStats=true` shows the per-frame breakdown and the mode.
 
 ### PIDS Projector
 

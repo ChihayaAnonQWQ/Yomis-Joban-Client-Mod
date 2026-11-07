@@ -237,5 +237,18 @@ public final class ScriptMath {
 		public Matrix4f last() {
 			return poseStack.last().pose();
 		}
+
+		/**
+		 * A {@code Matrices} whose current matrix is a copy of {@code matrix}.
+		 *
+		 * <p>Used when replaying a captured draw call: the script's transformation was applied when
+		 * the frame was recorded, and the replay must adopt the resulting matrix rather than re-run
+		 * the script's method calls (which it no longer has).</p>
+		 */
+		static Matrices of(Matrix4f matrix) {
+			final Matrices matrices = new Matrices();
+			matrices.poseStack.last().pose().set(matrix);
+			return matrices;
+		}
 	}
 }

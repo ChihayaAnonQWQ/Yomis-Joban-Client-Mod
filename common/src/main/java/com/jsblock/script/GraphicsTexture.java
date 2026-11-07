@@ -190,12 +190,12 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * java.lang.Integer" instead. Every full-ARGB literal a script writes has the high bit set, so an
 	 * {@code int} parameter would make the whole notation unusable.</p>
 	 */
-	public void clear(long color) {
+	synchronized public void clear(long color) {
 		fillRect(0, 0, width, height, color);
 	}
 
 	/** {@code canvas.fillRect(x, y, w, h, color)} — see {@link #clear} for the colour rule. */
-	public void fillRect(double x, double y, double w, double h, long color) {
+	synchronized public void fillRect(double x, double y, double w, double h, long color) {
 		graphics.setColor(new Color(argb((int) color), true));
 		graphics.fillRect((int) Math.floor(x), (int) Math.floor(y),
 				(int) Math.ceil(w), (int) Math.ceil(h));
@@ -209,7 +209,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * used for lettering a texture rather than for a board's live text — that is what
 	 * {@code Text.create(...)} is for.</p>
 	 */
-	public void drawText(String text, double x, double y, long color, double size) {
+	synchronized public void drawText(String text, double x, double y, long color, double size) {
 		if (text == null || text.isEmpty()) {
 			return;
 		}
@@ -222,7 +222,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * {@code canvas.measureText(text, size)} — the width {@link #drawText} would use, in pixels, so a
 	 * script can centre or right-align it.
 	 */
-	public int measureText(String text, double size) {
+	synchronized public int measureText(String text, double size) {
 		if (text == null || text.isEmpty()) {
 			return 0;
 		}
@@ -239,7 +239,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * guard as every other script read, and a missing or unreadable image is one warning and nothing
 	 * drawn — see {@link ScriptTextures#readImage}.</p>
 	 */
-	public void drawTexture(Object location, double x, double y, double w, double h) {
+	synchronized public void drawTexture(Object location, double x, double y, double w, double h) {
 		final ResourceLocation id;
 		try {
 			if (location instanceof ResourceLocation) {
@@ -359,7 +359,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * {@code bufferedImage.getRGB(x, y)} loop: measured on this machine for a 1088x608 canvas,
 	 * 1.64 ms per upload before and 0.38 ms after (4.3x), byte-identical output.</p>
 	 */
-	void copyPixelsTo(NativeImage pixels) {
+	synchronized void copyPixelsTo(NativeImage pixels) {
 		final BufferedImage image = this.bufferedImage;
 		if (image.getType() == BufferedImage.TYPE_INT_ARGB
 				&& image.getRaster().getDataBuffer() instanceof DataBufferInt) {
@@ -454,7 +454,7 @@ public final class GraphicsTexture implements java.io.Closeable {
 	 * that the garbage collector does not see; skipping it is the leak this class exists to avoid.</p>
 	 */
 	@Override
-	public void close() {
+	synchronized public void close() {
 		if (closed) {
 			return;
 		}

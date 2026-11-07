@@ -67,6 +67,18 @@ public final class ScriptEngine {
 		return PROGRAMS.values();
 	}
 
+	/**
+	 * Drops the compile cache without releasing textures, fonts or installed packs.
+	 *
+	 * <p>Used when the client changes world: the scopes belong to the old world's panel state, and
+	 * a new world must run {@code create()} again. The old programs stay alive until the script
+	 * threads that are still using them finish; clearing the map only stops new frames from
+	 * finding them.</p>
+	 */
+	public static void invalidatePrograms() {
+		PROGRAMS.clear();
+	}
+
 	// ==================================================================
 	// Compilation
 	// ==================================================================
@@ -153,6 +165,9 @@ public final class ScriptEngine {
 
 	/** Drops every compiled program; call when the resource manager reloads. */
 	public static void reset() {
+		/* The running instances own the state and the Rhino scopes being thrown away; ask them to
+		   dispose while the scripts they refer to still exist. Non-blocking. */
+		ScriptInstances.reset();
 		PROGRAMS.clear();
 		/* A script cannot be told it is being reloaded, so the canvases it made are released here --
 		   before the texture bookkeeping is cleared, since each canvas unregisters its own identifier
@@ -1749,6 +1764,69 @@ public final class ScriptEngine {
 			final boolean success = invokeChecked("render", ctx, pids);
 			reportTrace(ctx, pids);
 			return success;
+		}
+
+		/**
+		 * Runs {@code render()} and applies the placeholder-arrivals retry, if it is warranted.
+		 *
+		 * <p>This is the whole recovery policy in one place, so the inline path and the
+		 * asynchronous path behave identically. {@link ScriptInstance} calls it on its script
+		 * thread; {@code RenderPIDSBase} calls it on the render thread when asynchronous execution
+		 * is switched off or a preset is pixelated. The caller draws the preset's fallback
+		 * background when this returns {@code false}.</p>
+		 *
+		 * @return {@code true} when a complete frame was drawn
+		 */
+		public boolean renderRecovering(ScriptRenderContext ctx, PIDSWrapper pids) {
+			if (pids == null) {
+				return false;
+			}
+			if (renderOrFail(ctx, usesLenientArrivals() ? pids.withLenientArrivals() : pids)) {
+				return true;
+			}
+			/* The most common cause by far is a preset that reads arrivals().get(i) past the end
+			   without checking, which JCM 2.x answers with null and then breaks on as well -- the
+			   CRT pack does it for the second train. The same second chance the renderer used to
+			   give inline: a board showing a placeholder row beats a board showing nothing. */
+			if (mentionsNull(lastError) && adoptLenientArrivals()) {
+				ctx.restartDrawCalls();
+				if (renderOrFail(ctx, pids.withLenientArrivals())) {
+					discardFailureNotice();
+					reportLenientFallback();
+					return true;
+				}
+			}
+			flushFailureNotice();
+			return false;
+		}
+
+		/**
+		 * @return {@code true} when the error names a {@code null}, which is what an unguarded
+		 * {@code arrivals().get(i)} produces
+		 */
+		private static boolean mentionsNull(String error) {
+			return error != null && error.toLowerCase(java.util.Locale.ROOT).contains("null");
+		}
+
+		/** @return the per-program script state, for the headless check's state-independence test. */
+		public Scriptable getState() {
+			return state;
+		}
+
+		/** @return whether {@code create()} has run. */
+		public boolean isStarted() {
+			return started;
+		}
+
+		/**
+		 * Reports a replayed frame's call list with the same change-tracking as an inline frame.
+		 *
+		 * <p>The asynchronous path records on the script thread (where tracing is off), replays on
+		 * the render thread, and calls this afterwards; without it {@code -Djsblock.pids.trace}
+		 * would silently stop working when async is on.</p>
+		 */
+		public void traceReplayedFrame(ScriptRenderContext ctx, PIDSWrapper pids) {
+			reportTrace(ctx, pids);
 		}
 
 		/** @return whether this program is currently handed the lenient arrivals wrapper. */

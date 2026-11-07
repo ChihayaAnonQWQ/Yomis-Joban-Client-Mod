@@ -64,8 +64,7 @@ public class StationNameComponent extends PIDSComponent {
 	}
 
 	private String describe(PIDSContext context) {
-		final Station station = PIDSData.stationOf(context.primaryPlatformId());
-		final String name = station == null || station.name == null ? "" : station.name;
+		final String name = context.primaryStationName;
 		if (name.isEmpty()) {
 			return "";
 		}

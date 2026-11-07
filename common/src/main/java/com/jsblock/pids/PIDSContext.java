@@ -54,6 +54,19 @@ public class PIDSContext {
 	/** Display row to arrival, honouring {@link #hideArrivals}. */
 	private final ScheduleEntry[] rowArrivals;
 
+	/**
+	 * The platform this panel primarily watches, resolved once in the constructor.
+	 *
+	 * <p>Kept as a snapshot because a script thread may call a component's {@code canRender()}
+	 * while the render thread owns the client caches. See {@link com.jsblock.script.PIDSWrapper}
+	 * for the same rule.</p>
+	 */
+	public final long primaryPlatform;
+	/** The name of {@link #primaryPlatform}, or an empty string. */
+	public final String primaryPlatformName;
+	/** The name of the station {@link #primaryPlatform} belongs to, or an empty string. */
+	public final String primaryStationName;
+
 	public PIDSContext(Level world, BlockPos pos, Direction facing, String[] customMessages,
 					   List<ScheduleEntry> scheduleList, List<Long> platformIds,
 					   boolean[] hideArrivals, double deltaTime, long gameTick) {
@@ -67,6 +80,11 @@ public class PIDSContext {
 		this.deltaTime = deltaTime;
 		this.gameTick = gameTick;
 		this.rowArrivals = buildRowArrivals(this.scheduleList, this.hideArrivals);
+		this.primaryPlatform = resolvePrimaryPlatform();
+		final mtr.data.Platform platform = PIDSData.platform(this.primaryPlatform);
+		this.primaryPlatformName = platform == null || platform.name == null ? "" : platform.name;
+		final mtr.data.Station station = PIDSData.stationOf(this.primaryPlatform);
+		this.primaryStationName = station == null || station.name == null ? "" : station.name;
 	}
 
 	private static ScheduleEntry[] buildRowArrivals(List<ScheduleEntry> schedule, boolean[] hide) {
@@ -136,6 +154,11 @@ public class PIDSContext {
 	 * for when no platform is close enough to be found.</p>
 	 */
 	public long primaryPlatformId() {
+		return primaryPlatform;
+	}
+
+	/** Runs once in the constructor, on the render thread; see {@link #primaryPlatform}. */
+	private long resolvePrimaryPlatform() {
 		final long closest = PIDSData.closestPlatformId(pos);
 		if (closest != 0) {
 			return closest;

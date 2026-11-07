@@ -2708,3 +2708,143 @@ tools\run-pids-check.ps1          → RESULT: ALL CHECKS PASSED
 next_train.js 0/1/2/4 arrivals    → RESULT: SCRIPT OK
 _v2api\run-all.ps1（11 包）       → 108/112（与 2.7 相同）
 ```
+
+### 4.23 异步脚本执行 + 绘制调用重放（2.10；对齐 JCM 2.x/v2 的执行模型）
+
+#### 为什么必须异步
+
+4.22 的实机数据已经把答案写得很清楚：稳定帧里 **98% 的时间在 B（脚本解释执行）**，其中
+98% 又是预设自己的 JavaScript；我们的包装类只占 1-2%。只要脚本还在渲染线程上跑，优化查表
+和包装类分配都只能动到那 1-2%。JCM 2.x/v2 的做法是把这两件事拆开：
+
+* `ScriptManager.scriptThread`（共享 `ExecutorService`）执行脚本；
+* `ScriptInstance.scriptTask`（`Future`）保证同一面板同一时刻最多一个任务；
+* 渲染线程每帧只**提交**下一帧任务，并**重放**上一帧录下的 `drawCalls`。
+
+本移植现在采用同一模型。另一个直接动机是首帧：HKR 的 `create()` 实测 **380-500 ms**
+（AWT 字体装载 + 1088×608 首次整屏重绘）。这段开销无法从脚本里省掉，但可以保证它只发生
+一次，并且之后每一帧的脚本解释都不再占用渲染线程。
+
+#### 实例管理（`ScriptInstances` / `ScriptInstance`）
+
+* `ScriptInstances` 按 `ScriptEngine.Program` 的 key（预设 + key block 坐标）缓存
+  `ScriptInstance`；双格面板的两半**共用一个实例、一个 Program、一个 `state`**，与 4.22
+  之前的行为一致。
+* 每个**渲染半块**（`BlockPos`）在实例内拥有自己的 `lastCalls`、`running` 门和一次性首帧
+  标记。原因很实际：两半的 `pids.isKeyBlock()` 不同，`st_ql.js` 这类预设会按它画不同的面；
+  如果两半共用一个 `lastCalls`，后跑的半块会把前一个半块的绘制列表覆盖掉。
+* 程序本身在 `synchronized (program)` 下进入，保证同一 scope/state 不会被两个半块同时调用；
+  两半的 pass 仍然可以排队，只是执行串行。这与旧的"每帧跑两次脚本"顺序一致。
+* 执行器是**共享的有界线程池**（2-4 个 daemon 线程），不是每面板一个线程：一个玩家视野里
+  可能有几十块面板，每线程一个 Rhino Context 的代价不划算；共享池的线程数与面板数无关，
+  每个半块用 `AtomicBoolean` 做串行门，慢脚本只会丢帧，不会堆积任务。
+* 资源重载（`ScriptEngine.reset()`）和世界切换/退出（`ScriptInstances.beginFrame`，客户端
+  tick 与渲染路径双保险）都会 `requestDispose()` 并在脚本线程上调用 `dispose()`，不阻塞渲染
+  线程。世界切换同时清空编译缓存，让新世界重新跑 `create()`，也避免旧实例的 dispose 碰到
+  新实例正在用的 Program。
+
+#### 首帧策略：同步一次，之后全异步
+
+`ScriptInstance.runFirstFrame()` 在渲染线程上同步执行 `create() + render()`，录制结果后
+**在同一帧立即重放**，所以面板不会闪一帧空白。它每个半块只允许发生一次（`AtomicBoolean`），
+第二个半块只多付一次 `render()`（`create()` 已由 `Program.started` 挡住）。之后每帧：
+
+1. 若该半块空闲，提交一个 `render()` 任务（不阻塞）；
+2. 立刻重放该半块上一帧的 `lastCalls`；
+3. 任务成功才发布新列表，失败则保留上一帧的好结果。
+
+#### 数据快照：`PIDSWrapper` 现在是渲染线程构造的不可变快照
+
+旧实现惰性读取 `ClientData` / `PIDSData`，而脚本线程运行时渲染线程仍在写这些缓存。现在
+**构造时一次性解析**，脚本线程只读 final 字段：
+
+* `PIDSWrapper`：`station()`/`stationName()` 的站点（含 nearest-platform 回退链）、
+  `platformIds`（`List.copyOf`）、`customMessages`/`rowHidden`（clone）、`scheduleList`
+  （`List.copyOf`）。
+* `Arrival`：`arrivalMillis`、`carCount`、`routeId`、`destination`、`routeName`、`routeColor`、
+  `routeNumber`、`routeType`、`isLightRailRoute`、`circularState`、`platformId`、`platformName`、
+  `currentStationIndex`、dwell（`departureTime` 的基数）、`RouteInfo`、`PlatformInfo` 全部
+  final。`arrived()`/`departed()`/absent 占位符的 `arrivalTime()` 仍读系统时钟，这是纯时间
+  比较，不碰客户端缓存。
+* `RouteInfo`：`name` 与整条 `platformIds` 的 `RouteStopInfo` 列表在构造时解析完；
+  每个 wrapper 内的 `HashMap<routeId, RouteInfo>` 让同一线路的 4 班车共享一次遍历。
+* `RouteStopList`：只读 `List`，越界返回预先构造的空站，不在渲染期查 `PIDSData`。
+* `RouteStopInfo`：`station`、`route`、`stationName`、`platformId` 全 final；
+  `getStationId()` 仍按 4.22 的回退规则。
+* `PlatformInfo`：`name`/`id` 从 `Platform` 复制。
+* `PIDSContext`：`primaryPlatform`、`primaryPlatformName`、`primaryStationName` 在构造时解析，
+  `PlatformComponent`/`StationNameComponent` 的 `canRender()` 改用这些字段，因为脚本线程也会
+  调用组件的 `canRender()`。
+* `PIDSData` 的 `route()`/`platform()`/`stationOf()` 对无缓存（无头、断线瞬间）返回 null 而不是
+  NPE。
+
+对外 API 的成员名、签名和返回值语义完全不变。
+
+#### 录制与重放
+
+`ScriptRenderContext` 原来只有 `dryRun`（存字符串）。现在同一个 seam 分成两半：
+
+* 录制：`ctx.draw(...)` / `renderComponent(...)` 生成不可变 `RecordedCall`，按值捕获
+  `Text`、`Texture`、`Rectangle`、`Component` 的所有绘制参数（位置/尺寸/颜色/UV/对齐/溢出/
+  阴影/字体/行高/marquee 覆盖/naturalLight/`Matrices` 的 4×4 矩阵副本/`z`），不持有脚本的
+  `state` 或 builder；
+* 重放：`RecordedCall.replay(ctx)` 按记录重建同一个 builder（或 component 视图），用**记录时
+  的 z** 调用同一条 `draw()` 路径。`setAutoZOrdering`/`setZOrderStep` 的效果在录制时已经体现
+  在每条记录的 z 上，重放不会二次计算。
+
+覆盖类型：`Text`、`Texture`（普通贴图与 `GraphicsTexture` 画布都只是 `ResourceLocation`，
+画布像素上传仍由脚本线程的 `GraphicsTexture.upload()` 负责）、`Rectangle`、
+`ctx.parseComponent(...)`/`ctx.draw(component)` 的 `Component`。没有模型类绘制调用；若将来
+新增，只需在 `RecordedCall.of` 加一个分支。
+
+一致性证明（`ScriptAsyncCheck`）：同一脚本分别走"内联 dry-run"和"录制 → 重放到第二个
+dry-run 上下文"，比较**逐条 describe 字符串**和**逐条完整签名**（签名包含 describe 不打印的
+shadow/bold/字体/矩阵/naturalLight 等字段）。4 条调用（Rectangle/Texture/带矩阵的 Text/
+Component）逐条相同。这证明录制不丢字段、重放不依赖脚本线程的 live 对象，且顺序一致。
+
+`dryRun` 的字符串输出保留：`RecordedCall.describe()` 重建 builder 后调用原 `describe()`，
+所以现有检查依赖的文本格式不变。
+
+#### 像素化：保留同步内联
+
+像素化路径（`drawPixelatedPanel`）仍然同步内联执行，理由是实现复杂度而不是性能：
+offscreen pass 绑定一个本帧的 FBO，`ScriptRenderContext` 还带 `QuadUploader` 和反向 facing；
+把 `RecordedCall` 重放到一个跨帧的 offscreen 目标，需要把 FBO 生命周期、目标尺寸变化、
+readback 和 `flush()` 的时序一起搬过去，回归风险远大于收益。像素化预设按定义是低分辨率的，
+脚本解释开销本来就小。文档与代码注释都写明这一点；其余路径全部异步。
+
+#### 回退开关
+
+`-Djsblock.pids.asyncScript=false` 强制回到旧的内联执行：`ScriptInstances.asyncEnabled()` 为
+false 时渲染器不会创建/提交实例，`create()+render()` 仍在渲染线程上跑。默认开启。诊断开关
+`-Djsblock.pids.canvasStats=true` 的输出新增：
+
+```
+| async=on submit=1 firstSync=0 replay=1
+```
+
+`async` 是开关状态，`submit` 表示本帧提交了任务，`firstSync` 表示本帧等了那一次同步首帧，
+`replay` 是本帧重放的调用数。异步模式下 `B` 只包含重放和提交的时间；脚本解释发生在脚本
+线程，不计入渲染线程的帧时间（首帧同步那一次单独计入 `create`/`D`，并由 `firstSync=1` 标出）。
+静默统计仍然只在渲染线程读写：脚本线程访问 `PIDSWrapper` 时 `apiStart()` 返回 0，不会和
+渲染线程的 `Record` 竞争。
+
+#### 剩下什么
+
+1. **真正的零拷贝重放**：现在每帧 `List.copyOf` 一次记录列表，`RecordedCall` 也是新对象；
+   对每帧几十条调用的面板可以忽略，但"脚本线程直接写环形缓冲、渲染线程按代读取"能省掉这批
+   分配和引用计数。
+2. **跨世界/卸载的强制清扫**：目前靠客户端 tick 的 `client.level` 变化和渲染路径的
+   `beginFrame(world)` 双保险；如果未来有"世界对象不变但维度切换"的路径，需要再挂一个
+   `ClientLevel` 事件或在 `ScriptInstances` 里比较维度 key。
+3. **双面面板的同步首帧**：两个半块各自同步首帧；`create()` 只跑一次，但第二个半块的
+   `render()` 仍在首帧渲染线程上。若首帧 render 本身很贵（HKR 是 create 贵，render 便宜），
+   可以改成"首帧只跑 key 半块，另一面等下一帧"，代价是另一面闪一帧。
+4. **像素化异步化**：见上，需要把 offscreen 目标的生命周期也纳入实例。
+5. **`Text.measureWidth()`**：它调用 `Minecraft.getInstance().font.width`，现在可能在脚本
+   线程上发生。字体宽度读取在 1.20.1 的 `Font` 里会懒加载 glyph；HKR 不调用它，但其他包可能。
+   实机若出现字体相关崩溃/竞态，先把 `measureWidth()` 改成在渲染线程预取，或给 Font 的访问
+   加锁。这是本轮**唯一没有完全消除**的跨线程 API。
+6. **实机确认项**：首帧不再闪空、异步后翻牌音效/动画仍按预期、双面面板两面内容不串、
+   资源重载后画布释放正常。无头检查只能覆盖录制/重放、线程门和状态快照，GL/FBO 与真实
+   帧时序仍需进游戏看。
