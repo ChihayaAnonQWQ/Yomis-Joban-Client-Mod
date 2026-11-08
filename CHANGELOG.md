@@ -132,6 +132,23 @@ space those vertices are written in is y-up and +z-forward.
 
 Verified against the real pack: `kamino_jp_pids.js` now emits five `Quad` calls and `RESULT: SCRIPT OK`.
 
+## Everything else in 2.10
+
+* The six built-in presets are JCM 2.3's own set again (`rv_pids`, `door_cls_psd`/`apg`/`train`,
+  `lcd_pids`, `pids_1a`), listed by display name with a thumbnail per board. The old hard-coded
+  copies occupied the same ids and, having no name, made the picker list them by id.
+* A 1A board with no preset now draws `pids_1a` instead of the Railway Vision fallback.
+* Settings → **Use the classic PIDS config screens** brings back the pre-AmberUI screens for the
+  three PIDS types, without downgrading the jar.
+* The list in every config screen, the preset picker and the client settings fills the space the
+  title and the bottom buttons leave; the 75% height cap of JCM 2.3 cut off the YJCM-specific
+  auto-switch rows.
+* `jsblock:pids_config_tool` copies a PIDS configuration on left-click and pastes it on
+  right-click, writing both halves of a two-block board. It cancels block breaking on both
+  loaders, so creative mode cannot remove the board it is pointed at.
+* HKR's flip board no longer flickers: both faces of a panel replay one recorded frame, and a
+  canvas snapshots its pixels before the upload is queued.
+
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.9
 
 ## Compatible MTR Version

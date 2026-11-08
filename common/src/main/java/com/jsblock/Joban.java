@@ -21,6 +21,8 @@ import static com.jsblock.Compatibilities.incompatible;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_BUTTERFLY_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_FARESAVER_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_JOBAN_PIDS_CONFIG;
+import static com.jsblock.packet.IPacketJoban.PACKET_PIDS_TOOL_COPY;
+import static com.jsblock.packet.IPacketJoban.PACKET_PIDS_TOOL_PASTE;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_PIDS_PROJECTOR;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_RV_PIDS_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SOUND_LOOPER_CONFIG;
@@ -71,6 +73,7 @@ public class Joban {
     public static void init(
             BiConsumer<String, RegistryObject<Block>> registerBlock,
             BiConsumer<String, RegistryObject<Item>> registerItem,
+            BiConsumer<String, RegistryObject<Item>> registerTabItem,
             RegisterBlockItem registerBlockItem,
             BiConsumer<String, RegistryObject<? extends BlockEntityType<? extends BlockEntityMapper>>> registerBlockEntityType,
             RegisterParticle registerParticle
@@ -156,6 +159,7 @@ public class Joban {
             registerBlock.accept("apg_glass_drl", Blocks.APG_GLASS_DRL);
             registerBlock.accept("apg_glass_end_drl", Blocks.APG_GLASS_END_DRL);
 
+            registerTabItem.accept("pids_config_tool", Items.PIDS_CONFIG_TOOL);
             registerItem.accept("apg_door_drl", Items.APG_DOOR_DRL);
             registerItem.accept("apg_glass_drl", Items.APG_GLASS_DRL);
             registerItem.accept("apg_glass_end_drl", Items.APG_GLASS_END_DRL);
@@ -189,6 +193,8 @@ public class Joban {
             Registry.registerNetworkReceiver(PACKET_UPDATE_BUTTERFLY_CONFIG, PacketServer::receiveButterflyC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_FARESAVER_CONFIG, PacketServer::receiveFaresaverC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_JOBAN_PIDS_CONFIG, PacketServer::receiveJobanPIDSConfigC2S);
+            Registry.registerNetworkReceiver(PACKET_PIDS_TOOL_COPY, PacketServer::receivePidsToolCopy);
+            Registry.registerNetworkReceiver(PACKET_PIDS_TOOL_PASTE, PacketServer::receivePidsToolPaste);
             Registry.registerNetworkReceiver(PACKET_UPDATE_RV_PIDS_CONFIG, PacketServer::receiveRVPIDSConfigC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_SOUND_LOOPER_CONFIG, PacketServer::receiveSoundLooperC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_SUBSIDY_CONFIG, PacketServer::receiveSubsidyC2S);

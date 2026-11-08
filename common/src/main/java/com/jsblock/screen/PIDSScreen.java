@@ -106,8 +106,8 @@ public abstract class PIDSScreen extends PIDSBlockConfigScreen {
 	 * <p>This replaced a free-text field the player had to type a preset id into — the same
 	 * information, but picked from the same preview list the main preset uses.</p>
 	 */
-	private void addPresetRow(ListViewWidget listViewWidget, Component label, Button chooseButton,
-							  java.util.function.Supplier<String> currentPreset) {
+	private void addPresetRow(ListViewWidget listViewWidget, Component label,
+							  Button chooseButton, java.util.function.Supplier<String> currentPreset) {
 		final ContentItem row = new ContentItem(label, new MappedWidget(chooseButton), 26);
 		row.setIconCallback((guiGraphics, startX, startY, width, height) -> PIDSPresetScreen.drawPIDSPreview(
 				JobanCustomResources.getPresetEntry(currentPreset.get()), guiGraphics, startX, startY, width, height, true));
@@ -139,9 +139,7 @@ public abstract class PIDSScreen extends PIDSBlockConfigScreen {
 		listViewWidget.add(Text.translatable("gui.jsblock.auto_switch_enabled"), new MappedWidget(autoSwitchCheckbox));
 
 		addWidget(autoSwitchPresetButton);
-		addPresetRow(listViewWidget,
-				withCurrent("gui.jsblock.auto_switch_preset", autoSwitchPreset,
-						"gui.jsblock.auto_switch_preset_with_current"),
+		addPresetRow(listViewWidget, Text.translatable("gui.jsblock.auto_switch_preset"),
 				autoSwitchPresetButton, () -> autoSwitchPreset);
 
 		autoSwitchCountdownTextField.setWidth(AUTO_SWITCH_NUMBER_WIDTH);
@@ -158,9 +156,7 @@ public abstract class PIDSScreen extends PIDSBlockConfigScreen {
 		listViewWidget.add(Text.translatable("gui.jsblock.dep_auto_switch_enabled"), new MappedWidget(depAutoSwitchCheckbox));
 
 		addWidget(depAutoSwitchPresetButton);
-		addPresetRow(listViewWidget,
-				withCurrent("gui.jsblock.dep_auto_switch_preset", depAutoSwitchPreset,
-						"gui.jsblock.dep_auto_switch_preset_with_current"),
+		addPresetRow(listViewWidget, Text.translatable("gui.jsblock.dep_auto_switch_preset"),
 				depAutoSwitchPresetButton, () -> depAutoSwitchPreset);
 
 		depAutoSwitchCountdownTextField.setWidth(AUTO_SWITCH_NUMBER_WIDTH);

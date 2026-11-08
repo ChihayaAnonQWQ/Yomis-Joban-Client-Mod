@@ -68,6 +68,20 @@ public class PacketClient {
         RegistryClient.sendToServer(IPacketJoban.PACKET_UPDATE_RV_PIDS_CONFIG, packet);
     }
 
+    /** Asks the server to copy the PIDS at {@code pos} into this player's clipboard. */
+    public static void sendPidsToolCopy(BlockPos pos) {
+        FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
+        packet.writeBlockPos(pos);
+        RegistryClient.sendToServer(IPacketJoban.PACKET_PIDS_TOOL_COPY, packet);
+    }
+
+    /** Asks the server to paste this player's copied PIDS configuration onto {@code pos}. */
+    public static void sendPidsToolPaste(BlockPos pos) {
+        FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
+        packet.writeBlockPos(pos);
+        RegistryClient.sendToServer(IPacketJoban.PACKET_PIDS_TOOL_PASTE, packet);
+    }
+
     public static void sendJobanPIDSConfigC2S(BlockPos pos1, BlockPos pos2, String[] messages, boolean[] hideArrival, Set<Long> filterPlatformIds, String presetID,
                                               boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
                                               boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {

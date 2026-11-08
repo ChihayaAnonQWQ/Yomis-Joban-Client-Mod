@@ -194,6 +194,10 @@ Full write-up, in Chinese, with the decompiled evidence and the in-game logs:
 | Diagnostics | `-Djsblock.pids.trace=true` logs every draw call a preset issues, with type, depth, colour and text; `-Djsblock.pids.canvasStats=true` logs, once a second, the canvas upload/copy/GL timings **and** the per-frame section breakdown, with `async=on/off`, `submit`, `firstSync` and `replay` markers. `-Djsblock.pids.asyncScript=false` restores inline script execution for troubleshooting |
 | Docs | `MTR3-PIDS-PORT.md` |
 | PIDS Projector | `jsblock:pids_projector` — JCM 2.x's projector: the panel hangs in the air, with its own format, offset, rotation, scale, per-row text and hide-platform switch |
+| AmberUI screens | the three PIDS config screens, the preset picker and the client settings are rebuilt on JCM 2.3's `com.jsblock.amberui`; a **Use the classic PIDS config screens** switch brings the pre-2.10 screens back |
+| Built-in presets | JCM 2.3's own set — `rv_pids`, the three door-closing boards, `lcd_pids` and `pids_1a` — listed by name with matching thumbnails |
+| PIDS config tool | `jsblock:pids_config_tool` — left-click a PIDS to copy its configuration, right-click another to paste it, in the PIDS creative tab. It does not break the block, in creative or otherwise |
+| `QuadDrawCall` | JCM 2.x's 3D quad call plus `ctx.renderManager()`, so packs that draw a shell around the panel (Japanese_PIDS) render it |
 
 A preset that declares neither `components` nor `scriptFiles` keeps the old hard-coded
 render path, unchanged.
@@ -471,23 +475,19 @@ flat placeholder when it has neither. Clicking a tile writes the preset id back 
 the screen. Opening the picker or MTR's platform list does not discard text that has already been
 typed.
 
+A block with no preset selected is drawn with the preset that matches its block — a 1A board
+draws `pids_1a` — instead of falling back to the Railway Vision layout.
+
+Settings → **Use the classic PIDS config screens** switches the three screens back to the
+pre-AmberUI implementation; a change takes effect the next time a block's screen is opened.
+
 The GUI can't be verified headlessly, so the interaction checklist is in §4.24.6 of
 [MTR3-PIDS-PORT.md](MTR3-PIDS-PORT.md); the build and headless checks are what CI covers.
 
 ### Known issues
 
-- **A 1A PIDS with no preset selected is drawn in the Railway Vision PIDS style.** The 1A
-  passenger information display had to be moved onto YJCM's RV renderer for it to take part
-  in the preset system, and a block with no preset selected falls back to that renderer's own
-  layout. **Workaround:** use the brush on the block and switch "PIDS Preset" to any display
-  format a resource pack provides — from then on the panel is drawn by the preset, not by the
-  built-in layout.
-
-![A 1A PIDS with no preset selected, drawn in the Railway Vision PIDS style](docs/pids-1a-no-preset-close.png)
-
-The light blue striped boards in the station below are the ones with no preset selected:
-
-![The same boards among the rest of the station](docs/pids-1a-no-preset-station.png)
+- **Fixed in 2.10:** a 1A PIDS with no preset selected used to be drawn in the Railway Vision
+  PIDS style. It now draws its own `pids_1a` preset; the old screenshots stay in `docs/`.
 
 ### Building MTR 3 against this branch
 

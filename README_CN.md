@@ -182,6 +182,10 @@ MTR 3 上，本 fork 就是还在继续做 PIDS 的那条线。
 | 诊断 | `-Djsblock.pids.trace=true` 记录预设发出的每一次绘制调用（类型、深度、颜色、文字）；`-Djsblock.pids.canvasStats=true` 每秒输出画布上传/拷贝/GL 耗时**以及**帧内分段，并带 `async=on/off`、`submit`、`firstSync`、`replay` 标记。`-Djsblock.pids.asyncScript=false` 可退回内联执行，用于排障 |
 | 文档 | `MTR3-PIDS-PORT.md` |
 | PIDS 投影仪 | `jsblock:pids_projector` —— JCM 2.x 的投影仪：面板悬在空中，自带显示格式、偏移、旋转、缩放、逐行信息与隐藏月台号 |
+| AmberUI 界面 | 三个 PIDS 配置界面、预设选择和客户端设置都改用 JCM 2.3 的 `com.jsblock.amberui`；设置里的**使用旧版 PIDS 配置界面**开关可以切回 2.10 之前的界面 |
+| 内置预设 | JCM 2.3 自带的六个预设 —— `rv_pids`、三个关门板、`lcd_pids`、`pids_1a` —— 按名称列出，缩略图逐一对应 |
+| PIDS 快捷配置工具 | `jsblock:pids_config_tool` —— 左键 PIDS 复制配置，右键另一个粘贴，放在 PIDS 创造页。创造模式下也不会敲掉方块 |
+| `QuadDrawCall` | JCM 2.x 的 3D 四边形调用与 `ctx.renderManager()`，资源包给面板画外壳（Japanese_PIDS）时可以正常显示 |
 
 既不声明 `components` 也不声明 `scriptFiles` 的预设，仍然走原来那套硬编码渲染路径，未做改动。
 
@@ -441,16 +445,8 @@ GUI 无法无头验证，逐条交互检查清单见 [MTR3-PIDS-PORT.md](MTR3-PI
 
 ### 已知问题
 
-- **没有选预设的 1A PIDS 会用 Railway Vision PIDS 的样式绘制。** 1A 乘客资讯显示屏为了让预设体系能
-  管到它，被移到了 YJCM 的 RV 渲染器上，而没有选预设的方块会回退到这个渲染器自己的布局。
-  **绕法：** 拿刷子右键方块，把「PIDS 显示格式」切成任意一个资源包提供的显示格式 —— 之后这块面板
-  就由预设绘制，而不是内置布局。
-
-![没有选预设的 1A PIDS，用的是 Railway Vision PIDS 的样式](docs/pids-1a-no-preset-close.png)
-
-下图车站里那些浅蓝条纹的板子就是没选预设的：
-
-![同一批板子混在车站其余部分里](docs/pids-1a-no-preset-station.png)
+- **2.10 已修复：** 没有选预设的 1A PIDS 以前会用 Railway Vision PIDS 的样式绘制，现在改用
+  它自己的 `pids_1a` 预设；旧截图仍保留在 `docs/` 供对照。
 
 ### 怎么对着本分支构建 MTR 3
 

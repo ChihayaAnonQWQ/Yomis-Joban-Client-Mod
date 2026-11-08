@@ -25,5 +25,8 @@ public interface IPacketJoban {
     /* PIDS Projector: its own screen and its own update, so the two-block PIDS configuration flow
        stays untouched. */
     ResourceLocation PACKET_UPDATE_PIDS_PROJECTOR = new ResourceLocation(Joban.MOD_ID, "packet_pids_projector_update");
+    /* PIDS config tool: copy the block entity tag on left click, paste it on right click. */
+    ResourceLocation PACKET_PIDS_TOOL_COPY = new ResourceLocation(Joban.MOD_ID, "packet_pids_tool_copy");
+    ResourceLocation PACKET_PIDS_TOOL_PASTE = new ResourceLocation(Joban.MOD_ID, "packet_pids_tool_paste");
     ResourceLocation PACKET_OPEN_PIDS_PROJECTOR_SCREEN = new ResourceLocation(Joban.MOD_ID, "packet_open_pids_projector_screen");
 }

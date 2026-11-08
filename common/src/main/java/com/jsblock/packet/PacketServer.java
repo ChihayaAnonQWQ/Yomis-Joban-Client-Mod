@@ -15,8 +15,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.UUID;
 import java.util.Set;
 
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_BUTTERFLY_CONFIG_SCREEN;
@@ -137,6 +142,61 @@ public class PacketServer {
             if (entity2 instanceof JobanPIDSBase.TileEntityBlockPIDSBaseHorizontal) {
                 ((JobanPIDSBase.TileEntityBlockJobanPIDS) entity2).setData(messages, hideArrivals, platformIds, 1, presetID, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration, depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
             }
+        });
+    }
+
+
+    /** One copied PIDS configuration per player, kept server-side so a client cannot forge it. */
+    private static final Map<UUID, CompoundTag> PIDS_TOOL_CLIPBOARD = new HashMap<>();
+
+    public static void receivePidsToolCopy(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
+        final BlockPos pos = packet.readBlockPos();
+        minecraftServer.execute(() -> {
+            final BlockEntity entity = player.level().getBlockEntity(pos);
+            if (entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
+                PIDS_TOOL_CLIPBOARD.put(player.getUUID(), entity.saveWithoutMetadata());
+                player.displayClientMessage(Component.translatable("message.jsblock.pids_tool.copied"), true);
+            }
+        });
+    }
+
+    public static void receivePidsToolPaste(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
+        final BlockPos pos = packet.readBlockPos();
+        minecraftServer.execute(() -> {
+            final CompoundTag copied = PIDS_TOOL_CLIPBOARD.get(player.getUUID());
+            if (copied == null) {
+                player.displayClientMessage(Component.translatable("message.jsblock.pids_tool.empty"), true);
+                return;
+            }
+            final BlockEntity entity = player.level().getBlockEntity(pos);
+            if (!(entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS)) {
+                return;
+            }
+            /* The tag carries the source block's identity and coordinates; loading those would try to
+               move the target, so they are dropped and only the configuration is applied. */
+            final CompoundTag tag = copied.copy();
+            tag.remove("id");
+            tag.remove("x");
+            tag.remove("y");
+            tag.remove("z");
+
+            /* A PIDS spans two blocks and both keep a copy of the configuration. Loading the clicked
+               half alone left the other one on its old preset, which reads as "only one face pasted".
+               The pair is found through the same facing property the blocks use themselves. */
+            final net.minecraft.world.level.block.state.BlockState state = player.level().getBlockState(pos);
+            final BlockPos otherPos = state.hasProperty(com.jsblock.block.BlockPIDSBaseHorizontal.FACING)
+                    ? pos.relative(state.getValue(com.jsblock.block.BlockPIDSBaseHorizontal.FACING))
+                    : pos;
+
+            for (BlockPos targetPos : new BlockPos[]{pos, otherPos}) {
+                final BlockEntity target = player.level().getBlockEntity(targetPos);
+                if (target instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
+                    target.load(tag.copy());
+                    target.setChanged();
+                    player.level().sendBlockUpdated(targetPos, target.getBlockState(), target.getBlockState(), 3);
+                }
+            }
+            player.displayClientMessage(Component.translatable("message.jsblock.pids_tool.pasted"), true);
         });
     }
 

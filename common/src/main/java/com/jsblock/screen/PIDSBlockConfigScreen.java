@@ -145,17 +145,10 @@ public abstract class PIDSBlockConfigScreen extends BlockConfigListScreen {
 		Minecraft.getInstance().setScreen(new PIDSPresetScreen(pos1, presetId, preset -> this.presetId = preset).withPreviousScreen(this));
 	}
 
-	/**
-	 * A row label of the form "Label (Current: name)".
-	 *
-	 * <p>The current preset used to live on the button to the right, which made that button as wide
-	 * as the longest preset name. The label is where a reader looks for it, and a label can be
-	 * truncated; a button cannot without hiding its own purpose.</p>
-	 */
-	protected static Component withCurrent(String labelKey, String currentId, String patternKey) {
+	/** @return the preset's display name, or a dash when nothing is selected */
+	protected static String presetName(String currentId) {
 		final com.jsblock.data.PIDSPresetEntry entry = JobanCustomResources.getPresetEntry(currentId);
-		final String name = entry == null ? "-" : entry.getName();
-		return Text.translatable(patternKey, truncate(name, 24));
+		return entry == null ? "-" : entry.getName();
 	}
 
 	/** Shortens a preset name so a long resource-pack name cannot push the row out of shape. */
@@ -170,8 +163,7 @@ public abstract class PIDSBlockConfigScreen extends BlockConfigListScreen {
 	public void addConfigEntries(ListViewWidget listViewWidget) {
 		// Preset button
 		addWidget(choosePresetButton);
-		final ContentItem presetEntry = new ContentItem(withCurrent("gui.jsblock.pids.listview.title.pids_preset", presetId,
-				"gui.jsblock.pids.listview.title.pids_preset_with_current"), new MappedWidget(choosePresetButton), 26);
+		final ContentItem presetEntry = new ContentItem(Text.translatable("gui.jsblock.pids.listview.title.pids_preset"), new MappedWidget(choosePresetButton), 26);
 		presetEntry.setIconCallback((guiGraphics, startX, startY, width, height) -> PIDSPresetScreen.drawPIDSPreview(JobanCustomResources.getPresetEntry(presetId), guiGraphics, startX, startY, width, height, true));
 		listViewWidget.add(presetEntry);
 
