@@ -159,6 +159,20 @@ public abstract class PIDSBlockConfigScreen extends BlockConfigListScreen {
 		return text.length() <= maxChars ? text : text.substring(0, Math.max(1, maxChars - 1)) + "\u2026";
 	}
 
+	/**
+	 * Registers a widget with the screen from outside this class.
+	 *
+	 * <p>{@code Screen.addWidget} is protected, so a helper that is not a screen subclass cannot call
+	 * it. {@link AutoSwitchSection} needs to: its widgets have to be registered here to be typed
+	 * into, while the list entry only draws them. The bound is the one {@code addWidget} declares, so
+	 * anything it accepts goes through unchanged.</p>
+	 */
+	<T extends net.minecraft.client.gui.components.events.GuiEventListener
+			& net.minecraft.client.gui.components.Renderable
+			& net.minecraft.client.gui.narration.NarratableEntry> void registerListWidget(T widget) {
+		addWidget(widget);
+	}
+
 	@Override
 	public void addConfigEntries(ListViewWidget listViewWidget) {
 		// Preset button
