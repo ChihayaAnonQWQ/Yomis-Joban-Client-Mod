@@ -1,5 +1,7 @@
 package com.jsblock.script;
 
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import org.mozilla.javascript.ClassShutter;
 import org.mozilla.javascript.Context;
 
@@ -50,12 +52,18 @@ public final class ScriptClassShutter implements ClassShutter {
 				"java.io.InputStream",
 				"java.io.OutputStream",
 				"jdk.*",
-				/* ResourceLocation is the one Minecraft type the scripting surface hands back:
-				   Resources.id() returns it. Rhino wraps return values through the shutter too,
-				   so without this even jsblock:scripts/pids_util.js fails to load -- which the
-				   headless check caught the first time the shutter was switched on. It is a
-				   namespace/path pair and grants nothing else. */
-				"net.minecraft.resources.ResourceLocation",
+				/* The Minecraft types the scripting surface hands back: Resources.id() returns a
+				   ResourceLocation, ctx.parseComponent() a Component. Rhino wraps return values
+				   through the shutter too, so without these even jsblock:scripts/pids_util.js
+				   fails to load -- which the headless check caught the first time the shutter was
+				   switched on. Each is a plain value object and grants nothing else.
+
+				   Registered by Class, not by name: on Fabric Minecraft is remapped to
+				   intermediary at runtime, where ResourceLocation is net.minecraft.class_2960, so
+				   a literal name rule silently stopped matching and rejected the engine's own
+				   return values (a PIDS panel drew black with "Access to Java class
+				   net.minecraft.class_2960 is prohibited"). Class.getName() reports whatever the
+				   mappings call it on the platform we are actually running on. */
 				/* MTR's client data, for the MTRClientData global JCM 2.x gives a PIDS script.
 				   JCM 2.x allows mtr.* wholesale (JCMScripting.register calls ClassRule.parse("mtr.*")),
 				   which is more than a PIDS preset needs: the global hands out maps of platforms,
@@ -74,6 +82,7 @@ public final class ScriptClassShutter implements ClassShutter {
 				// Rhino's own runtime classes are needed for the engine to function at all.
 				"org.mozilla.*"
 		);
+		allowClass(ResourceLocation.class, Component.class);
 		deny(
 				// Escape hatches out of the sandbox.
 				"java.lang.invoke.*",
@@ -102,6 +111,21 @@ public final class ScriptClassShutter implements ClassShutter {
 
 	public void allow(String... classRules) {
 		allowed.addAll(Arrays.asList(classRules));
+	}
+
+	/**
+	 * Allows the given classes under whatever name the platform's mappings give them.
+	 *
+	 * <p>Rules are matched against the string Rhino reports, which is the runtime class name.
+	 * That is the Mojang name in development and on Forge, but the intermediary name on Fabric
+	 * ({@code net.minecraft.class_2960} rather than {@code net.minecraft.resources.ResourceLocation}).
+	 * Registering the class object makes a rule correct on every platform instead of correct on
+	 * one and silently broken on the other.</p>
+	 */
+	public void allowClass(Class<?>... classes) {
+		for (Class<?> type : classes) {
+			allow(type.getName());
+		}
 	}
 
 	public void deny(String... classRules) {

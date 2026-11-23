@@ -71,6 +71,11 @@ public final class ScriptShutterCheck {
 		// allowed, so a rule that only consulted the allow list would let System through.
 		expect(shutter, "java.lang.System", false, "java.lang.* allowed but System denied");
 
+		// The Minecraft types the scripting surface hands back must be reachable under whatever
+		// name the platform's mappings give them.
+		expectClassAllowed(shutter, net.minecraft.resources.ResourceLocation.class);
+		expectClassAllowed(shutter, net.minecraft.network.chat.Component.class);
+
 		// Off means off, except for the shutter class itself.
 		shutter.setEnabled(false);
 		expect(shutter, "java.lang.System", true, "shutter disabled");
@@ -186,6 +191,24 @@ public final class ScriptShutterCheck {
 	}
 
 	// ------------------------------------------------------------------
+
+	/**
+	 * The rules for Minecraft types must match whatever the platform calls them.
+	 *
+	 * <p>Under Mojang mappings that is {@code net.minecraft.resources.ResourceLocation}; under Fabric's
+	 * intermediary mappings the same class is {@code net.minecraft.class_2960}. A literal rule works
+	 * on one and silently rejects the engine's own return value on the other, which is what turned a
+	 * PIDS panel black on Fabric. Asserting by {@code Class.getName()} holds on both.</p>
+	 */
+	private static void expectClassAllowed(ScriptClassShutter shutter, Class<?> type) {
+		final String runtimeName = type.getName();
+		if (shutter.visibleToScripts(runtimeName)) {
+			pass("allows " + runtimeName + "  (runtime name of " + type.getSimpleName() + ")");
+		} else {
+			fail("should have allowed " + runtimeName + " -- the scripting surface hands this type out,"
+					+ " so a rule that does not match it breaks on this platform's mappings");
+		}
+	}
 
 	private static void expect(ScriptClassShutter shutter, String className, boolean shouldBeVisible, String why) {
 		final boolean actual = shutter.visibleToScripts(className);
