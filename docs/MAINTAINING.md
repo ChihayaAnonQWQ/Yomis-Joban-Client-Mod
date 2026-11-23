@@ -122,6 +122,25 @@ cd <repo>
 版本号只有一个来源：`gradle.properties` 的 `mod_version`，
 `Joban.VERSION` 从产物元数据里读回来，不要在 Java 里写死。
 
+### 4.1 平台验证：Forge 和 Fabric 必须都跑
+
+**两边都要进游戏看一次，不能只测 Forge。** 不是形式主义，Fabric 运行时会用 intermediary 映射重命名
+所有 Minecraft 类，Forge 用 Mojang 名，于是任何**按类名字符串**做判断的代码会在其中一边失效，而另
+一边完全正常：
+
+| 写法 | Forge | Fabric |
+|---|---|---|
+| `Class.forName("net.minecraft.resources.ResourceLocation")` | 可用 | **失败**，运行时叫 `net.minecraft.class_2960` |
+| 沙箱白名单里写死 `"net.minecraft.resources.ResourceLocation"` | 可用 | **永远匹配不上**，合法调用被当成越权 |
+| `SomeClass.class.getName()` | 正确 | 正确（自动跟随映射） |
+
+已踩过的坑：脚本沙箱按名字放行 `ResourceLocation`，Fabric 上把引擎自己返回的值也拦掉，PIDS 面板变
+全黑，而 Forge 一切正常；版本号用 `getResourceAsStream("/fabric.mod.json")` 读，Fabric 上所有模组
+共用一条类路径，读到了 architectury 的 `9.2.14`。
+
+**规则**：跨平台的判断一律走 `Class` 对象（`Class.getName()`、`isAssignableFrom`），不要写死映射名；
+需要写死名字时，两边各验一次。
+
 ## 5. 已知限制（改之前先看）
 
 | 现象 | 原因 | 能不能修 |
