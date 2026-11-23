@@ -1,10 +1,7 @@
 package com.jsblock.script;
 
-import com.mojang.blaze3d.vertex.VertexConsumer;
 import mtr.data.IGui;
-import net.minecraft.client.renderer.RenderType;
 import net.minecraft.resources.ResourceLocation;
-import org.joml.Matrix4f;
 
 /**
  * {@code QuadDrawCall.create().renderType("EXTERIOR").texture(...).color(0x333333).normal(0,1,0)

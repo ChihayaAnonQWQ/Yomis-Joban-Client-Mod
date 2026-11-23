@@ -4,10 +4,8 @@ import com.google.gson.JsonObject;
 import com.jsblock.pids.PIDSAlign;
 import com.jsblock.pids.PIDSComponent;
 import com.jsblock.pids.PIDSContext;
-import com.jsblock.pids.PIDSData;
 import com.jsblock.pids.PIDSGraphics;
 import mtr.data.IGui;
-import mtr.data.Station;
 
 /**
  * Draws the name of the station the watched platform belongs to.

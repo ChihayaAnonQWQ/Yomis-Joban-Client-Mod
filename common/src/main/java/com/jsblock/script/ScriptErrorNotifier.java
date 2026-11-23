@@ -1,7 +1,5 @@
 package com.jsblock.script;
 
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Holds messages that must not be delivered from inside a render call.

@@ -1,6 +1,5 @@
 package com.jsblock.script;
 
-import com.jsblock.data.PIDSPreset;
 import mtr.data.ScheduleEntry;
 import net.minecraft.core.BlockPos;
 import org.mozilla.javascript.BaseFunction;
@@ -17,7 +16,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
