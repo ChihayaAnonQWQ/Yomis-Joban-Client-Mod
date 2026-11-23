@@ -53,10 +53,11 @@ final class AutoSwitchSection {
 		this.departure = departure;
 		this.preset = preset == null ? "" : preset;
 
-		this.enabledBox = new WidgetBetterCheckbox(0, 0, SQUARE, SQUARE,
-				Text.translatable(departure ? "gui.jsblock.dep_auto_switch_enabled" : "gui.jsblock.auto_switch_enabled"),
-				checked -> {
-				});
+		/* Component.empty(), not the row's text: a Checkbox draws its own message to the right of the
+		   box, and these rows already have a label on the left -- the message was what showed up as a
+		   clipped second copy of it. Same reason the settings screen passes EMPTY. */
+		this.enabledBox = new WidgetBetterCheckbox(0, 0, SQUARE, SQUARE, Component.empty(), checked -> {
+		});
 		this.enabledBox.setChecked(enabled);
 
 		this.presetButton = Button
@@ -69,9 +70,8 @@ final class AutoSwitchSection {
 		this.durationField = TextFields.setValue(new WidgetBetterTextField("", 4), String.valueOf(duration));
 
 		if (departure) {
-			this.untilCloseBox = new WidgetBetterCheckbox(0, 0, SQUARE, SQUARE,
-					Text.translatable("gui.jsblock.dep_auto_switch_until_close"), checked -> {
-					});
+			this.untilCloseBox = new WidgetBetterCheckbox(0, 0, SQUARE, SQUARE, Component.empty(), checked -> {
+			});
 			this.untilCloseBox.setChecked(untilClose);
 			/* With "until the doors close" on there is no duration to type. */
 			this.durationField.setEditable(!untilClose);

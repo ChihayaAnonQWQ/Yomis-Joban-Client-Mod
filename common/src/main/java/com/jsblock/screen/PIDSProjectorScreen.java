@@ -118,7 +118,7 @@ public class PIDSProjectorScreen extends PIDSBlockConfigScreen {
 
 		listViewWidget.add(Text.translatable("gui.jsblock.pids_projector.scale"), new MappedWidget(transformFields[SCALE_INDEX]));
 
-		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids.listview.category.pids"));
+		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids.listview.category.pids_projector"));
 		super.addConfigEntries(listViewWidget);
 
 		listViewWidget.addCategory(Text.translatable("gui.jsblock.arrival_switch_section"));

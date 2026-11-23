@@ -155,6 +155,7 @@
   "gui.jsblock.looper.use_network_audio": "Use Network Audio",
   "gui.jsblock.mismatched_versions": "Please update the Joban Client Mod and try again.",
   "gui.jsblock.pids.listview.category.pids": "PIDS",
+  "gui.jsblock.pids.listview.category.pids_projector": "PIDS Projector",
   "gui.jsblock.pids.listview.category.projection": "Projection",
   "gui.jsblock.pids.listview.title.filtered_platform": "Showing arrivals for Platform %s",
   "gui.jsblock.pids.listview.title.filtered_platform.nearby": "Showing arrivals for nearby Platforms",

@@ -155,6 +155,7 @@
   "gui.jsblock.looper.use_network_audio": "使用网络音频",
   "gui.jsblock.mismatched_versions": "请把 Joban Client Mod 更新，并再重试。",
   "gui.jsblock.pids.listview.category.pids": "乘客资讯显示屏",
+  "gui.jsblock.pids.listview.category.pids_projector": "乘客资讯显示屏投影仪",
   "gui.jsblock.pids.listview.category.projection": "投影",
   "gui.jsblock.pids.listview.title.filtered_platform": "显示 %s 号月台的到站信息",
   "gui.jsblock.pids.listview.title.filtered_platform.nearby": "显示附近月台的到站信息",
