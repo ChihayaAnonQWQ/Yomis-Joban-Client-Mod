@@ -22,6 +22,15 @@ import java.util.Set;
  * @see com.jsblock.block.BlockPIDSBaseHorizontal
  */
 public abstract class JobanPIDSBase extends BlockPIDSBaseHorizontal {
+
+    protected JobanPIDSBase() {
+        super();
+    }
+
+    /** @see BlockPIDSBaseHorizontal#BlockPIDSBaseHorizontal(net.minecraft.world.level.block.state.BlockBehaviour.Properties) */
+    protected JobanPIDSBase(net.minecraft.world.level.block.state.BlockBehaviour.Properties properties) {
+        super(properties);
+    }
     @Override
     public InteractionResult use(BlockState state, Level world, BlockPos pos, Player player, InteractionHand hand, BlockHitResult hit) {
         return IBlock.checkHoldingBrush(world, player, () -> {
@@ -31,7 +40,16 @@ public abstract class JobanPIDSBase extends BlockPIDSBaseHorizontal {
             if (entity1 instanceof TileEntityBlockJobanPIDS && entity2 instanceof TileEntityBlockJobanPIDS) {
                 ((TileEntityBlockJobanPIDS) entity1).syncData();
                 ((TileEntityBlockJobanPIDS) entity2).syncData();
+                /* Same reason as the RV board: the screen gets the data it would otherwise have to
+                   guess from a possibly-stale client copy. */
+                final String[] messages = new String[((TileEntityBlockJobanPIDS) entity1).getMaxArrivals()];
+                final boolean[] rowHidden = new boolean[messages.length];
+                for (int i = 0; i < messages.length; i++) {
+                    messages[i] = ((TileEntityBlockJobanPIDS) entity1).getMessage(i);
+                    rowHidden[i] = ((TileEntityBlockJobanPIDS) entity1).getHideArrival(i);
+                }
                 PacketServer.sendJobanPIDSConfigScreenS2C((ServerPlayer) player, pos, otherPos, ((TileEntityBlockJobanPIDS)entity1).getMaxArrivals(),
+                        messages, rowHidden, ((TileEntityBlockJobanPIDS) entity1).getPlatformIds(),
                         ((TileEntityBlockJobanPIDS) entity1).getPresetID(),
                         ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchEnabled(), ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchPreset(), ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchCountdown(), ((TileEntityBlockJobanPIDS) entity1).getAutoSwitchDuration(),
                         ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchEnabled(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchPreset(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchCountdown(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchDuration(), ((TileEntityBlockJobanPIDS) entity1).getDepAutoSwitchUntilClose());
@@ -113,6 +131,49 @@ public abstract class JobanPIDSBase extends BlockPIDSBaseHorizontal {
             this.depAutoSwitchCountdown = depAutoSwitchCountdown;
             this.depAutoSwitchDuration = depAutoSwitchDuration;
             this.depAutoSwitchUntilClose = depAutoSwitchUntilClose;
+            this.setChanged();
+            this.syncData();
+        }
+
+        /**
+         * Sets only the automatic-switch fields.
+         *
+         * <p>{@link #setData} sets them together with the preset and the rows, which the projector's
+         * screen applies in its own order; this exists so the projector can hand over just these
+         * nine without repeating the rest.</p>
+         */
+        public void setAutoSwitch(boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+                                  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+            this.autoSwitchEnabled = autoSwitchEnabled;
+            this.autoSwitchPreset = autoSwitchPreset;
+            this.autoSwitchCountdown = autoSwitchCountdown;
+            this.autoSwitchDuration = autoSwitchDuration;
+            this.depAutoSwitchEnabled = depAutoSwitchEnabled;
+            this.depAutoSwitchPreset = depAutoSwitchPreset;
+            this.depAutoSwitchCountdown = depAutoSwitchCountdown;
+            this.depAutoSwitchDuration = depAutoSwitchDuration;
+            this.depAutoSwitchUntilClose = depAutoSwitchUntilClose;
+            this.setChanged();
+            this.syncData();
+        }
+
+        /** Sets the preset alone; the projector has no room for the whole config form. */
+        public void setPresetID(String presetID) {
+            this.presetID = presetID;
+            this.setChanged();
+            this.syncData();
+        }
+
+        /**
+         * Replaces the platform filter; the projector's screen is the only caller.
+         *
+         * <p>MTR keeps the set private and only exposes {@link #getPlatformIds()}, so this edits it
+         * through the getter — the same set the renderer reads and the same one {@code setData}
+         * fills.</p>
+         */
+        public void setPlatformIds(java.util.Set<Long> newPlatformIds) {
+            this.getPlatformIds().clear();
+            this.getPlatformIds().addAll(newPlatformIds);
             this.setChanged();
             this.syncData();
         }

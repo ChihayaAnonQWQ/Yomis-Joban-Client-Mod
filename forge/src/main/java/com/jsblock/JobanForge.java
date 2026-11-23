@@ -3,6 +3,7 @@ package com.jsblock;
 import com.jsblock.client.JobanCustomResources;
 import com.jsblock.mappings.ForgeConfig;
 import com.jsblock.mappings.ForgeUtilities;
+import com.jsblock.packet.PacketClient;
 import mtr.RegistryObject;
 import mtr.mappings.BlockEntityMapper;
 import mtr.mappings.DeferredRegisterHolder;
@@ -56,7 +57,7 @@ public class JobanForge {
 				.title(Component.translatable("itemGroup.jsblock.ceiling"))
 				.build());
 
-		Joban.init(JobanForge::registerBlock, JobanForge::registerItem, JobanForge::registerBlockAndItems, JobanForge::registerBlockEntityType, JobanForge::registerParticle);
+		Joban.init(JobanForge::registerBlock, JobanForge::registerItem, JobanForge::registerTabItem, JobanForge::registerBlockAndItems, JobanForge::registerBlockEntityType, JobanForge::registerParticle);
 
 		// ItemGroups instantiation triggers MTR's creative tab registration
 		// (via CreativeModeTabs.Wrapper → Registry.getCreativeModeTab()),
@@ -107,6 +108,8 @@ public class JobanForge {
 		PARTICLE_TYPES.register();
 		CREATIVE_MODE_TABS.register();
 		eventBus.register(CreativeTabHandler.class);
+		/* LeftClickBlock lives on the Forge bus, not the mod bus the creative-tab handler uses. */
+		net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(PidsToolHandler.class);
 		eventBus.register(MTRForgeRegistry.class);
 		DistExecutor.unsafeRunWhenOn(net.minecraftforge.api.distmarker.Dist.CLIENT, () -> () -> eventBus.register(ForgeUtilities.ClientsideEvents.class));
 	}
@@ -118,6 +121,22 @@ public class JobanForge {
 	private static void registerItem(String path, RegistryObject<Item> item) {
 		ITEMS.register(path, item::get);
 	}
+
+	/**
+	 * Registers a plain item and puts it in one of this mod's creative tabs.
+	 *
+	 * <p>The item is constructed inside the deferred register's supplier, not here: this runs during
+	 * the mod class's static initialiser, when Forge's item registry is already frozen, and calling
+	 * {@code item.get()} at that point throws "Registry is already frozen".</p>
+	 */
+	private static void registerTabItem(String path, RegistryObject<Item> item) {
+		ITEMS.register(path, () -> {
+			final Item built = item.get();
+			TAB_ITEMS.computeIfAbsent(ItemGroups.PIDS, k -> new ArrayList<>()).add(built);
+			return built;
+		});
+	}
+
 
 	private static void registerParticle(String resourceLocation, SimpleParticleType particle) {
 		PARTICLE_TYPES.register(resourceLocation, Particles.LIGHT_BLOCK::get);
@@ -134,6 +153,42 @@ public class JobanForge {
 
 	private static <T extends BlockEntityMapper> void registerBlockEntityType(String path, RegistryObject<? extends BlockEntityType<? extends BlockEntityMapper>> blockEntityType) {
 		BLOCK_ENTITY_TYPES.register(path, blockEntityType::get);
+	}
+
+	/**
+	 * Keeps the PIDS config tool from breaking the block it is pointed at.
+	 *
+	 * <p>Left-click copies, and creative mode would otherwise remove the PIDS in the same click. The
+	 * event fires on both sides, so the packet is sent from the client only and the event is
+	 * cancelled on both.</p>
+	 */
+	public static class PidsToolHandler {
+		@SubscribeEvent
+		public static void onRightClickBlock(net.minecraftforge.event.entity.player.PlayerInteractEvent.RightClickBlock event) {
+			if (!event.getEntity().getItemInHand(event.getHand()).is(Items.PIDS_CONFIG_TOOL.get())) {
+				return;
+			}
+			if (!(event.getLevel().getBlockEntity(event.getPos()) instanceof com.jsblock.block.JobanPIDSBase.TileEntityBlockJobanPIDS)) {
+				return;
+			}
+			/* The PIDS block's own use() would otherwise consume the click (it opens the config screen
+			   when a brush is held), leaving the tool's useOn unreachable. */
+			if (event.getSide().isClient()) {
+				PacketClient.sendPidsToolPaste(event.getPos());
+			}
+			event.setCanceled(true);
+		}
+
+		@SubscribeEvent
+		public static void onLeftClickBlock(net.minecraftforge.event.entity.player.PlayerInteractEvent.LeftClickBlock event) {
+			if (!event.getEntity().getItemInHand(event.getHand()).is(Items.PIDS_CONFIG_TOOL.get())) {
+				return;
+			}
+			if (event.getSide().isClient()) {
+				PacketClient.sendPidsToolCopy(event.getPos());
+			}
+			event.setCanceled(true);
+		}
 	}
 
 	public static class CreativeTabHandler {

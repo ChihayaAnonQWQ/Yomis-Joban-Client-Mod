@@ -84,6 +84,53 @@ public class RenderLCDPIDS<T extends BlockEntityMapper> extends RenderPIDSBase<T
         this.defaultTextColor = defaultTextColor;
     }
 
+    /**
+     * Exposes this renderer's panel geometry so {@link RenderPIDSBase} can draw
+     * component-based layout presets onto exactly the same panel rectangle as the
+     * built-in background.
+     *
+     * <p>The offsets are copied verbatim from the background draw call below:
+     * the quad is placed at {@code startX - 21F / 2} and {@code -1.5F}, inside a
+     * {@code translate(0, -1F, 0.01)}. Note that {@code 21F / 2} is <em>not</em>
+     * {@code BACKGROUND_WIDTH / 2}, so the origin cannot be derived from the size.</p>
+     */
+    @Override
+    protected com.jsblock.pids.PIDSGeometry getLayoutGeometry() {
+        return new com.jsblock.pids.PIDSGeometry(startX, startY, startZ, scale,
+                BACKGROUND_WIDTH, BACKGROUND_HEIGHT,
+                -21F / 2F, -1F - 1.5F,
+                rotate90, rotation, defaultFont, defaultTextColor);
+    }
+
+    /* JCM 2.x's LCDPIDSRenderer carries its own literals, so a scripted preset lands where its
+       author put it: same numbers, straight from that file. The base class defaults are the RV
+       set, which is why these exist. */
+
+    @Override
+    protected float scriptPanelTranslateX() {
+        return -0.19F;
+    }
+
+    @Override
+    protected float scriptPanelTranslateY() {
+        return -0.125F;
+    }
+
+    @Override
+    protected float scriptPanelTranslateZ() {
+        return -0.130F;
+    }
+
+    @Override
+    protected int scriptCanvasWidth() {
+        return 133;
+    }
+
+    @Override
+    protected int scriptCanvasHeight() {
+        return 72;
+    }
+
     @Override
     public void render(T entity, Level world, String[] customMessages, boolean[] hideArrivals, boolean hidePlatforms, PIDSPreset preset, List<Long> filteredPlatformIds, float delta, PoseStack matrices, MultiBufferSource vertexConsumers, int light, int overlay) {
         final BlockPos pos = entity.getBlockPos();

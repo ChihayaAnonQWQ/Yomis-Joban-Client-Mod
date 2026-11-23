@@ -15,7 +15,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * @author LX86
  * @see com.jsblock.block.BlockPIDSBaseHorizontal
  */
-public class PIDS1A extends BlockPIDSBaseHorizontal {
+public class PIDS1A extends JobanPIDSBase {
 
     @Override
     public VoxelShape getShape(BlockState state, BlockGetter world, BlockPos pos, CollisionContext collisionContext) {
@@ -29,7 +29,7 @@ public class PIDS1A extends BlockPIDSBaseHorizontal {
         return new TileEntityBlockPIDS1A(pos, state);
     }
 
-    public static class TileEntityBlockPIDS1A extends BlockPIDSBaseHorizontal.TileEntityBlockPIDSBaseHorizontal {
+    public static class TileEntityBlockPIDS1A extends JobanPIDSBase.TileEntityBlockJobanPIDS {
 
         public static final int MAX_ARRIVALS = 3;
         public static final int LINES_PER_ARRIVAL = 1;

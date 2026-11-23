@@ -15,14 +15,20 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.UUID;
 import java.util.Set;
 
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_BUTTERFLY_CONFIG_SCREEN;
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_FARESAVER_CONFIG_SCREEN;
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_JOBAN_PIDS_CONFIG_SCREEN;
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_RV_PIDS_CONFIG_SCREEN;
+import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_PIDS_PROJECTOR_SCREEN;
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_SOUND_LOOPER_SCREEN;
 import static com.jsblock.packet.IPacketJoban.PACKET_OPEN_SUBSIDY_CONFIG_SCREEN;
 import static com.jsblock.packet.IPacketJoban.PACKET_PLAY_NETWORK_SOUND;
@@ -139,6 +145,61 @@ public class PacketServer {
         });
     }
 
+
+    /** One copied PIDS configuration per player, kept server-side so a client cannot forge it. */
+    private static final Map<UUID, CompoundTag> PIDS_TOOL_CLIPBOARD = new HashMap<>();
+
+    public static void receivePidsToolCopy(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
+        final BlockPos pos = packet.readBlockPos();
+        minecraftServer.execute(() -> {
+            final BlockEntity entity = player.level().getBlockEntity(pos);
+            if (entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
+                PIDS_TOOL_CLIPBOARD.put(player.getUUID(), entity.saveWithoutMetadata());
+                player.displayClientMessage(Component.translatable("message.jsblock.pids_tool.copied"), true);
+            }
+        });
+    }
+
+    public static void receivePidsToolPaste(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
+        final BlockPos pos = packet.readBlockPos();
+        minecraftServer.execute(() -> {
+            final CompoundTag copied = PIDS_TOOL_CLIPBOARD.get(player.getUUID());
+            if (copied == null) {
+                player.displayClientMessage(Component.translatable("message.jsblock.pids_tool.empty"), true);
+                return;
+            }
+            final BlockEntity entity = player.level().getBlockEntity(pos);
+            if (!(entity instanceof JobanPIDSBase.TileEntityBlockJobanPIDS)) {
+                return;
+            }
+            /* The tag carries the source block's identity and coordinates; loading those would try to
+               move the target, so they are dropped and only the configuration is applied. */
+            final CompoundTag tag = copied.copy();
+            tag.remove("id");
+            tag.remove("x");
+            tag.remove("y");
+            tag.remove("z");
+
+            /* A PIDS spans two blocks and both keep a copy of the configuration. Loading the clicked
+               half alone left the other one on its old preset, which reads as "only one face pasted".
+               The pair is found through the same facing property the blocks use themselves. */
+            final net.minecraft.world.level.block.state.BlockState state = player.level().getBlockState(pos);
+            final BlockPos otherPos = state.hasProperty(com.jsblock.block.BlockPIDSBaseHorizontal.FACING)
+                    ? pos.relative(state.getValue(com.jsblock.block.BlockPIDSBaseHorizontal.FACING))
+                    : pos;
+
+            for (BlockPos targetPos : new BlockPos[]{pos, otherPos}) {
+                final BlockEntity target = player.level().getBlockEntity(targetPos);
+                if (target instanceof JobanPIDSBase.TileEntityBlockJobanPIDS) {
+                    target.load(tag.copy());
+                    target.setChanged();
+                    player.level().sendBlockUpdated(targetPos, target.getBlockState(), target.getBlockState(), 3);
+                }
+            }
+            player.displayClientMessage(Component.translatable("message.jsblock.pids_tool.pasted"), true);
+        });
+    }
+
     public static void receiveSoundLooperC2S(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
         final BlockPos pos = packet.readBlockPos();
         final BlockPos pos1 = packet.readBlockPos();
@@ -200,11 +261,22 @@ public class PacketServer {
     }
 
     /* Packet to open the Joban PIDS Configuration GUI in client */
-    public static void sendJobanPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+    public static void sendJobanPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals,
+                                                 String[] messages, boolean[] rowHidden, Set<Long> platformIds, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
         final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
         packet.writeBlockPos(pos1);
         packet.writeBlockPos(pos2);
         packet.writeInt(maxArrivals);
+        packet.writeInt(messages.length);
+        for (int i = 0; i < messages.length; i++) {
+            packet.writeUtf(messages[i] == null ? "" : messages[i]);
+        }
+        packet.writeInt(rowHidden.length);
+        for (int i = 0; i < rowHidden.length; i++) {
+            packet.writeBoolean(rowHidden[i]);
+        }
+        packet.writeInt(platformIds.size());
+        platformIds.forEach(packet::writeLong);
         packet.writeUtf(presetID);
         packet.writeBoolean(autoSwitchEnabled);
         packet.writeUtf(autoSwitchPreset);
@@ -219,11 +291,23 @@ public class PacketServer {
     }
 
     /* Packet to open the Railway Vision PIDS Configuration GUI in client */
-    public static void sendRVPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals, boolean hidePlatformNumber, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+    public static void sendRVPIDSConfigScreenS2C(ServerPlayer player, BlockPos pos1, BlockPos pos2, int maxArrivals,
+                                               String[] messages, boolean[] rowHidden, Set<Long> platformIds,
+                                               boolean hidePlatformNumber, String presetID, boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration, boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
         final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
         packet.writeBlockPos(pos1);
         packet.writeBlockPos(pos2);
         packet.writeInt(maxArrivals);
+        packet.writeInt(messages.length);
+        for (int i = 0; i < messages.length; i++) {
+            packet.writeUtf(messages[i] == null ? "" : messages[i]);
+        }
+        packet.writeInt(rowHidden.length);
+        for (int i = 0; i < rowHidden.length; i++) {
+            packet.writeBoolean(rowHidden[i]);
+        }
+        packet.writeInt(platformIds.size());
+        platformIds.forEach(packet::writeLong);
         packet.writeBoolean(hidePlatformNumber);
         packet.writeUtf(presetID);
         packet.writeBoolean(autoSwitchEnabled);
@@ -262,4 +346,118 @@ public class PacketServer {
         packet.writeFloat(volume);
         Registry.sendToPlayer(player, PACKET_PLAY_NETWORK_SOUND, packet);
     }
+
+	/**
+	 * Opens the PIDS Projector's screen, which edits its preset and its placement.
+	 *
+	 * <p>A packet of its own rather than more fields on the PIDS config packet: a projector is one
+	 * block with no companion, and its screen is a different screen. Keeping them apart means the
+	 * verified two-block PIDS configuration flow is not touched at all.</p>
+	 */
+	public static void sendPIDSProjectorScreenS2C(ServerPlayer player, BlockPos pos, String presetID,
+												  String[] messages, boolean[] rowHidden, boolean hidePlatformNumber,
+												  java.util.Set<Long> platformIds,
+												  double offsetX, double offsetY, double offsetZ,
+												  double rotateX, double rotateY, double rotateZ, double scale,
+												  boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+												  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+		final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
+		packet.writeBlockPos(pos);
+		packet.writeInt(messages.length);
+		for (int i = 0; i < messages.length; i++) {
+			packet.writeUtf(messages[i] == null ? "" : messages[i]);
+		}
+		packet.writeInt(rowHidden.length);
+		for (int i = 0; i < rowHidden.length; i++) {
+			packet.writeBoolean(rowHidden[i]);
+		}
+		packet.writeInt(platformIds.size());
+		platformIds.forEach(packet::writeLong);
+		packet.writeBoolean(hidePlatformNumber);
+		packet.writeUtf(presetID);
+		packet.writeDouble(offsetX);
+		packet.writeDouble(offsetY);
+		packet.writeDouble(offsetZ);
+		packet.writeDouble(rotateX);
+		packet.writeDouble(rotateY);
+		packet.writeDouble(rotateZ);
+		packet.writeDouble(scale);
+		writeAutoSwitch(packet, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
+		Registry.sendToPlayer(player, PACKET_OPEN_PIDS_PROJECTOR_SCREEN, packet);
+	}
+
+	/** The nine automatic-switch fields, written the same way by the projector's two packets. */
+	private static void writeAutoSwitch(FriendlyByteBuf packet, boolean autoSwitchEnabled, String autoSwitchPreset,
+										int autoSwitchCountdown, int autoSwitchDuration,
+										boolean depAutoSwitchEnabled, String depAutoSwitchPreset,
+										int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+		packet.writeBoolean(autoSwitchEnabled);
+		packet.writeUtf(autoSwitchPreset == null ? "" : autoSwitchPreset);
+		packet.writeInt(autoSwitchCountdown);
+		packet.writeInt(autoSwitchDuration);
+		packet.writeBoolean(depAutoSwitchEnabled);
+		packet.writeUtf(depAutoSwitchPreset == null ? "" : depAutoSwitchPreset);
+		packet.writeInt(depAutoSwitchCountdown);
+		packet.writeInt(depAutoSwitchDuration);
+		packet.writeBoolean(depAutoSwitchUntilClose);
+	}
+
+	/** Saves what the projector's screen sent back. */
+	public static void receivePIDSProjectorC2S(MinecraftServer minecraftServer, ServerPlayer player, FriendlyByteBuf packet) {
+		final BlockPos pos = packet.readBlockPos();
+		final int messageCount = packet.readInt();
+		final String[] messages = new String[messageCount];
+		for (int i = 0; i < messageCount; i++) {
+			messages[i] = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		}
+		final int rowCount = packet.readInt();
+		final boolean[] rowHidden = new boolean[rowCount];
+		for (int i = 0; i < rowCount; i++) {
+			rowHidden[i] = packet.readBoolean();
+		}
+		final Set<Long> platformIds = new HashSet<>();
+		final int platformCount = packet.readInt();
+		for (int i = 0; i < platformCount; i++) {
+			platformIds.add(packet.readLong());
+		}
+		final boolean hidePlatformNumber = packet.readBoolean();
+		final String presetID = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		final double offsetX = packet.readDouble();
+		final double offsetY = packet.readDouble();
+		final double offsetZ = packet.readDouble();
+		final double rotateX = packet.readDouble();
+		final double rotateY = packet.readDouble();
+		final double rotateZ = packet.readDouble();
+		final double scale = packet.readDouble();
+		final boolean autoSwitchEnabled = packet.readBoolean();
+		final String autoSwitchPreset = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		final int autoSwitchCountdown = packet.readInt();
+		final int autoSwitchDuration = packet.readInt();
+		final boolean depAutoSwitchEnabled = packet.readBoolean();
+		final String depAutoSwitchPreset = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		final int depAutoSwitchCountdown = packet.readInt();
+		final int depAutoSwitchDuration = packet.readInt();
+		final boolean depAutoSwitchUntilClose = packet.readBoolean();
+		minecraftServer.execute(() -> {
+			final BlockEntity entity = player.level().getBlockEntity(pos);
+			if (entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
+				final com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector projector =
+						(com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) entity;
+				projector.setPresetID(presetID);
+				projector.setHidePlatformNumber(hidePlatformNumber);
+				/* MTR's own setter for a PIDS panel's text, hidden rows and platforms; the projector
+				   inherits it, and it is what pids.getCustomMessage(i) reads back. JCM 2.x applies the
+				   same set on the same fields, from the same packet. */
+				projector.setData(messages, rowHidden, platformIds, 0);
+				projector.setProjectorTransform(offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale);
+				projector.setAutoSwitch(autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+						depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration,
+						depAutoSwitchUntilClose);
+			} else {
+				Joban.LOGGER.warn("[PIDS projector] server could not apply: block entity at " + pos
+						+ " is " + (entity == null ? "null" : entity.getClass().getName()));
+			}
+		});
+	}
 }

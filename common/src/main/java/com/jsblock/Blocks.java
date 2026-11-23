@@ -21,6 +21,7 @@ import com.jsblock.block.EnquiryMachine4;
 import com.jsblock.block.ExitSign1e;
 import com.jsblock.block.ExitSign1o;
 import com.jsblock.block.FareSaver1;
+import com.jsblock.block.FireAlarm;
 import com.jsblock.block.HelpLine1;
 import com.jsblock.block.HelpLine2;
 import com.jsblock.block.HelpLine3;
@@ -38,6 +39,7 @@ import com.jsblock.block.MTRStairs1;
 import com.jsblock.block.ModelE44;
 import com.jsblock.block.PIDS1A;
 import com.jsblock.block.PIDSLCD;
+import com.jsblock.block.PIDSProjector;
 import com.jsblock.block.PIDSRV;
 import com.jsblock.block.PIDSRVSIL1;
 import com.jsblock.block.PIDSRVSIL2;
@@ -111,6 +113,7 @@ public interface Blocks {
     RegistryObject<Block> PIDS_1A = new RegistryObject<>(PIDS1A::new);
     RegistryObject<Block> PIDS_LCD = new RegistryObject<>(PIDSLCD::new);
     RegistryObject<Block> PIDS_RV_TCL = new RegistryObject<>(PIDSRV::new);
+	RegistryObject<Block> PIDS_PROJECTOR = new RegistryObject<>(PIDSProjector::new);
     RegistryObject<Block> PIDS_RV_SIL_1 = new RegistryObject<>(PIDSRVSIL1::new);
     RegistryObject<Block> PIDS_RV_SIL_2 = new RegistryObject<>(PIDSRVSIL2::new);
     RegistryObject<Block> RV_PIDS_POLE = new RegistryObject<>(() -> new RVPIDSPole(BlockBehaviour.Properties.of().requiresCorrectToolForDrops().strength(1.0f).noOcclusion()));
@@ -132,5 +135,6 @@ public interface Blocks {
     RegistryObject<Block> TRESPASS_SIGN_1 = new RegistryObject<>(() -> new TrespassSign1(BlockBehaviour.Properties.of().requiresCorrectToolForDrops().strength(2.0f).noOcclusion()));
     RegistryObject<Block> TRESPASS_SIGN_2 = new RegistryObject<>(() -> new TrespassSign2(BlockBehaviour.Properties.of().requiresCorrectToolForDrops().strength(1.0f).noOcclusion()));
     RegistryObject<Block> TRESPASS_SIGN_3 = new RegistryObject<>(() -> new TrespassSign3(BlockBehaviour.Properties.of().requiresCorrectToolForDrops().strength(2.0f).noOcclusion()));
+    RegistryObject<Block> FIRE_ALARM = new RegistryObject<>(() -> new FireAlarm(BlockBehaviour.Properties.of().requiresCorrectToolForDrops().strength(2.0f).noOcclusion()));
     RegistryObject<Block> WATER_MACHINE_1 = new RegistryObject<>(() -> new WaterMachine1(BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_BLACK).requiresCorrectToolForDrops().strength(4.0f)));
 }

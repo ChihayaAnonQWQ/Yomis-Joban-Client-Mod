@@ -8,6 +8,7 @@ import com.jsblock.block.KCRNameSign;
 import com.jsblock.block.KCRNameSignStationColored;
 import com.jsblock.block.PIDS1A;
 import com.jsblock.block.PIDSLCD;
+import com.jsblock.block.PIDSProjector;
 import com.jsblock.block.PIDSRV;
 import com.jsblock.block.PIDSRVSIL1;
 import com.jsblock.block.PIDSRVSIL2;
@@ -34,6 +35,7 @@ public interface BlockEntityTypes {
     RegistryObject<BlockEntityType<PIDS1A.TileEntityBlockPIDS1A>> PIDS_1A_TILE_ENTITY = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(PIDS1A.TileEntityBlockPIDS1A::new, Blocks.PIDS_1A.get()));
     RegistryObject<BlockEntityType<PIDSLCD.TileEntityBlockPIDS4>> PIDS_LCD_TILE_ENTITY = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(PIDSLCD.TileEntityBlockPIDS4::new, Blocks.PIDS_LCD.get()));
     RegistryObject<BlockEntityType<PIDSRV.TileEntityBlockPIDSRV>> PIDS_RV_TILE_ENTITY = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(PIDSRV.TileEntityBlockPIDSRV::new, Blocks.PIDS_RV_TCL.get()));
+	RegistryObject<BlockEntityType<PIDSProjector.TileEntityBlockPIDSProjector>> PIDS_PROJECTOR_TILE_ENTITY = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(PIDSProjector.TileEntityBlockPIDSProjector::new, Blocks.PIDS_PROJECTOR.get()));
     RegistryObject<BlockEntityType<PIDSRVSIL1.TileEntityBlockPIDSSIL>> PIDS_RV_SIL_TILE_ENTITY_1 = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(PIDSRVSIL1.TileEntityBlockPIDSSIL::new, Blocks.PIDS_RV_SIL_1.get()));
     RegistryObject<BlockEntityType<PIDSRVSIL2.TileEntityBlockPIDSSIL>> PIDS_RV_SIL_TILE_ENTITY_2 = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(PIDSRVSIL2.TileEntityBlockPIDSSIL::new, Blocks.PIDS_RV_SIL_2.get()));
     RegistryObject<BlockEntityType<SoundLooper.TileEntitySoundLooper>> SOUND_LOOPER_TILE_ENTITY = new RegistryObject<>(() -> RegistryUtilities.getBlockEntityType(SoundLooper.TileEntitySoundLooper::new, Blocks.SOUND_LOOPER.get()));

@@ -1,10 +1,12 @@
 package com.jsblock;
 
+import com.jsblock.packet.PacketClient;
 import mtr.RegistryObject;
 import mtr.mappings.BlockEntityMapper;
 import mtr.mappings.RegistryUtilities;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.itemgroup.v1.FabricItemGroup;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.core.particles.SimpleParticleType;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -25,11 +27,32 @@ public class JobanFabric implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
-		Joban.init(JobanFabric::registerBlock, JobanFabric::registerItem, JobanFabric::registerBlockItem, JobanFabric::registerBlockEntityType, JobanFabric::RegisterParticle);
+		Joban.init(JobanFabric::registerBlock, JobanFabric::registerItem, JobanFabric::registerTabItem, JobanFabric::registerBlockItem, JobanFabric::registerBlockEntityType, JobanFabric::RegisterParticle);
 
 		registerCreativeTab("core", new ItemStack(Blocks.HELPLINE_3.get()));
 		registerCreativeTab("pids", new ItemStack(Blocks.PIDS_RV_TCL.get()));
 		registerCreativeTab("ceiling", new ItemStack(Blocks.STATION_CEILING_1.get()));
+
+		/* Right-click pastes; the block's own use() would otherwise take the click first. */
+		net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+			final BlockPos pos = hitResult.getBlockPos();
+			if (world.isClientSide()
+					&& player.getItemInHand(hand).is(Items.PIDS_CONFIG_TOOL.get())
+					&& world.getBlockEntity(pos) instanceof com.jsblock.block.JobanPIDSBase.TileEntityBlockJobanPIDS) {
+				PacketClient.sendPidsToolPaste(pos);
+				return net.minecraft.world.InteractionResult.FAIL;
+			}
+			return net.minecraft.world.InteractionResult.PASS;
+		});
+
+		/* Left-click with the PIDS config tool copies instead of starting to break the block. */
+		net.fabricmc.fabric.api.event.player.AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+			if (!world.isClientSide() || !player.getItemInHand(hand).is(Items.PIDS_CONFIG_TOOL.get())) {
+				return net.minecraft.world.InteractionResult.PASS;
+			}
+			PacketClient.sendPidsToolCopy(pos);
+			return net.minecraft.world.InteractionResult.FAIL;
+		});
 	}
 
 	private static void registerCreativeTab(String path, ItemStack icon) {
@@ -56,6 +79,13 @@ public class JobanFabric implements ModInitializer {
 	private static void registerItem(String path, RegistryObject<Item> item) {
 		Registry.register(RegistryUtilities.registryGetItem(), new ResourceLocation(Joban.MOD_ID, path), item.get());
 	}
+
+	/** Registers a plain item and puts it in one of this mod's creative tabs. */
+	private static void registerTabItem(String path, RegistryObject<Item> item) {
+		registerItem(path, item);
+		TAB_ITEMS.computeIfAbsent(ItemGroups.PIDS, k -> new ArrayList<>()).add(item.get());
+	}
+
 
 	private static void registerBlockItem(String path, RegistryObject<Block> block, ResourceLocation creativeModeTab) {
 		registerBlock(path, block);

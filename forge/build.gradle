@@ -27,6 +27,8 @@ dependencies {
 
 	common(project(path: ":common", configuration: "namedElements")) { transitive false }
 	shadowCommon(project(path: ":common", configuration: "transformProductionForge")) { transitive = false }
+	/* Bundled so the released jar carries the PIDS scripting engine (see gradle.properties). */
+	shadowCommon "org.mozilla:rhino:${rootProject.rhino_version}"
 }
 
 processResources {
@@ -36,19 +38,26 @@ processResources {
 			"mc_version": rootProject.mc_requirement.replace(".x", "")
 		)
 	}
+	/* The expanded values are not task inputs by themselves, so bumping mod_version left this
+	   task UP-TO-DATE and the released jar kept whichever version it was first built with --
+	   every build from 1.2.12 onwards shipped a mods.toml saying "1.2.12+mc1.20" while
+	   fabric.mod.json, whose project happens to track it, said the real thing. Declaring the
+	   version as an input makes the task re-run when it changes. */
+	inputs.property("mod_version", project.mod_version)
+	inputs.property("minecraft_version", rootProject.minecraft_version)
 }
 
 shadowJar {
 	exclude "fabric.mod.json"
 
 	configurations = [project.configurations.shadowCommon]
-	classifier "dev-shadow"
+	archiveClassifier = "dev-shadow"
 }
 
 remapJar {
 	input.set shadowJar.archiveFile
 	dependsOn shadowJar
-	classifier null
+	archiveClassifier = ""
 }
 
 components.java {

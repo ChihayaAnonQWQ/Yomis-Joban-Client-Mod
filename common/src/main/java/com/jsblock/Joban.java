@@ -21,6 +21,9 @@ import static com.jsblock.Compatibilities.incompatible;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_BUTTERFLY_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_FARESAVER_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_JOBAN_PIDS_CONFIG;
+import static com.jsblock.packet.IPacketJoban.PACKET_PIDS_TOOL_COPY;
+import static com.jsblock.packet.IPacketJoban.PACKET_PIDS_TOOL_PASTE;
+import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_PIDS_PROJECTOR;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_RV_PIDS_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SOUND_LOOPER_CONFIG;
 import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SUBSIDY_CONFIG;
@@ -31,7 +34,36 @@ import static com.jsblock.packet.IPacketJoban.PACKET_UPDATE_SUBSIDY_CONFIG;
  * @since 1.0.0
  */
 public class Joban {
-    private static final String VERSION = "1.2.2";
+    /**
+     * The version the loader reports for this jar.
+     *
+     * <p>Hard-coding it meant the settings screen could say "1.2.2" while Forge's mod list said
+     * "1.2.12-JSPIDS-2.10+mc1.20" — the same mod, two versions. The loader metadata is generated
+     * from {@code mod_version} at build time, so reading it back is what keeps the two in step.</p>
+     */
+    private static final String VERSION = readModVersion();
+
+    private static String readModVersion() {
+        final String fromFabric = firstMatch("/fabric.mod.json", "\"version\"\\s*:\\s*\"([^\"]+)\"");
+        if (fromFabric != null) {
+            return fromFabric;
+        }
+        final String fromForge = firstMatch("/META-INF/mods.toml", "(?m)^\\s*version\\s*=\\s*\"([^\"]+)\"");
+        return fromForge != null ? fromForge : "1.2.2";
+    }
+
+    private static String firstMatch(String resource, String regex) {
+        try (java.io.InputStream stream = Joban.class.getResourceAsStream(resource)) {
+            if (stream == null) {
+                return null;
+            }
+            final String text = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            final java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(regex).matcher(text);
+            return matcher.find() ? matcher.group(1) : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
     private static int gameTick = 0;
     public static final String MIN_MTR_VERSION = "3.2.2";
     public static final String MOD_ID = "jsblock";
@@ -41,6 +73,7 @@ public class Joban {
     public static void init(
             BiConsumer<String, RegistryObject<Block>> registerBlock,
             BiConsumer<String, RegistryObject<Item>> registerItem,
+            BiConsumer<String, RegistryObject<Item>> registerTabItem,
             RegisterBlockItem registerBlockItem,
             BiConsumer<String, RegistryObject<? extends BlockEntityType<? extends BlockEntityMapper>>> registerBlockEntityType,
             RegisterParticle registerParticle
@@ -57,6 +90,7 @@ public class Joban {
         try {
             registerBlockItem.accept("auto_iron_door", Blocks.AUTO_IRON_DOOR, ItemGroups.MAIN);
             registerBlockItem.accept("butterfly_light", Blocks.BUTTERFLY_LIGHT, ItemGroups.MAIN);
+            registerBlockItem.accept("fire_alarm", Blocks.FIRE_ALARM, ItemGroups.MAIN);
             registerBlockItem.accept("bufferstop_1", Blocks.BUFFERSTOP_1, ItemGroups.MAIN);
             registerBlockItem.accept("ceiling_1", Blocks.CEILING_1, ItemGroups.MAIN);
             registerBlockItem.accept("circle_wall_1", Blocks.CIRCLE_WALL_1, ItemGroups.MAIN);
@@ -98,6 +132,7 @@ public class Joban {
             registerBlockItem.accept("pids_rv", Blocks.PIDS_RV_TCL, ItemGroups.PIDS);
             registerBlockItem.accept("pids_rv_sil", Blocks.PIDS_RV_SIL_1, ItemGroups.PIDS);
             registerBlockItem.accept("pids_rv_sil_2", Blocks.PIDS_RV_SIL_2, ItemGroups.PIDS);
+            registerBlockItem.accept("pids_projector", Blocks.PIDS_PROJECTOR, ItemGroups.PIDS);
             registerBlockItem.accept("rv_pids_pole", Blocks.RV_PIDS_POLE, ItemGroups.PIDS);
             registerBlockItem.accept("station_ceiling_1", Blocks.STATION_CEILING_1, ItemGroups.CEILING);
             registerBlockItem.accept("station_ceiling_1_station_color", Blocks.STATION_CEILING_1_STATION_COLOR, ItemGroups.CEILING);
@@ -124,6 +159,7 @@ public class Joban {
             registerBlock.accept("apg_glass_drl", Blocks.APG_GLASS_DRL);
             registerBlock.accept("apg_glass_end_drl", Blocks.APG_GLASS_END_DRL);
 
+            registerTabItem.accept("pids_config_tool", Items.PIDS_CONFIG_TOOL);
             registerItem.accept("apg_door_drl", Items.APG_DOOR_DRL);
             registerItem.accept("apg_glass_drl", Items.APG_GLASS_DRL);
             registerItem.accept("apg_glass_end_drl", Items.APG_GLASS_END_DRL);
@@ -139,6 +175,7 @@ public class Joban {
             registerBlockEntityType.accept("pids_5", BlockEntityTypes.PIDS_RV_TILE_ENTITY);
             registerBlockEntityType.accept("pids_rv_sil", BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_1);
             registerBlockEntityType.accept("pids_rv_sil_2", BlockEntityTypes.PIDS_RV_SIL_TILE_ENTITY_2);
+            registerBlockEntityType.accept("pids_projector", BlockEntityTypes.PIDS_PROJECTOR_TILE_ENTITY);
             registerBlockEntityType.accept("pids_4a", BlockEntityTypes.PIDS_LCD_TILE_ENTITY);
             registerBlockEntityType.accept("signal_light_red_1", BlockEntityTypes.SIGNAL_LIGHT_RED_ENTITY_1);
             registerBlockEntityType.accept("signal_light_red_2", BlockEntityTypes.SIGNAL_LIGHT_RED_ENTITY_2);
@@ -156,9 +193,12 @@ public class Joban {
             Registry.registerNetworkReceiver(PACKET_UPDATE_BUTTERFLY_CONFIG, PacketServer::receiveButterflyC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_FARESAVER_CONFIG, PacketServer::receiveFaresaverC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_JOBAN_PIDS_CONFIG, PacketServer::receiveJobanPIDSConfigC2S);
+            Registry.registerNetworkReceiver(PACKET_PIDS_TOOL_COPY, PacketServer::receivePidsToolCopy);
+            Registry.registerNetworkReceiver(PACKET_PIDS_TOOL_PASTE, PacketServer::receivePidsToolPaste);
             Registry.registerNetworkReceiver(PACKET_UPDATE_RV_PIDS_CONFIG, PacketServer::receiveRVPIDSConfigC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_SOUND_LOOPER_CONFIG, PacketServer::receiveSoundLooperC2S);
             Registry.registerNetworkReceiver(PACKET_UPDATE_SUBSIDY_CONFIG, PacketServer::receiveSubsidyC2S);
+            Registry.registerNetworkReceiver(PACKET_UPDATE_PIDS_PROJECTOR, PacketServer::receivePIDSProjectorC2S);
 
             Registry.registerPlayerJoinEvent(PacketServer::sendVersionCheckS2C);
         } catch (NoClassDefFoundError | NoSuchFieldError | NoSuchMethodError ex) {
