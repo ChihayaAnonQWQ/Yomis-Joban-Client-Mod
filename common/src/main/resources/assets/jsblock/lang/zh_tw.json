@@ -137,5 +137,13 @@
   "gui.jsblock.looper.network_audio_url": "網絡音頻URL",
   "item.jsblock.apg_door_drl": "自動月台閘門 (迪士尼綫)",
   "item.jsblock.apg_glass_drl": "自動月台閘門 (迪士尼綫)",
-  "item.jsblock.apg_glass_end_drl": "自動月台閘門 (迪士尼綫)"
+  "item.jsblock.apg_glass_end_drl": "自動月台閘門 (迪士尼綫)",
+  "gui.jsblock.config.script_error_notifications": "在聊天欄回報 PIDS 腳本錯誤",
+  "gui.jsblock.config.script_debug_mode": "顯示 PIDS 腳本除錯浮層",
+  "gui.jsblock.config.script_restrictions_disabled": "允許 PIDS 腳本使用任意 Java 類別（不建議）",
+  "gui.jsblock.script_restriction.title": "要關閉腳本限制嗎？",
+  "gui.jsblock.script_restriction.about": "PIDS 預設是隨資源包分發的 JavaScript 檔案。",
+  "gui.jsblock.script_restriction.consequence": "關閉限制後，預設腳本可以使用任意 Java 類別。",
+  "gui.jsblock.script_restriction.caution": "這包括讀寫檔案與啟動外部程式。",
+  "gui.jsblock.script_restriction.note": "資源包可能來自你無法控制的伺服器與整合包，請確認你信任所載入的每一個資源包。"
 }

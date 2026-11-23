@@ -43,8 +43,15 @@ public interface IDrawingJoban {
             final FormattedCharSequence orderedText = Text.literal(stringSplitPart).setStyle(style).getVisualOrderText();
             orderedTexts.add(orderedText);
 
-            totalHeight += IGui.LINE_HEIGHT * (isCJK ? 2 : 1);
-            final int width = textRenderer.width(orderedText) * (isCJK ? 2 : 1);
+            /* The multiplier the layout reserves has to be the one the drawing applies.
+               These two used to disagree: the layout always reserved 2x for a CJK run while
+               the drawing only scaled by 2 when sameSize was false. That made boxed text --
+               anything with size(...) -- come out at half the size its own box was measured
+               for, and unboxed text come out at double the size the preset author wrote,
+               depending only on which way the flag was set. */
+            final int cjkScale = isCJK && !sameSize ? 2 : 1;
+            totalHeight += IGui.LINE_HEIGHT * cjkScale;
+            final int width = textRenderer.width(orderedText) * cjkScale;
             if (width > totalWidth) {
                 totalWidth = width;
             }

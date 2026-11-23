@@ -1,0 +1,127 @@
+{
+  "_comment": [
+    "Built-in PIDS presets, matching JCM 2.3's set: the Railway Vision board, its three",
+    "door-closing variants, the LCD board and the 1A board. A resource pack can add more,",
+    "or override these by reusing the same id at a higher pack priority.",
+    "See MTR3-PIDS-PORT.md for the preset reference."
+  ],
+  "pids_images": [
+    {
+      "id": "rv_pids",
+      "name": "Hong Kong Railway Vision PIDS",
+      "builtin": true,
+      "background": "jsblock:textures/block/pids_rv_screen.png",
+      "color": "000000",
+      "topPadding": true,
+      "showWeather": true,
+      "showClock": true,
+      "fonts": "mtr:mtr",
+      "hideRow": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "blacklist": [
+        "pids_1a"
+      ],
+      "thumbnail": "jsblock:textures/block/pids_rv_screen.png"
+    },
+    {
+      "id": "door_cls_psd",
+      "name": "RV PIDS (Door Closing PSD)",
+      "builtin": true,
+      "background": "jsblock:textures/pids_screen/door_cls_psd.png",
+      "color": "000000",
+      "topPadding": true,
+      "showWeather": true,
+      "showClock": true,
+      "fonts": "mtr:mtr",
+      "hideRow": [
+        true,
+        true,
+        true,
+        false
+      ],
+      "blacklist": [
+        "pids_1a"
+      ],
+      "thumbnail": "jsblock:textures/pids_screen/door_cls_psd.png"
+    },
+    {
+      "id": "door_cls_apg",
+      "name": "RV PIDS (Door Closing APG)",
+      "builtin": true,
+      "background": "jsblock:textures/pids_screen/door_cls_apg.png",
+      "color": "000000",
+      "topPadding": true,
+      "showWeather": true,
+      "showClock": true,
+      "fonts": "mtr:mtr",
+      "hideRow": [
+        true,
+        true,
+        true,
+        false
+      ],
+      "blacklist": [
+        "pids_1a"
+      ],
+      "thumbnail": "jsblock:textures/pids_screen/door_cls_apg.png"
+    },
+    {
+      "id": "door_cls_train",
+      "name": "RV PIDS (Door Closing)",
+      "builtin": true,
+      "background": "jsblock:textures/pids_screen/door_cls_train.png",
+      "color": "000000",
+      "topPadding": true,
+      "showWeather": true,
+      "showClock": true,
+      "fonts": "mtr:mtr",
+      "hideRow": [
+        true,
+        true,
+        true,
+        false
+      ],
+      "blacklist": [
+        "pids_1a"
+      ],
+      "thumbnail": "jsblock:textures/pids_screen/door_cls_train.png"
+    },
+    {
+      "id": "lcd_pids",
+      "name": "Hong Kong LCD PIDS",
+      "builtin": true,
+      "background": "jsblock:textures/block/black.png",
+      "color": "EADD9A",
+      "topPadding": false,
+      "showWeather": false,
+      "showClock": false,
+      "hidePlatform": true,
+      "fonts": "jsblock:pids_lcd",
+      "hideRow": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "blacklist": [
+        "pids_1a"
+      ],
+      "thumbnail": "jsblock:textures/item/pids_4.png"
+    },
+    {
+      "id": "pids_1a",
+      "name": "PIDS 1A",
+      "builtin": true,
+      "thumbnail": "jsblock:textures/item/pids_1a.png",
+      "showWeather": false,
+      "showClock": false,
+      "scriptFiles": [
+        "jsblock:scripts/builtin/pids_1a.js"
+      ]
+    }
+  ]
+}
