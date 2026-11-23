@@ -358,7 +358,9 @@ public class PacketServer {
 												  String[] messages, boolean[] rowHidden, boolean hidePlatformNumber,
 												  java.util.Set<Long> platformIds,
 												  double offsetX, double offsetY, double offsetZ,
-												  double rotateX, double rotateY, double rotateZ, double scale) {
+												  double rotateX, double rotateY, double rotateZ, double scale,
+												  boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+												  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
 		final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
 		packet.writeBlockPos(pos);
 		packet.writeInt(messages.length);
@@ -380,7 +382,25 @@ public class PacketServer {
 		packet.writeDouble(rotateY);
 		packet.writeDouble(rotateZ);
 		packet.writeDouble(scale);
+		writeAutoSwitch(packet, autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
 		Registry.sendToPlayer(player, PACKET_OPEN_PIDS_PROJECTOR_SCREEN, packet);
+	}
+
+	/** The nine automatic-switch fields, written the same way by the projector's two packets. */
+	private static void writeAutoSwitch(FriendlyByteBuf packet, boolean autoSwitchEnabled, String autoSwitchPreset,
+										int autoSwitchCountdown, int autoSwitchDuration,
+										boolean depAutoSwitchEnabled, String depAutoSwitchPreset,
+										int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+		packet.writeBoolean(autoSwitchEnabled);
+		packet.writeUtf(autoSwitchPreset == null ? "" : autoSwitchPreset);
+		packet.writeInt(autoSwitchCountdown);
+		packet.writeInt(autoSwitchDuration);
+		packet.writeBoolean(depAutoSwitchEnabled);
+		packet.writeUtf(depAutoSwitchPreset == null ? "" : depAutoSwitchPreset);
+		packet.writeInt(depAutoSwitchCountdown);
+		packet.writeInt(depAutoSwitchDuration);
+		packet.writeBoolean(depAutoSwitchUntilClose);
 	}
 
 	/** Saves what the projector's screen sent back. */
@@ -410,6 +430,15 @@ public class PacketServer {
 		final double rotateY = packet.readDouble();
 		final double rotateZ = packet.readDouble();
 		final double scale = packet.readDouble();
+		final boolean autoSwitchEnabled = packet.readBoolean();
+		final String autoSwitchPreset = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		final int autoSwitchCountdown = packet.readInt();
+		final int autoSwitchDuration = packet.readInt();
+		final boolean depAutoSwitchEnabled = packet.readBoolean();
+		final String depAutoSwitchPreset = packet.readUtf(PACKET_STRING_READ_LENGTH);
+		final int depAutoSwitchCountdown = packet.readInt();
+		final int depAutoSwitchDuration = packet.readInt();
+		final boolean depAutoSwitchUntilClose = packet.readBoolean();
 		minecraftServer.execute(() -> {
 			final BlockEntity entity = player.level().getBlockEntity(pos);
 			if (entity instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
@@ -422,6 +451,9 @@ public class PacketServer {
 				   same set on the same fields, from the same packet. */
 				projector.setData(messages, rowHidden, platformIds, 0);
 				projector.setProjectorTransform(offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale);
+				projector.setAutoSwitch(autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+						depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration,
+						depAutoSwitchUntilClose);
 			} else {
 				Joban.LOGGER.warn("[PIDS projector] server could not apply: block entity at " + pos
 						+ " is " + (entity == null ? "null" : entity.getClass().getName()));

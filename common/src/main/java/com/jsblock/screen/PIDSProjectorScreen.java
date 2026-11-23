@@ -43,13 +43,24 @@ public class PIDSProjectorScreen extends PIDSBlockConfigScreen {
 	private final double[] initialValues = DEFAULTS.clone();
 	/** What the client's panel is showing right now, so a half-typed box does not snap it around. */
 	private final double[] previewed = DEFAULTS.clone();
+	private final AutoSwitchSection arrivalSwitch;
+	private final AutoSwitchSection departureSwitch;
 
 	public PIDSProjectorScreen(BlockPos pos, String presetID, String[] messages, boolean[] rowHidden,
 							   boolean hidePlatformNumber, Set<Long> platformIds,
 							   double offsetX, double offsetY, double offsetZ,
-							   double rotateX, double rotateY, double rotateZ, double scale) {
+							   double rotateX, double rotateY, double rotateZ, double scale,
+							   boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+							   boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
 		super(pos, PIDSProjector.TileEntityBlockPIDSProjector.MAX_ARRIVALS, true, presetID, hidePlatformNumber,
 				messages, rowHidden, platformIds);
+
+		/* The same two sections the two-block PIDS screens have; the projector inherits the fields and
+		   the renderer already honours them, so this is only the form. */
+		this.arrivalSwitch = new AutoSwitchSection(false, autoSwitchEnabled, autoSwitchPreset,
+				PIDSScreen.orDefault(autoSwitchCountdown), PIDSScreen.orDefault(autoSwitchDuration), false, this::openPresetPicker);
+		this.departureSwitch = new AutoSwitchSection(true, depAutoSwitchEnabled, depAutoSwitchPreset,
+				PIDSScreen.orDefault(depAutoSwitchCountdown), PIDSScreen.orDefault(depAutoSwitchDuration), depAutoSwitchUntilClose, this::openPresetPicker);
 
 		initialValues[0] = offsetX;
 		initialValues[1] = offsetY;
@@ -109,6 +120,18 @@ public class PIDSProjectorScreen extends PIDSBlockConfigScreen {
 
 		listViewWidget.addCategory(Text.translatable("gui.jsblock.pids.listview.category.pids"));
 		super.addConfigEntries(listViewWidget);
+
+		listViewWidget.addCategory(Text.translatable("gui.jsblock.arrival_switch_section"));
+		arrivalSwitch.addRows(listViewWidget, this);
+
+		listViewWidget.addCategory(Text.translatable("gui.jsblock.departure_switch_section"));
+		departureSwitch.addRows(listViewWidget, this);
+	}
+
+	/** Opens the thumbnail picker for one of the two sections and writes the choice back into it. */
+	private void openPresetPicker(AutoSwitchSection section) {
+		Minecraft.getInstance().setScreen(
+				new PIDSPresetScreen(pos1, section.preset(), section::setPreset).withPreviousScreen(this));
 	}
 
 	@Override
@@ -118,6 +141,9 @@ public class PIDSProjectorScreen extends PIDSBlockConfigScreen {
 		for (WidgetBetterTextField transformField : transformFields) {
 			transformField.tick();
 		}
+
+		arrivalSwitch.tick();
+		departureSwitch.tick();
 	}
 
 	@Override
@@ -134,7 +160,10 @@ public class PIDSProjectorScreen extends PIDSBlockConfigScreen {
 
 		PacketClient.sendPIDSProjectorC2S(pos1, presetId == null ? "" : presetId, collectCustomMessages(),
 				collectRowHidden(), isHidePlatformNumberSelected(), collectFilteredPlatforms(),
-				values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
+				values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+				arrivalSwitch.isEnabled(), arrivalSwitch.preset(), arrivalSwitch.countdown(), arrivalSwitch.duration(),
+				departureSwitch.isEnabled(), departureSwitch.preset(), departureSwitch.countdown(), departureSwitch.duration(),
+				departureSwitch.untilClose());
 
 		/* What the server was told is what the panel should show until its sync comes back. */
 		System.arraycopy(values, 0, previewed, 0, previewed.length);

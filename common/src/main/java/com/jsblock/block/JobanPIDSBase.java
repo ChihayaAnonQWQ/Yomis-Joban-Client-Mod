@@ -135,6 +135,28 @@ public abstract class JobanPIDSBase extends BlockPIDSBaseHorizontal {
             this.syncData();
         }
 
+        /**
+         * Sets only the automatic-switch fields.
+         *
+         * <p>{@link #setData} sets them together with the preset and the rows, which the projector's
+         * screen applies in its own order; this exists so the projector can hand over just these
+         * nine without repeating the rest.</p>
+         */
+        public void setAutoSwitch(boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+                                  boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
+            this.autoSwitchEnabled = autoSwitchEnabled;
+            this.autoSwitchPreset = autoSwitchPreset;
+            this.autoSwitchCountdown = autoSwitchCountdown;
+            this.autoSwitchDuration = autoSwitchDuration;
+            this.depAutoSwitchEnabled = depAutoSwitchEnabled;
+            this.depAutoSwitchPreset = depAutoSwitchPreset;
+            this.depAutoSwitchCountdown = depAutoSwitchCountdown;
+            this.depAutoSwitchDuration = depAutoSwitchDuration;
+            this.depAutoSwitchUntilClose = depAutoSwitchUntilClose;
+            this.setChanged();
+            this.syncData();
+        }
+
         /** Sets the preset alone; the projector has no room for the whole config form. */
         public void setPresetID(String presetID) {
             this.presetID = presetID;

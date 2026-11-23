@@ -367,7 +367,9 @@ public class PacketClient {
 	public static void sendPIDSProjectorC2S(BlockPos pos, String presetID, String[] messages, boolean[] rowHidden,
 											boolean hidePlatformNumber, java.util.Set<Long> platformIds,
 											double offsetX, double offsetY, double offsetZ,
-											double rotateX, double rotateY, double rotateZ, double scale) {
+											double rotateX, double rotateY, double rotateZ, double scale,
+											boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+											boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
 		final FriendlyByteBuf packet = new FriendlyByteBuf(Unpooled.buffer());
 		packet.writeBlockPos(pos);
 		packet.writeInt(messages.length);
@@ -389,6 +391,15 @@ public class PacketClient {
 		packet.writeDouble(rotateY);
 		packet.writeDouble(rotateZ);
 		packet.writeDouble(scale);
+		packet.writeBoolean(autoSwitchEnabled);
+		packet.writeUtf(autoSwitchPreset == null ? "" : autoSwitchPreset);
+		packet.writeInt(autoSwitchCountdown);
+		packet.writeInt(autoSwitchDuration);
+		packet.writeBoolean(depAutoSwitchEnabled);
+		packet.writeUtf(depAutoSwitchPreset == null ? "" : depAutoSwitchPreset);
+		packet.writeInt(depAutoSwitchCountdown);
+		packet.writeInt(depAutoSwitchDuration);
+		packet.writeBoolean(depAutoSwitchUntilClose);
 		RegistryClient.sendToServer(IPacketJoban.PACKET_UPDATE_PIDS_PROJECTOR, packet);
 	}
 
@@ -422,12 +433,25 @@ public class PacketClient {
 		final double rotateY = packet.readDouble();
 		final double rotateZ = packet.readDouble();
 		final double scale = packet.readDouble();
+		final boolean autoSwitchEnabled = packet.readBoolean();
+		final String autoSwitchPreset = packet.readUtf(32767);
+		final int autoSwitchCountdown = packet.readInt();
+		final int autoSwitchDuration = packet.readInt();
+		final boolean depAutoSwitchEnabled = packet.readBoolean();
+		final String depAutoSwitchPreset = packet.readUtf(32767);
+		final int depAutoSwitchCountdown = packet.readInt();
+		final int depAutoSwitchDuration = packet.readInt();
+		final boolean depAutoSwitchUntilClose = packet.readBoolean();
 		if (minecraft.level.getBlockEntity(pos) instanceof com.jsblock.block.PIDSProjector.TileEntityBlockPIDSProjector) {
 			minecraft.execute(() -> {
 				if (!(minecraft.screen instanceof PIDSProjectorScreen) && !(minecraft.screen instanceof LegacyPIDSProjectorScreen)) {
                     UtilitiesClient.setScreen(minecraft, com.jsblock.client.ClientConfig.isLegacyConfigUi()
-                            ? new LegacyPIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale)
-                            : new PIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale));
+                            ? new LegacyPIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale,
+                                    autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+                                    depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose)
+                            : new PIDSProjectorScreen(pos, presetID, messages, rowHidden, hidePlatformNumber, platformIds, offsetX, offsetY, offsetZ, rotateX, rotateY, rotateZ, scale,
+                                    autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+                                    depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose));
 				}
 			});
 		}

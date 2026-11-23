@@ -74,6 +74,15 @@ public class LegacyPIDSProjectorScreen extends ScreenMapper implements IGui {
 	 * what this screen did at first.</p>
 	 */
 	private final String initialPresetID;
+	private final boolean autoSwitchEnabled;
+	private final String autoSwitchPreset;
+	private final int autoSwitchCountdown;
+	private final int autoSwitchDuration;
+	private final boolean depAutoSwitchEnabled;
+	private final String depAutoSwitchPreset;
+	private final int depAutoSwitchCountdown;
+	private final int depAutoSwitchDuration;
+	private final boolean depAutoSwitchUntilClose;
 	private final double[] initialValues;
 
 	private static final double[] DEFAULTS = {0, 0, 0, 0, 0, 0, 1};
@@ -91,8 +100,22 @@ public class LegacyPIDSProjectorScreen extends ScreenMapper implements IGui {
 	public LegacyPIDSProjectorScreen(BlockPos pos, String presetID, String[] messages, boolean[] rowHidden,
 							   boolean hidePlatformNumber, Set<Long> platformIds,
 							   double offsetX, double offsetY, double offsetZ,
-							   double rotateX, double rotateY, double rotateZ, double scale) {
+							   double rotateX, double rotateY, double rotateZ, double scale,
+							   boolean autoSwitchEnabled, String autoSwitchPreset, int autoSwitchCountdown, int autoSwitchDuration,
+							   boolean depAutoSwitchEnabled, String depAutoSwitchPreset, int depAutoSwitchCountdown, int depAutoSwitchDuration, boolean depAutoSwitchUntilClose) {
 		super(Text.literal(""));
+
+		/* The legacy screen has no rows for automatic switching, so it carries whatever the block has
+		   and hands it back unchanged: saving from here must not turn the feature off. */
+		this.autoSwitchEnabled = autoSwitchEnabled;
+		this.autoSwitchPreset = autoSwitchPreset == null ? "" : autoSwitchPreset;
+		this.autoSwitchCountdown = autoSwitchCountdown;
+		this.autoSwitchDuration = autoSwitchDuration;
+		this.depAutoSwitchEnabled = depAutoSwitchEnabled;
+		this.depAutoSwitchPreset = depAutoSwitchPreset == null ? "" : depAutoSwitchPreset;
+		this.depAutoSwitchCountdown = depAutoSwitchCountdown;
+		this.depAutoSwitchDuration = depAutoSwitchDuration;
+		this.depAutoSwitchUntilClose = depAutoSwitchUntilClose;
 		this.pos = pos;
 
 		this.maxArrivals = messages == null || messages.length == 0 ? 4 : messages.length;
@@ -272,7 +295,9 @@ public class LegacyPIDSProjectorScreen extends ScreenMapper implements IGui {
 		}
 		PacketClient.sendPIDSProjectorC2S(pos, textBoxPreset.getValue(), messages, rowHidden,
 				hidePlatformCheckbox.selected(), filterPlatformIds,
-				values[0], values[1], values[2], values[3], values[4], values[5], values[6]);
+				values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+				autoSwitchEnabled, autoSwitchPreset, autoSwitchCountdown, autoSwitchDuration,
+				depAutoSwitchEnabled, depAutoSwitchPreset, depAutoSwitchCountdown, depAutoSwitchDuration, depAutoSwitchUntilClose);
 		super.onClose();
 	}
 

@@ -125,7 +125,12 @@ public class PIDSProjector extends JobanPIDSBase {
 						projector.getPlatformIds(),
 						projector.getOffsetX(), projector.getOffsetY(), projector.getOffsetZ(),
 						projector.getRotateX(), projector.getRotateY(), projector.getRotateZ(),
-						projector.getScale());
+						projector.getScale(),
+						projector.getAutoSwitchEnabled(), projector.getAutoSwitchPreset(),
+						projector.getAutoSwitchCountdown(), projector.getAutoSwitchDuration(),
+						projector.getDepAutoSwitchEnabled(), projector.getDepAutoSwitchPreset(),
+						projector.getDepAutoSwitchCountdown(), projector.getDepAutoSwitchDuration(),
+						projector.getDepAutoSwitchUntilClose());
 			}
 		});
 	}
