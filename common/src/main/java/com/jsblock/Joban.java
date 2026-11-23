@@ -43,13 +43,73 @@ public class Joban {
      */
     private static final String VERSION = readModVersion();
 
+    /**
+     * Reads this mod's own version out of the jar it was loaded from.
+     *
+     * <p>Not {@code getResourceAsStream("/fabric.mod.json")}: on Fabric every mod shares one class
+     * loader, so that path resolves to whichever mod happens to be first on the class path. It used
+     * to resolve to architectury, and the config screen showed architectury's version (9.2.14)
+     * instead of this mod's. The jar this class was loaded from cannot be confused with another.</p>
+     */
     private static String readModVersion() {
+        final String fromOwnJar = readFromOwnJar();
+        if (fromOwnJar != null) {
+            return fromOwnJar;
+        }
+
+        /* Fallback for anything that is not a jar (a development run from a classes directory, for
+           instance). Wrong in the case above, but better than throwing, and a dev run can live with
+           whichever mod answers first. */
         final String fromFabric = firstMatch("/fabric.mod.json", "\"version\"\\s*:\\s*\"([^\"]+)\"");
         if (fromFabric != null) {
             return fromFabric;
         }
         final String fromForge = firstMatch("/META-INF/mods.toml", "(?m)^\\s*version\\s*=\\s*\"([^\"]+)\"");
         return fromForge != null ? fromForge : "1.2.2";
+    }
+
+    /** @return the version declared in our own jar, or {@code null} when there is no jar to read */
+    private static String readFromOwnJar() {
+        try {
+            final java.security.CodeSource source = Joban.class.getProtectionDomain().getCodeSource();
+            if (source == null || source.getLocation() == null) {
+                return null;
+            }
+
+            final java.nio.file.Path location = java.nio.file.Paths.get(source.getLocation().toURI());
+            if (!java.nio.file.Files.isRegularFile(location)) {
+                return null;
+            }
+
+            try (java.util.jar.JarFile jar = new java.util.jar.JarFile(location.toFile())) {
+                final String fromFabric = readJarEntry(jar, "fabric.mod.json", "\"version\"\\s*:\\s*\"([^\"]+)\"");
+                if (fromFabric != null) {
+                    return fromFabric;
+                }
+                return readJarEntry(jar, "META-INF/mods.toml", "(?m)^\\s*version\\s*=\\s*\"([^\"]+)\"");
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String readJarEntry(java.util.jar.JarFile jar, String entry, String regex) {
+        final java.util.jar.JarEntry found = jar.getJarEntry(entry);
+        if (found == null) {
+            return null;
+        }
+        try (java.io.InputStream stream = jar.getInputStream(found)) {
+            final String text = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            final java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(regex).matcher(text);
+            if (!matcher.find()) {
+                return null;
+            }
+            final String value = matcher.group(1);
+            /* An unexpanded Gradle placeholder is not a version. */
+            return value.contains("${") ? null : value;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static String firstMatch(String resource, String regex) {
