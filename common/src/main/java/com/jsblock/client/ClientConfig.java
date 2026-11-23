@@ -12,7 +12,7 @@ import java.util.Collections;
 
 /**
  * Class responsible for reading/saving the config value.<br>
- * For config screen, see {@link com.jsblock.screen.ConfigScreen} and {@link com.jsblock.screen.ConfigScreenBase}
+ * For the config screen, see {@link com.jsblock.screen.ClientConfigScreen}.
  * @author LX86
  * @since 1.0.6
  */

@@ -35,7 +35,7 @@ Some of the blocks this mod adds including custom signal light, fare saver machi
 | Loaders | **Forge and Fabric, both served by the same file** |
 | MTR | MTR 3, the **YMTR** line -- 3.6.3 on 1.20.1 -- and it has to be the build for the loader you run |
 
-**The one jar really does serve both.** `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` is a merged jar.
+**The one jar really does serve both.** `build/MTR-YJCM-1.20-1.3.0.jar` is a merged jar.
 Open it and the two manifests sit side by side at the top level, each with its own mixin config:
 
 | Inside the jar | Forge | Fabric |
@@ -52,7 +52,7 @@ below is about what has to be installed *beside* it rather than about which file
 
 | Platform | What to install | Note |
 |---|---|---|
-| **Both** | This mod: `MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` into `mods/` | the merged jar; the same file on either loader |
+| **Both** | This mod: `MTR-YJCM-1.20-1.3.0.jar` into `mods/` | the merged jar; the same file on either loader |
 | **Both** | MTR 3 / YMTR 3.6.3 -- **the build for your loader** | `MTR-forge-1.20.1-3.6.3.jar` on Forge, `MTR-fabric-1.20.1-3.6.3.jar` on Fabric. MTR ships one jar per loader and the two are not interchangeable. `mtr` is a required dependency in both manifests |
 | **Both** | Architectury API `9.2.14` | On Forge, `META-INF/mods.toml` declares `architectury` `[1.26.37,)` **mandatory**. On Fabric, `fabric.mod.json` now lists it too -- `architectury` `>=9`, the 9.x line being the version that artifact gives itself in its own `fabric.mod.json` -- so it is the loader that names the missing dependency at startup instead of a `NoClassDefFoundError` from a class the loader had already accepted. The mod's own classes link `dev.architectury.event.Event`, `ClientGuiEvent` and `ClientTickEvent` (`com.jsblock.JobanClient`, a declared entry point) and the jar does not bundle them. The version is `gradle.properties`' `architectury_version` |
 | **Forge** | Forge for 1.20.1, build 36 or newer | `META-INF/mods.toml` asks for `forge` `[36,)`. Nothing else is mandatory there |
@@ -79,9 +79,9 @@ jar, and the artifacts are:
 
 | Path | What it is |
 |---|---|
-| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.5.jar` | the Fabric jar, remapped, the one the merge consumes |
-| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.5.jar` | the Forge jar, the one the merge consumes |
-| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` | the merged jar: this is the one to install |
+| `fabric/build/libs/fabric-1.20-1.3.0.jar` | the Fabric jar, remapped, the one the merge consumes |
+| `forge/build/libs/forge-1.20-1.3.0.jar` | the Forge jar, the one the merge consumes |
+| `build/MTR-YJCM-1.20-1.3.0.jar` | the merged jar: this is the one to install |
 
 The Fabric run was a launch-and-use check, not the item-by-item pass behind the Forge list above: that
 feature list stays on the Forge side. Read the platform table above as "this is what the manifests and
@@ -97,7 +97,7 @@ The same file goes to the same place on both loaders. What differs is the MTR ja
 2. `mods/` -- MTR 3 / YMTR, the **Forge** build: `MTR-forge-1.20.1-3.6.3.jar`.
 3. `mods/` -- Architectury API. `META-INF/mods.toml` marks it mandatory, so Forge refuses to start
    without it.
-4. `mods/` -- `MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar`.
+4. `mods/` -- `MTR-YJCM-1.20-1.3.0.jar`.
 
 ### Fabric
 
@@ -106,7 +106,7 @@ The same file goes to the same place on both loaders. What differs is the MTR ja
 3. `mods/` -- Fabric API.
 4. `mods/` -- Architectury API. `fabric.mod.json` declares it (`architectury` `>=9`), the same as
    Forge does; see the table above.
-5. `mods/` -- `MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar`.
+5. `mods/` -- `MTR-YJCM-1.20-1.3.0.jar`.
 6. Optional -- ModMenu, if you want the config screen listed with the other mods.
 
 ### Ways this gets installed wrong
@@ -128,7 +128,7 @@ Each row is expanded further down; this is the map.
 | PIDS presets | three kinds, all selectable from a board's own config screen: a JCM 2.x **JavaScript** preset (`scriptFiles`), a **component** layout declared in JSON (`components`), and a **traditional texture-only** pack. A preset that declares neither keeps YJCM's own hard-coded render path, unchanged |
 | PIDS Projector | `jsblock:pids_projector` -- a panel in the air, with its own format, offset, rotation, scale, per-row text and hide-platform switch |
 | Pixelation and dot matrix | off until somebody asks for it: a pack declares what it drew for, the player decides how coarse, per preset. Every key and the exact canvas proportions are in [docs/pixelation-guide.md](docs/pixelation-guide.md) |
-| Script API | measured entry by entry against the official JCM 2.x scripting docs rather than against whichever presets happened to be tested; the table is `V2-API-覆盖表.md` |
+| Script API | measured entry by entry against the official JCM 2.x scripting docs rather than against whichever presets happened to be tested; the table is `V2-API-COVERAGE.md` |
 | Script sandbox | a class-access allow-list, a warning screen before it is switched off, player-facing failure notices, and a trace of every draw call a preset issues |
 | Headless checks | `tools/run-pids-check.ps1` runs the shipped presets and the script API through the real engine, with no game running |
 
@@ -338,7 +338,7 @@ inherited members included), and the two are diffed.
 they are listed here so a pack author can tell at a glance rather than by experiment. The count and
 this list were re-measured against the real packs: every `Resources.read*` call site in the library
 is in `assets/mtr/**` — MTR's own map and LCD scripting host, not PIDS — so the PIDS-side gap is
-zero. See [`V2-API-覆盖表.md`](V2-API-覆盖表.md).
+zero. See [`V2-API-COVERAGE.md`](V2-API-COVERAGE.md).
 
 *Classes that exist, with methods not yet added (81 entries):*
 
@@ -453,7 +453,7 @@ If a resource pack's PIDS does not work, send me the **game version**, the **gam
 **link to the resource pack**, or open an
 [issue](https://github.com/ChihayaAnonQWQ/Yomis-Joban-Client-Mod/issues/new).
 
-- **Game version**: Minecraft, MTR / YMTR, and this mod (currently `1.2.12-JSPIDS-2.5`)
+- **Game version**: Minecraft, MTR / YMTR, and this mod (currently `1.3.0`)
 - **Game log**: `logs/latest.log`. A failing panel writes one line,
   `[Joban Client] PIDS script "..." threw in render(): ...`, which names the preset, the script line
   and the API that was missing -- usually enough to fix it without reproducing anything
@@ -511,6 +511,13 @@ gradle build --no-daemon --console=plain --max-workers=1        # -> build/MTR-Y
 A long stack trace during configuration is `build.gradle`'s `setupFiles` catch branch
 printing a failed `Minecraft-Mappings` download; it is not a build failure.
 
+## Maintaining this branch
+
+Handing this over, or coming back to it after a while? Read
+[`docs/MAINTAINING.md`](docs/MAINTAINING.md) first: where each subsystem lives, how to add a preset
+or a script API, the build and headless-check commands, and the known limits (including the one this
+branch does not solve).
+
 ## Building from source
 
 Three Gradle modules, from `settings.gradle` (the root project is `Joban-Client-Mod`):
@@ -534,14 +541,14 @@ $env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
 gradle build --no-daemon --console=plain --max-workers=1
 ```
 
-What the build leaves behind -- with `mod_version` at `1.2.12-JSPIDS-2.5`, the version in the file
+What the build leaves behind -- with `mod_version` at `1.3.0`, the version in the file
 names is that value:
 
 | Path | What it is |
 |---|---|
-| `build/MTR-YJCM-1.20-1.2.12-JSPIDS-2.5.jar` | the merged jar: Forge and Fabric in one file. This is the one to install |
-| `fabric/build/libs/fabric-1.20-1.2.12-JSPIDS-2.5.jar` | the Fabric jar the merge is made from |
-| `forge/build/libs/forge-1.20-1.2.12-JSPIDS-2.5.jar` | the Forge jar the merge is made from |
+| `build/MTR-YJCM-1.20-1.3.0.jar` | the merged jar: Forge and Fabric in one file. This is the one to install |
+| `fabric/build/libs/fabric-1.20-1.3.0.jar` | the Fabric jar the merge is made from |
+| `forge/build/libs/forge-1.20-1.3.0.jar` | the Forge jar the merge is made from |
 | `fabric/build/libs/fabric-1.20-….jar`, `forge/build/libs/forge-1.20-….jar` with `-dev-shadow` in the name | the intermediate shadow jars, before remapping |
 
 The build needs MTR's development jar under `checkouts/1.20/` (git-ignored), and MTR 3 is no longer

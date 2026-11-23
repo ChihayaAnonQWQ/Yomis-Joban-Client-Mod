@@ -1,6 +1,11 @@
-# Yomi's Joban Client Mod 1.2.12-JSPIDS-2.10
+# Yomi's Joban Client Mod 1.3.0
 
-> 2.10 包含两组改动：脚本执行移出渲染线程（§4.23），以及 AmberUI 列表界面（§4.24）。
+> 1.3.0 就是此前编号为 `1.2.12-JSPIDS-2.10` 的那一版：脚本执行移出渲染线程（§4.23）、AmberUI 列表界面
+> （§4.24），加上下面「维护性」一节列出的整理。决定向上游提 PR 时把编号从 `1.2.12-JSPIDS-x.y` 改成了
+> `1.3.0`，此前的段落保留各自发布时的编号，不再改动。
+>
+> 1.3.0 is the build previously numbered `1.2.12-JSPIDS-2.10`. The number changed to `1.3.0` when the
+> work was proposed upstream; older sections keep the numbers they shipped with.
 
 ## Compatible MTR Version
 MTR
@@ -148,6 +153,28 @@ Verified against the real pack: `kamino_jp_pids.js` now emits five `Quad` calls 
   loaders, so creative mode cannot remove the board it is pointed at.
 * HKR's flip board no longer flickers: both faces of a panel replay one recorded frame, and a
   canvas snapshots its pixels before the upload is queued.
+
+## 维护性 / Maintainability
+
+这一版同时做了一次面向"人接手"的整理，功能行为不变：
+
+* **版本编号**从 `1.2.12-JSPIDS-x.y` 改为 `1.3.0`。`gradle.properties` 的 `mod_version` 仍是唯一
+  来源，`Joban.VERSION` 从产物元数据读回；README / README_CN 里所有示例 jar 名同步更新。
+* 删除 `_pre_ui_backup/`（30 个 AmberUI 替换前的界面备份文件）。它们只对当时那次替换有意义，
+  历史在 git 里，留在工作树里只会让人以为还要维护两份界面。
+* `V2-API-覆盖表.md` → `V2-API-COVERAGE.md`（内容不变，只改文件名）：ASCII 文件名对 Windows、
+  CI 和脚本更友好，14 处引用已同步。
+* 新增 [`docs/MAINTAINING.md`](docs/MAINTAINING.md)：模块地图、一次渲染的生命周期、
+  加预设/加脚本 API/加配置项/加物品的具体步骤、构建与检查命令、已知限制、故障排查。
+* `MTR3-PIDS-PORT.md` 从 2939 行整理到 2262 行：§7.8 / §7.9 的两轮实机流水移到
+  `docs/history/REAL-CLIENT-VALIDATION.md`（正文留结论），并修正了 §4.20–§4.25 被排到 §5 / §8
+  之后的结构问题，加了目录。
+* 删除 AmberUI 界面替换后已无引用的 `ConfigScreen` / `ConfigScreenBase`（旧配置界面），
+  两处指向它们的 javadoc 改为 `ClientConfigScreen`。
+* 三个最大的源文件（`ScriptEngine` 1967 行、`RenderPIDSBase` 1343 行、`PIDSWrapper` 1134 行）
+  加了"文件地图"注释：列出各区段的标题或方法名，照着搜就能跳，不用从头滚。逻辑未改。
+* `amberui/gui/widget/WidgetHost.java` 补了来源说明：它是本移植新增的接口，不是 JCM 2.3 的
+  文件，避免 PR 时把 MIT 代码与新增代码混为一谈。
 
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.9
 
@@ -694,7 +721,7 @@ MTR
 Two things a JCM 2.x script can do were still impossible here, and both of them are load-bearing for
 a pack that is actually in the library — not for a hypothetical one. Everything below was found by
 running the packs' own scripts, not by reading the docs: 112 `.js` files from nine resource packs,
-108 of them now pass (`V2-API-覆盖表.md` has the per-script table).
+108 of them now pass (`V2-API-COVERAGE.md` has the per-script table).
 
 ### `Files` — persistent state between frames
 
@@ -786,7 +813,7 @@ None of the four failures is a missing API. Two are `PIDSUtil` helper modules th
 rather than run as presets and have no `render()` by design; two are presets that dereference
 something a headless JVM has not got (`pids.station()` with no world, `MinecraftClient.localPlayer()`
 with no player) without a null check. All four are recorded with their line numbers and the reason
-in `V2-API-覆盖表.md`, and the two environmental ones are marked **not applicable** rather than
+in `V2-API-COVERAGE.md`, and the two environmental ones are marked **not applicable** rather than
 worked around.
 
 ### What is still missing, and why it stays that way
@@ -799,7 +826,7 @@ PIDS preset run. `VanillaText`, the TSC data classes and `getRenderManager()` ar
 position: zero call sites in any PIDS script.
 
 **The whole table, including the bytecode evidence for each row and the list of what was inferred
-rather than measured, is `V2-API-覆盖表.md` at the workspace root.**
+rather than measured, is `V2-API-COVERAGE.md` at the workspace root.**
 
 # Yomi's Joban Client Mod 1.2.12-JSPIDS-2.3
 

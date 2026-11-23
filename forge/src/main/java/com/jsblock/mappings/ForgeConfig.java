@@ -25,7 +25,7 @@ import net.minecraftforge.fml.ModLoadingContext;
 public class ForgeConfig {
 
 	/**
-	 * Registers the {@link ConfigScreen} factory with Forge. Must run on the
+	 * Registers the {@code ClientConfigScreen} factory with Forge. Must run on the
 	 * client only; the sole caller is the {@code FMLClientSetupEvent} handler.
 	 */
 	public static void registerConfig() {

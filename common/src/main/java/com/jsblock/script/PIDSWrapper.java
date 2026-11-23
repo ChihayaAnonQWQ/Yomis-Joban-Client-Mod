@@ -32,6 +32,22 @@ import java.util.List;
  * semantics a preset sees are identical. The only observable difference is that the values no
  * longer change halfway through a frame.</p>
  */
+/*
+ * Map of this file:
+ *
+ *   PIDSWrapper                       the `pids` object a preset receives; every field is resolved
+ *                                     in the constructor, because the script thread reads it
+ *   resolveStation()                  which station a panel serves
+ *   withLenientArrivals()             the fallback used when a preset expects JCM 2.x's tolerance
+ *   StationInfo                       `pids.station()`
+ *   "// Arrival list"                 Arrivals: size()/get()/mixedCarLength()/platforms()/toArray()
+ *   "// One arrival"                  Arrival: times, route, platform, cars, circular state
+ *   RouteInfo / RouteStopList / RouteStopInfo   the calling pattern behind an arrival
+ *   PlatformInfo                      platform name/id as a script sees it
+ *
+ * Adding a field to the script API means adding it here and resolving it in the constructor --
+ * never reading ClientData lazily, which is what the async model forbids.
+ */
 public class PIDSWrapper {
 
 	/** PIDS type name, e.g. {@code "pids_rv"}. */

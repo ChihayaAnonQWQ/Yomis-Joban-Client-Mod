@@ -37,6 +37,18 @@ import java.util.Set;
  * this branch needs. The globals registered here are the ones JCM 2.x's own
  * {@code pids_1a.js} and the shipped {@code pids_util.js} touch.</p>
  */
+/*
+ * Map of this file (it is the longest one in the mod; search for the marker text):
+ *
+ *   "// Compilation"                  compile(), the per-resource source cache, compile errors
+ *   "// Reference spelling"           substituteFor()/reference handling shared by the globals
+ *   "// Globals"                      registerGlobals(): every name a preset sees
+ *   "// JS-facing global helpers"     Resources, Console, TextUtil, RateLimit, MinecraftClient
+ *   "// Program"                      Program: start(), render(), renderRecovering(), last error
+ *
+ * Anything a preset can call is reachable from registerGlobals(); adding an API means adding a
+ * global there and (for a drawable) a class in ScriptDrawCalls, not editing the renderer.
+ */
 public final class ScriptEngine {
 
 	/** Compiled programs, keyed by preset id. Cleared whenever resources reload. */

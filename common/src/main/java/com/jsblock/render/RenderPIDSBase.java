@@ -46,6 +46,27 @@ import java.util.Set;
  * (Variables, PIDS Preset etc.)
  * @author LX86
  */
+/*
+ * Map of this file, in the order a frame walks it:
+ *
+ *   render()                          frame entry: preset resolution, arrival/departure auto-switch,
+ *                                     then one of the three drawing paths below
+ *   renderLayout()                    a preset that declares "components"
+ *   renderScripted()                  a preset that declares "scriptFiles"/"scriptTexts"
+ *                                     (async submit + replay, pixelation, direct draw)
+ *   getLayoutGeometry()               where the panel sits on the block face
+ *   keyBlock()/companionOf()/isKeyFacing()   the two-block pairing every panel has
+ *   setProjectorMode()/setScriptPanelProfile()/setScriptPanelRotation()
+ *                                     projector configuration, set from the block entity
+ *   drawProjectorFrameIfAiming()/drawProjectorRangeLines()   projector-only visuals
+ *   applyScriptPanelTransform()       panel offset/rotation for scripted presets
+ *   drawPresetBackground()            an image preset's background
+ *   reportPanelOnce()/reportPanelShapeOnce()/forgetReportedPanels()
+ *                                     one-shot diagnostics, re-armed on resource reload
+ *
+ * Subclasses (RenderRVPIDS, RenderLCDPIDS, the projector) override render() for their own built-in
+ * layout and call into renderScripted()/renderLayout() when the preset asks for one of those.
+ */
 public abstract class RenderPIDSBase<T extends BlockEntityMapper> extends BlockEntityRendererMapper<T> implements IGui {
     private final int maxArrivals;
 
