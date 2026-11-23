@@ -1,0 +1,2262 @@
+# MTR 3 PIDS 移植说明 —— JCM 2.x / MTR 4.0 的 PIDS 体系 → YJCM / MTR 3
+
+本分支把 **JCM（Joban Client Mod）2.x / MTR 4.0** 的 PIDS 体系移植到
+**YJCM / MTR 3（YMTR 3.6.3，MC 1.20.1）**，包含两个子系统：
+
+| 子系统 | 来源（JCM 2.x） | 本分支实现 |
+|---|---|---|
+| **组件化布局预设** | `jcm/mod/data/pids/*` + `PIDSComponent` 组件树 | `com.jsblock.pids.*`，11 种组件，JSON 声明式版式 |
+| **JavaScript 脚本预设** | `jcm/mod/scripting/pids/*` + `mtrscripting` + Rhino | `com.jsblock.script.*`，内置 Rhino 1.7.15，可直接跑 JCM 2.x 的 `.js` 预设 |
+
+两个子系统共用同一条预设入口：资源包里的 PIDS 预设 JSON 里写 `components`
+就走组件布局，写 `scriptFiles` 就走 JS 脚本，两者都不写则完全沿用 YJCM 原有的
+硬编码渲染路径（**向后兼容**）。
+
+---
+
+## 目录
+
+| 节 | 内容 |
+|---|---|
+| 1 | 为什么要移植 |
+| 2 | 新增模块（`com.jsblock.pids` / `com.jsblock.script`） |
+| 3 | 预设 JSON 格式（组件布局） |
+| 4 | JavaScript 脚本预设（含 4.20 字体回退、4.22 帧内分段、4.23 异步执行、4.24 AmberUI、4.25 QuadDrawCall） |
+| 5 | 顺带修复的三个上游缺陷 |
+| 6 | 构建 |
+| 7 | 验证状态（务必阅读；7.8 / 7.9 的流水见 `docs/history/`） |
+| 8 | 与 JCM 2.x 的 API 对照 |
+| 附录 | 1A PIDS 预设接入记录 |
+
+---
+
+## 1. 为什么要移植
+
+移植前，YJCM 与 JCM 在 PIDS 上的差距是**架构性**的：
+
+| | YJCM（移植前） | JCM 2.x（MTR 4.0） |
+|---|---|---|
+| 布局 | 每个元素位置**硬编码**在 `RenderLCDPIDS` / `RenderRVPIDS` 里 | `PIDSComponent` 声明式布局（`x/y/width/height`） |
+| 可扩展性 | 想改版式只能改 Java、重新编译 | 资源包写 JSON / JS 即可换版式 |
+| 组件类型 | 无 | 11 种（时钟 / 天气 / 站名 / 目的地 / ETA / 车厢数 / 自定义文本 / 自定义贴图 / 轮播 …） |
+| 脚本 | 无 | Rhino JS，脚本自己画整块面板 |
+
+YJCM 已有预设系统（`com.jsblock.data.PIDSPreset`，从 `JobanCustomResources` 载入，
+支持到站/离站自动切换、`{time}`/`{weather}` 变量替换），但它描述的是**外观**，
+不是**版式**，更不能让预设自己决定画什么。本分支补上的正是这两层。
+
+---
+
+## 2. 新增模块
+
+### 2.1 组件化布局（`com.jsblock.pids`）
+
+```
+common/src/main/java/com/jsblock/pids/
+├── PIDSContext.java      渲染一帧所需的全部数据快照
+├── PIDSGraphics.java     渲染状态打包（PoseStack / MultiBufferSource / 光照 / 颜色 / 字体）
+├── PIDSGeometry.java     面板几何（位置、缩放、尺寸），由各渲染器提供
+├── PIDSComponent.java    组件基类 + 组件注册表 + 共享绘制助手
+├── ComponentParser.java  组件工厂函数式接口
+├── PIDSAlign.java        JSON 对齐/颜色解析助手
+├── PIDSData.java         MTR 3 客户端数据只读门面
+├── PIDSLayout.java       预设解析 + 整版渲染
+└── component/            11 个组件实现（clock / weather_text / weather_icon /
+                          custom_text / custom_texture / cycle / platform_text /
+                          station_name / arrival_destination / arrival_eta / arrival_car）
+```
+
+### 2.2 JavaScript 脚本预设（`com.jsblock.script`）
+
+```
+common/src/main/java/com/jsblock/script/
+├── ScriptEngine.java           Rhino 作用域、全局对象、脚本解析与实例缓存、include()
+├── ScriptDrawCalls.java        Text / Texture / Rectangle 三条构建链
+├── ScriptDrawCall.java         绘制调用基类（pos / size / zOrder）
+├── ScriptRenderContext.java    绘制上下文；dryRun() 供无头检查记录调用而不真的画
+├── PIDSWrapper.java            暴露给脚本的 pids / arrivals / arrival / route / station / platform
+└── ScriptTextures.java         贴图解析（JCM 2.x 的贴图加载语义）
+
+common/src/main/resources/assets/jsblock/scripts/
+├── pids_util.js                       PIDSUtil 工具函数（与 JCM 2.x 同名同内容）
+└── builtin/pids_1a.js                 随 mod 附带的 1A 预设（JCM 2.x 脚本写法）
+```
+
+### 2.3 改动的既有文件
+
+| 文件 | 改动 |
+|---|---|
+| `common/.../data/PIDSPreset.java` | 新增可空字段 `layout` / `scriptFiles` / `blacklist` / `name` / `builtin`；`fromJson` 解析 `components` 与 `scriptFiles`。**旧预设行为完全不变。** |
+| `common/.../render/RenderPIDSBase.java` | 新增三条路径的分发：脚本 → 布局 → 内置；新增 `getLayoutGeometry()`、`renderScripted()`、`renderLayout()` 与面板字面量钩子 |
+| `common/.../render/RenderLCDPIDS.java` | 实现 `getLayoutGeometry()`，覆写 LCD 的 JCM 2.x 面板字面量 |
+| `common/.../block/PIDS1A.java` | 父类上移到 `JobanPIDSBase`，接入预设存储与配置界面 |
+| `common/.../JobanClient.java` | 1A 改用 `RenderRVPIDS` 并对该实例应用 1A 的面板字面量 |
+| `gradle.properties` | 新增 `rhino_version=1.7.15`；按离线构建需要固定各依赖版本 |
+| `forge/.../mappings/ForgeConfig.java` | **新建**（原仓库缺失该文件，见 §5.1） |
+| `fabric/build.gradle`、`forge/build.gradle` | `classifier` → `archiveClassifier`（见 §5.2） |
+
+---
+
+## 3. 预设 JSON 格式（组件布局）
+
+放进资源包的 PIDS 预设仍是原来的 JSON；加一个 `components` 数组即可启用组件布局：
+
+```json
+{
+  "id": "hk_example",
+  "background": "jsblock:textures/block/pids_rv_screen.png",
+  "size": [100, 50],
+  "color": "FFFFFF",
+  "font": "mtr:mtr",
+  "components": [
+    { "component": "station_name",        "x": 2,  "y": 2,  "width": 46, "height": 8, "prefix": "往 " },
+    { "component": "clock",               "x": 80, "y": 2,  "width": 18, "height": 8, "format": "HH:mm" },
+    { "component": "arrival_destination", "x": 4,  "y": 14, "width": 62, "height": 8, "row": 0 },
+    { "component": "arrival_eta",         "x": 80, "y": 14, "width": 18, "height": 8, "row": 0 },
+    { "component": "arrival_car",         "x": 80, "y": 24, "width": 18, "height": 6, "row": 0,
+      "only_when_varying": true },
+    { "component": "cycle", "x": 2, "y": 36, "width": 96, "height": 10, "interval": 100, "components": [
+        { "component": "weather_text", "x": 0,  "y": 0, "width": 48, "height": 10 },
+        { "component": "custom_text",  "x": 0,  "y": 0, "width": 96, "height": 10,
+          "text": "第 {day} 天 · {worldPlayer} 人在线" }
+    ]}
+  ]
+}
+```
+
+- **`size`**：设计画布尺寸（默认 `[100, 50]`）。所有组件的 `x/y/width/height` 都用这套
+  设计单位；渲染时整块画布**等比**缩放到面板上，因此同一份预设在小尺寸站台 PIDS 和
+  大尺寸投影仪上表现一致。
+- **`color` / `font`**：与旧预设含义相同，作为组件未单独指定颜色/字体时的默认值。
+- **`background`**：可选。带布局的预设会**自己绘制**背景图（内置渲染器的背景绘制被绕过，
+  所以这一层由布局路径补上）；不写则只有组件。
+- 旧预设（无 `components`）继续走原有硬编码渲染路径，**完全向后兼容**。
+
+### `row` 的语义：显示行，不是班次下标
+
+`arrival_*` 组件的 `row` 是**显示行号**，采用与内置渲染器（`RenderLCDPIDS` /
+`RenderRVPIDS`）完全一致的规则：
+
+> 被 `hideRow` 标记为隐藏的行**不消耗**班次，因此该班次会顶到下一个可见行。
+
+所以 `row: 2` 指的始终是用户在屏幕上看到的第 3 行，与预设隐藏了几行无关。
+
+### 随 mod 附带的示例预设
+
+`common/src/main/resources/assets/jsblock/joban_custom_resources.json` 内置了三个可直接使用的布局预设，
+同时也是本引擎的活体测试用例：
+
+| id | 演示内容 |
+|---|---|
+| `layout_lcd` | 复刻内置 LCD PIDS：站名 + 时钟表头，4 行「终点站 + ETA」 |
+| `layout_rv` | 复刻内置 RV PIDS，并补上内置渲染器只在特定 tick 闪现的**车厢数** |
+| `layout_notice` | 演示 `cycle` 组件：天气 / 日期 / 在线人数三屏轮播 |
+
+### 通用选项（所有组件）
+
+| 键 | 说明 |
+|---|---|
+| `halign` | `left` / `center` / `right`（默认随组件而定） |
+| `valign` | `top` / `center` / `bottom` |
+| `color` | `RRGGBB` 或 `AARRGGBB` 十六进制 |
+| `scale` | 文本缩放倍数，默认 `1` |
+
+### 各组件专属选项
+
+| 组件 | 专属键 |
+|---|---|
+| `clock` | `format`（默认 `HH:mm`，支持 `ss`）、`seconds` |
+| `weather_text` | `sunny`、`raining`、`thundering`（文案覆盖） |
+| `weather_icon` | `sunny_texture`、`raining_texture`、`thundering_texture`、`tint`、`translucent` |
+| `custom_text` | `text`（必需）、`use_variables`（默认 `true`） |
+| `custom_texture` | `texture`（必需）、`tint`、`translucent` |
+| `cycle` | `interval`（tick，默认 `100`）、`components`（子组件数组） |
+| `platform_text` | `prefix`、`fallback` |
+| `station_name` | `prefix`、`use_mtr_formatting`（默认 `true`） |
+| `arrival_destination` | `row`（默认 `0`）、`show_route_name` |
+| `arrival_eta` | `row` |
+| `arrival_car` | `row`、`only_when_varying` |
+
+---
+
+## 4. JavaScript 脚本预设
+
+一个 JCM 2.x 的脚本预设，在 YJCM 里**不需要任何改动**即可运行。预设 JSON 声明脚本文件：
+
+```json
+{
+  "id": "nanbin_crt_pids_1",
+  "name": "CRT PIDS (Style 1)",
+  "builtin": true,
+  "background": "nanbin:pids/image/crt_pids_1.png",
+  "fonts": "nanbin:harmonyos_sanssc_medium",
+  "scriptFiles": ["nanbin:pids/script/crt_pids_1.js"],
+  "blacklist": ["pids_1a"]
+}
+```
+
+脚本从 `assets/<namespace>/<path>` 读取，位置与 JCM 2.x 完全一致。
+
+### 4.1 脚本生命周期
+
+```js
+function create(ctx, state, pids)  { }   // 首帧渲染前调用一次，pids 就是本面板的包装对象
+function render(ctx, state, pids)  { }   // 每帧调用，在这里 draw
+function dispose(ctx, state, pids) { }   // 面板消失时调用
+```
+
+`state` 是一个每块面板独立的空对象，用来存放脚本自己的状态（轮播计时器等）。
+**每块 PIDS 方块位置有独立的脚本实例**，同一面板的两半不会共用状态。
+
+三个函数收到的**第三个参数都是同一个 `pids` 包装对象**，`create` 也不例外——这一点曾经错过，
+详见 §4.13。`create` 的调用时机是**首次进入渲染路径的那一帧**，不是编译时：包装对象要在那一帧
+才凑得出（到站列表、自定义文案、站台过滤都来自世界与客户端数据缓存），见 §4.13。
+
+### 4.2 注册的全局对象
+
+| 全局 | 作用 |
+|---|---|
+| `Text` / `Texture` / `Rectangle` | 三条绘制构建链，见 §4.3 |
+| `Resources.id("namespace:path")` | 引用资源 |
+| `Resources.readBufferedImage(id)` | 读一张资源包图片为 ARGB `BufferedImage`（v2 同名方法，画布贴图用；见 §4.9） |
+| `Resources.getSystemFont(name)` | AWT `Font`：`"Noto Sans"` / `"Noto Serif"` 读 MTR 自带字体文件，其余名字走 `new Font(name, PLAIN, 1)`（v2 同名方法；见 §4.16） |
+| `importPackage(pkg)` / `importClass(cls)` | Rhino importer：把包/类引入作用域（**惰性解析，仍过沙箱**；见 §4.15） |
+| `Packages` / `java` / `javax` / `org` / `com` / `edu` / `net` | Rhino importer 的包根，可逐段走类名（同上） |
+| `include(Resources.id("...:....js"))` | 把另一份脚本并入当前作用域（JCM 2.x 的依赖写法），受 §4.7 的路径防护约束 |
+| `TextUtil` | `cycleString(text[, ticks])`、`getCjkParts` / `getNonCjkParts` / `getExtraParts` / `getNonExtraParts` / `getNonCjkAndExtraParts`、`isCjk` |
+| `MinecraftClient` | `worldDayTime()`、`worldIsRaining()`、`worldIsThundering()` |
+| `MTRClientData` | **MTR 自己的客户端数据** `mtr.client.ClientData`：`STATIONS` / `PLATFORMS` / `SCHEDULES_FOR_PLATFORM` / `DATA_CACHE`（与 `MinecraftClient` 不是同一个对象，见 §4.10） |
+| `GraphicsTexture(w, h)` | 运行时画布：`graphics` / `bufferedImage` / `identifier`、`upload()`、`close()`、`fillRect` / `drawText` / `drawTexture` / `clear`（见 §4.9、§4.18） |
+| `RateLimit(seconds)` | 新建一个限流器：`shouldUpdate()` / `resetCoolDown()` |
+| `print(...)` | 输出到游戏日志（`[PIDS script]` 前缀） |
+
+`PIDSUtil`（`formatTime` / `getETAText` / `getCarText` / `formatDateTime`）**由 JS 提供**，
+随 mod 附带在 `assets/jsblock/scripts/pids_util.js`，与 JCM 2.x 的自带文件同名同内容——
+预设用 `include(Resources.id("jsblock:scripts/pids_util.js"))` 引入即可。
+
+### 4.3 绘制构建链
+
+```js
+Text.create("Clock").text("06:00").color(0xFFFFFF).pos(124, 6).scale(0.8).rightAlign().draw(ctx);
+
+Texture.create("Background")
+    .texture("nanbin:pids/image/crt_pids_1.png")
+    .size(pids.width, pids.height)
+    .draw(ctx);
+
+Rectangle.create("Bar").color(0xFF0000).pos(0, 0).size(100, 4).draw(ctx);
+```
+
+`Text` 支持 `scale` / `leftAlign` / `centerAlign` / `rightAlign` / `shadowed` / `stretchXY` /
+`scaleXY` / `wrapText` / `marquee` / `marquee(ticks)` / `withMarqueeProgress` / `lineHeight` /
+`fontMC` / `font(id)` / `renderType` / `italic` / `bold` / `color` / `naturalLight` / `measureWidth`。
+`Texture` 支持 `texture` / `uv` / `color` / `naturalLight` / `renderType`。
+三条链都支持 `pos(x, y)`、`size(w, h)`、`zOrder(n)`。
+
+#### `.color()` 写的是 RGB，透明度由引擎补
+
+预设里写的永远是 6 位十六进制（`0xFFFFFF`、`0x874936`），**没有 alpha 通道**，而
+MTR 3 的 `IDrawing.drawTexture` 的 alpha 直接取 `color >> 24`。所以 `.color()` 一律按
+JCM 2.x 的做法补成不透明（JCM 2.x 写 `ARGB_BLACK + color`，这里用 `|`，对任何
+小于 `0x01000000` 的值等价，且不会把默认的 `ARGB_WHITE` 加到 `0xFFFFFFFE`）。
+
+不补会怎样，是这一轮实机才看清的：
+
+| 现象 | 原因 |
+|---|---|
+| 车厢数/路号徽章只有白字，没有底色 | `white.png` 的 tint alpha 为 0 → 整块透明 |
+| 站台圆圈只剩里面的数字 | 同上，`plat_circle.png` 的 tint 同样透明 |
+| 路线图有站名和箭头，唯独**没有那条线和站点圆点** | 线和圆点也是带 tint 的贴图 |
+
+**文字为什么看起来没事**：原版字体渲染器自己会补 alpha
+（`if ((color & 0xFC000000) == 0) color |= 0xFF000000`），贴图这条路没人补。
+这个不对称正是它容易被误判成「颜色值不对」而不是「根本没画出来」的原因。
+
+JSON 组件那条路本来是对的（`PIDSAlign.color` 把 6 位色变成 `0xFF000000 | value`），
+脚本这条路此前漏了。
+
+### 4.4 脚本能读到的数据（`pids`）
+
+| 成员 | 说明 |
+|---|---|
+| `pids.width` / `pids.height` | 画布尺寸（JCM 2.x 的 1/96 方块单位） |
+| `pids.type` / `pids.name` / `pids.id` | 面板类型与预设标识 |
+| `pids.blockPos()` / `pids.targetPlatformIds()` | 方块坐标与绑定的站台 |
+| `pids.getCustomMessage(i)` / `pids.isRowHidden(i)` | 自定义文本与行隐藏标记 |
+| `pids.isKeyBlock()` / `pids.isPlatformNumberHidden()` | 本块是不是面板的「主块」；平台号显示是否被关掉 |
+| `pids.station()` | `name()` / `getName()` / `id()` / `zone()` / `stationName()` |
+| `pids.arrivals()` | `get(i)`（越界返回 `null`，与 JCM 2.x 一致）、`size()`、`mixedCarLength()`、`toArray()`、`platforms()` |
+| `arrival.*` | `arrivalTime()` / `departureTime()` / `arrived()` / `departed()` / `destination()` / `carCount()` / `routeNumber()` / `routeName()` / `routeColor()` / `circularState()` / `platformName()` / `currentStationIndex()` / `deviation()` / `realtime()` / `cars()` / `terminating()` / `platform()` / `route()` |
+| `arrival.route()` | `getPlatforms()` → `size()` / `get(i)` → `getStationName()` / `getPlatformId()` |
+
+> `pids.arrivals().get(i)` **越界返回 `null`**，这是 JCM 2.x 的正式契约（它自己的
+> `pids_1a.js` 就是这么守的）。没有任何班次时脚本必须自己判空。
+>
+> 这一条**必须是 `null`，不能是「占位对象」**。曾经为了让不判空的预设不抛异常而返回过
+> 占位对象，代价是预设那侧完全看不出来：`if (train)` 恒为真，于是所有**写了**判空的预设
+> 都会把空行画出来。在 HKR 的面板上，那个幽灵班次走到 `isNonPassenger`——占位对象没有
+> 线路，函数返回「非载客」——于是打出「不載客列車」，而它的 ETA 永远显示「1 min」：
+> 占位对象报的到站时间是**当下**，`Math.ceil(0 / 60)` 进位成 1 分钟，而这句话每 60 tick
+> 在中英之间切换一次，就是它旁边那个「闪烁」。
+>
+> **不判空的预设由引擎兜底，不用改资源包。** 返回 `null` 会让不判空的预设抛异常——这正是
+> JCM 2.x 里会发生的事（重庆轨道交通包的 `crt_pids_1.js` 第 20、22 行就是这种写法，站台
+> 只有 1 班车时必抛）。资源包不归我们改，所以引擎改成：`render()` 抛出的异常里**提到 null**
+> 时，把那块面板换成「越界给占位对象」的语义重试一帧，成功就把这个选择固定下来（只重试一次，
+> 不是每帧）。重试前会先把每调用深度计数归零，让重发的那批调用落在**第一次尝试用过的深度**上，
+> 而不是在它后面再叠一层。
+>
+> 两种结果分开告知，因为它们不是一回事：
+>
+> | 结果 | 日志 | 聊天栏 |
+> |---|---|---|
+> | 重试画出来了 | 保留那条 ERROR（给预设作者看）+ 一条「已用占位班次绘制」的 WARN | 只有一条黄字说明 |
+> | 重试也没画出来（那个 null 根本不是班次） | 保留 ERROR | 只有那条红字，**不会**谎称已救回 |
+>
+> 实机两种情况都碰到了：CRT 面板在 0 班次站台上正常出图；`sound_transit.js` 死在
+> `pids.station()` 为空（与班次无关），照实报红字并退回预设背景图。
+
+### 4.5 画布尺寸与面板字面量
+
+脚本坐标单位是 JCM 2.x 的 **1/96 方块**，画布尺寸是每种 PIDS 型号的硬编码字面量——
+脚本作者就是照这些数字排版，所以必须逐字照抄，不能从面板尺寸反推：
+
+| 渲染器 | JCM 2.x `translate` | 画布 |
+|---|---|---|
+| `RVPIDSRenderer` | `(-0.21, -0.14, -0.128)` | 136 × 76 |
+| `PIDS1ARenderer` | `(-0.47, -0.155, -0.130)` | 186 × 60 |
+| `LCDPIDSRenderer` | `(-0.19, -0.125, -0.130)` | 133 × 72 |
+
+Z 值另外按实机观感微调过（面板要离开方块表面，否则会与方块模型争深度）：
+RV 与 LCD 见 `RenderPIDSBase` / `RenderLCDPIDS`，1A 为 `-0.112`（在 JCM 2.x 的
+`-0.130` 基础上向方块内侧收回 0.018）。
+
+### 双格面板：两半各画一面
+
+一个「双格」PIDS 其实是**两个方块背靠背**：`BlockPIDSBaseHorizontal.setPlacedBy` 把第二块
+放在 `pos.relative(FACING)`，并给它**相反的 FACING**。于是：
+
+| | 朝向 | 角色（JCM 2.x 的叫法） |
+|---|---|---|
+| 主块 | `NORTH` / `EAST` | key block，`pids.isKeyBlock()` == `true` |
+| 另一块 | `SOUTH` / `WEST` | `pids.isKeyBlock()` == `false` |
+
+**两半都要渲染**，各自在自己那一面画一整块面板——JCM 2.x 的 `PIDSRenderer.renderCurated`
+里**没有**任何 key-block 判断，它就是「谁被调到就从谁那里、以谁为原点画」；MTR 3 自带的
+`RenderPIDS` 同理。曾经有一版把非主块 `return` 掉，结果每块双格面板**只剩一面有画面**。
+
+哪一半真的出图由**预设自己**决定，工具是 `pids.isKeyBlock()`。1A 型的
+`st_ql.js`（琼岭车站展示系统）就是这么写的：
+
+```js
+if (pids.isPlatformNumberHidden()) {
+    if (!pids.isKeyBlock()) { show(pids, ctx); }   // 平台号隐藏 → 画在非主块那面
+} else {
+    if ( pids.isKeyBlock()) { show(pids, ctx); }   // 平台号可见 → 画在主块那面
+}
+```
+
+所以 `isKeyBlock()` / `isPlatformNumberHidden()` 一度被硬编码成 `true` / `false` 时，
+这块面板在「平台号可见」时两半都画（日志里同一块面板出现两次 `running script`），
+在「平台号隐藏」时**一面都不画**。
+
+两半共用一份编译好的脚本程序（按主块位置做 key），因此预设里的计数器、音效状态每块面板
+只有一份，两半不会各自跑一套。`pids.getCustomMessage(i)` 与 JCM 2.x 一样，越界给空串。
+
+### 4.6 脚本沙箱与可见性（JCM 2.x 真有的那部分 GUI）
+
+**JCM 2.x 并没有 PIDS 脚本文本编辑器。** PIDS 预设在那里也是资源包文件、运行时只读；
+它的 `mtrscripting/mod/gui/` 下是 EyeCandy（MTR 4 独有的积木方块）的配置界面，而
+`PIDSPresetScreen` 只是预设选择列表（等价物 YJCM 本来就有）。所以这里移植的是
+JCM 2.x 围绕脚本真正具备的四件东西：
+
+| 本分支 | JCM 2.x 对应物 | 作用 |
+|---|---|---|
+| `ScriptClassShutter` | `MTRClassShutter` | Rhino 类访问白名单。预设来自资源包，资源包来自服务器与整合包，**预设是不可信代码**——没有它，`java.nio.file.Files` 离脚本只有一次调用 |
+| `ScriptRestrictionWarningScreen` | 同名 | 关闭限制前的确认界面，只在「关闭」这个方向弹出 |
+| `ScriptErrorNotifier` | 同名 | 失败的面向玩家投递队列 |
+| `ScriptDebugOverlay` | `MTRScriptDebugOverlay` | 调试浮层：存活脚本实例、方块坐标、执行耗时、哪一个在抛异常 |
+
+**为什么失败提示要排队而不是直接发聊天栏**：脚本是在方块实体渲染里抛的，那时渲染线程
+正在出帧，而且那块方块玩家可能根本看不见。所以失败在发生处写日志，面向玩家的那一半
+入队，由客户端 tick 投递。
+
+**为什么失败提示默认开着**：JCM 2.x 把它绑在调试开关上，结果是唯一需要它的人（预设坏了、
+面板全黑的普通玩家）反而看不到。这里它是独立开关，默认开。
+
+白名单是 JCM 2.x 的，包名从 `com.lx862.mtrscripting` 换到 `com.jsblock.script`；
+deny 规则只在 allow 规则命中之后才查，所以 `java.lang.*` 可以放行而
+`java.lang.System`、`java.lang.Class` 仍不可及。
+
+> **无头检查在这里立刻见效**：ClassShutter 一打开，16 个用例**全部**失败，报
+> `Access to Java class "net.minecraft.resources.ResourceLocation" is prohibited`。
+> `Resources.id()` 返回这个类型，而 Rhino 连返回值包装也要过白名单——连随 mod 附带的
+> `pids_util.js` 都加载不了。修法是**精确放行这一个类**并写明理由，而不是为了省事放开
+> 整个 `net.minecraft.*`（那等于把 Minecraft 的文件与网络访问一并交给脚本）。
+
+配置项（`config/jsclient.json`，配置界面里可切换）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `scriptErrorNotifications` | `true` | 脚本抛异常时在聊天栏提示 |
+| `scriptDebugMode` | `false` | 绘制脚本调试浮层 |
+| `scriptRestrictionsDisabled` | `false` | 关闭类访问限制（会先弹警告界面） |
+
+### 4.7 脚本的文件访问与路径防护（`feat/jcm-pids-components` 后续补充，非修 bug）
+
+**这一节补的是 v2 的能力，不是修本分支的缺陷**：本分支此前根本没有给脚本任何文件读取入口，
+所以也没有逃逸问题；补上 `GraphicsTexture` / `Resources.readBufferedImage` 之后就有了，
+因此连同 v2 的防护一起补。
+
+#### 核实结果：脚本能触发的读取有三处，全部经过防护
+
+| 入口 | 代码位置 | 读取方式 |
+|---|---|---|
+| `include("ns:path.js")` | `ScriptEngine.evaluateResource` | Minecraft 资源管理器（`assets/<ns>/<path>`） |
+| `Texture.create().texture("ns:path.png")` | `ScriptDrawCalls.Texture.texture` → `ScriptTextures.resolve` | 同上 |
+| `Resources.readBufferedImage(id)` / `GraphicsTexture.drawTexture(id, ...)` | `ScriptTextures.readImage` | 同上 |
+| 预设 JSON 的 `scriptFiles` | 与 `include()` 同一条路 | 同上 |
+
+`ScriptNetwork`（`Networking` / `BackgroundWorker`）只走 HTTP，不碰文件系统，**已核实**。
+
+#### 为什么资源位置也需要防护
+
+一个脚本写的是 `jsblock:../../../../../../x`。`ResourceLocation` 的路径字符集包含 `.` 与 `/`，
+所以这个引用**是合法的**，能一路构造出来。对**目录形式**的资源包（`resourcepacks/` 里的包，
+以及开发环境里的每一个包），Minecraft 是在文件系统层面解析它的——那里 `..` 就是上一级目录。
+于是一个预设可以读走游戏进程能读的任何文件，而现象是「这个包看起来工作正常」。
+
+#### 拒绝规则与失败方式
+
+`ScriptPaths`（`common/src/main/java/com/jsblock/script/ScriptPaths.java`）拒绝：
+
+| 形态 | 例子 |
+|---|---|
+| `..` 作为一个路径段（任意位置、任意层数） | `jsblock:../../x`、`jsblock:a/../../x`、`jsblock:scripts/..` |
+| 前导 `/`（绝对路径） | `jsblock:/etc/passwd` |
+| 反斜杠（Windows 分隔符，也是盘符的写法） | `jsblock:..\..\x`、`C:\Windows\win.ini` |
+| 盘符 | `C:/Windows/win.ini`（由前导 `/` 规则接住，报错文案会点名） |
+| UNC | `\\server\share\x` |
+| 空路径 | `jsblock:`、`""` |
+
+拒绝时：**一条控制台 error**（点名 API、引用与原因，同一引用只报一次）+ **一条聊天栏提示**
+（走 `ScriptErrorNotifier`，与脚本异常同一条投递路径）。`include()` 返回而不加载、
+贴图退回原版的 missing-texture 占位，**脚本继续跑，异常不穿透渲染器**。
+
+物理路径那一半是 v2 `FilesUtil.resolvePathSafe` / `ensurePathNotEscaped` 的**逐行移植**
+（`ScriptPaths.resolveWithin` / `ensureWithin`，同样是逐级向上找根、找不到就抛
+`Path must be within the "%s" directory!`）。游戏内的读取走资源管理器、拿的是
+`ResourceLocation` 而不是 `Path`，所以这一半目前由无头检查在**真实目录树**上验证：
+`ScriptApiCheck` 的文件版 `include` 与 `ScriptPathCheck` 都用它。
+
+### 4.8 `ctx.parseComponent(jsonString)`：脚本用声明式组件（本次新增）
+
+JCM 2.x 进入组件体系的**唯一**入口就是 `PIDSScriptContext.parseComponent(String)`：
+
+```java
+// javap -p -c  com.lx862.jcm.mod.scripting.jcm.pids.PIDSScriptContext
+public PIDSComponent parseComponent(java.lang.String);
+    invokestatic  JsonParser.parseString:(Ljava/lang/String;)Lcom/google/gson/JsonElement;
+    invokevirtual JsonElement.getAsJsonObject:()Lcom/google/gson/JsonObject;
+    invokestatic  PIDSComponent.parse:(Lcom/google/gson/JsonObject;)Lcom/google/gson/.../PIDSComponent;
+```
+
+本分支组件体系齐全（11 个可声明键），缺的正是这个入口。现在：
+
+```js
+const clock = ctx.parseComponent('{"component":"clock","x":4,"y":2,"width":40,"height":10,"format":"HH:mm"}');
+if (clock.canRender()) {
+    clock.render(ctx);          // 或 ctx.draw(clock)
+}
+```
+
+| 脚本侧 | JCM 2.x 对应物 | 说明 |
+|---|---|---|
+| `ctx.parseComponent(json)` | 同名同参数 | `component` / `x` / `y` / `width` / `height` 加该组件自己的键，与预设 JSON 的 `components` 数组**逐字相同** |
+| `component.render(ctx)` | `render(PoseStack, MultiBufferSource, Direction, PIDSContext)` | 参数表不同，且不得不不同，见下 |
+| `component.canRender()` | `canRender(PIDSContext)` | 用**本帧**的面板数据判定（与组件树走的同一条规则） |
+| `component.x()/y()/width()/height()` | 四个 `protected` 字段 | v2 里脚本看不到；这里可读，便于组件之间互相定位 |
+| `component.type()` | —— | 解析时用的 `component` 名，本分支新增，用于诊断 |
+| `ctx.draw(component)` | —— | v2 的 `draw()` 只收 `PIDSDrawCall`，收到组件会抛 `1st parameter is not a DrawCall!`；这里两种写法等价 |
+
+**为什么是 `render(ctx)` 而不是照抄 v2 的参数表**：`PoseStack`、`MultiBufferSource`、
+`Direction`、`PIDSContext` 四样都**不属于脚本**，属于引擎正在画的那一帧——脚本既拿不到也造不出。
+所以引擎把这四样绑进上下文，脚本只交出 `ctx`。除此之外没有改动：同一个组件、同一次解析、
+同一条 `canRender` 规则。
+
+**非法输入按现有脚本错误风格报错，不崩**：JSON 坏了、给的是数组、缺 `component` 键、组件名不认识
+（报错文案会列出全部已知类型），一律抛 `IllegalArgumentException`，由 `Program.invokeInternal`
+捕获——写一次日志、给玩家一条聊天栏提示、面板退回预设背景，与其它脚本异常同一条路径。
+v2 的 `PIDSComponent.parse` 对未知类型返回 `null`（对「其余组件必须继续加载」的 JSON 预设是对的），
+但脚本拿到 `null` 只会在之后报 "cannot call method render of null"，所以这里显式抛。
+
+**与像素化面板共存**：`PIDSPixelatedPanel` 的离屏 pass 也拿到了同一份面板数据与
+`PIDSGraphics`（顶点与文本都走 `OffscreenSource`，与脚本自己的绘制同一条路），
+重试那一遍同样设置——否则用了 `parseComponent` 的预设在第一次抛异常后就再也不会被像素化。
+**这一条只做了构建期验证与代码路径推演，没有实机截图证据**（无头环境没有 GL 上下文），
+见 §7.10。
+
+### 4.9 运行时画布 `GraphicsTexture`（本次新增）
+
+对应 `com.lx862.mtrscripting.util.GraphicsTexture`：**同名**、同构造器
+`new GraphicsTexture(width, height)`、同公共字段 `identifier` / `bufferedImage` / `graphics` /
+`width` / `height`、同 `upload()` / `close()`（`Closeable`）。v2 的这个类只提供 Java2D 画布，
+本分支补上了给 PIDS 用的几个helper（`clear` / `fillRect` / `drawText` / `measureText` /
+`drawTexture`），因为「往画布上贴一张现有贴图」在 v2 里要绕 `Resources.readBufferedImage` 自己来。
+
+```js
+const canvas = new GraphicsTexture(128, 32);
+canvas.fillRect(0, 0, 128, 32, 0x101010);
+canvas.drawText("06:00", 4, 4, 0xFC9700, 20);
+canvas.drawTexture("jsblock:textures/block/pids/plat_circle.png", 100, 4, 24, 24);
+canvas.upload();
+Texture.create("board").texture(canvas.identifier).pos(0, 0).size(128, 32).draw(ctx);
+```
+
+| 要点 | 做法 | 为什么 |
+|---|---|---|
+| 只在真用到时才分配 | Java2D 图像在构造器里建，**GL 纹理在第一次 `upload()` 才建**（v2 在构造器里就建 `DynamicTexture`） | 建了不用的画布不占纹理名；也让「创建→画→释放」能在**没有游戏**的情况下跑通，无头检查因此覆盖得到 |
+| 用完能释放 | `close()` 释放纹理（`TextureManager.release` → `DynamicTexture.close()` → `NativeImage.close()`，原生内存）并 dispose `Graphics2D`；`ScriptEngine.reset()`（资源重载）再兜一次 | 原生内存 GC 看不见；脚本的 `dispose()` 里应自己 `close()`，忘了也不会留到会话结束 |
+| 不得每帧泄漏 | 同时最多 `MAX_LIVE = 64` 张未释放的画布，第 65 张抛错并点名 `close()` | JCM 2.x 既无上限也无清理，每帧建一张就是一帧漏一个纹理，直到显存耗尽；这里把它变成一次可见的报错 |
+| 失败降级不崩 | 没有客户端 / 没有 GL 上下文 / 驱动拒绝：**报一次**警告、标记失效、后续 upload 直接返回；图像与脚本都还在，贴图退回 missing-texture 占位 | 与 `Program` 的失败上报风格一致：同类失败只报一次，面板不因画布失败而消失 |
+| 颜色取值 | ARGB，`0xRRGGBB` 视为不透明（与 `.color()` 同一条简写规则），`0` 视为全透明 | 与脚本绘制链保持一致，同时留出真正的透明 |
+| 参数类型 | 颜色是 `long` 不是 `int` | JS 的数字是 double，`0xFF102030` 超出 `int` 范围，Rhino 会直接抛 `Cannot convert ... to java.lang.Integer`——ARGB 字面量高位恒为 1，用 `int` 等于这套写法不可用 |
+
+坐标是**画布自己的像素**，原点左上、y 向下，与脚本其余部分一致；与像素化的关系就是
+「画布里画的贴图当普通贴图用」——`Texture` 拿到的是 `canvas.identifier`，剩下的事与任何贴图相同，
+**不做离屏嵌套**。
+
+### 4.10 全局对象 `MTRClientData`（本次新增，并更正一处分析结论）
+
+`NeoJCM-分析报告.md` 的结论里写着「把 `MinecraftClient` 全局加一个 `MTRClientData` 别名就能接住
+照 v2 文档写的包」。**字节码不支持这句话**：
+
+```
+// javap -p -c com.lx862.jcm.mod.scripting.jcm.JCMScripting
+  ldc  #93   // String MTRClientData
+  ldc  #97   // class mtr/client/ClientData          <-- 不是 MinecraftClientUtil
+
+// javap -p -c com.lx862.mtrscripting.core.ParsedScript
+  ldc  #144  // String MinecraftClient
+  ldc  #146  // class com/lx862/mtrscripting/util/MinecraftClientUtil
+```
+
+即 v2 的 `MinecraftClient`（世界状态工具）与 `MTRClientData`（**MTR 自己的客户端数据**）
+是两个不同的类。把它做成前者的别名，恰好会让 `MTRClientData.STATIONS` / `.PLATFORMS` /
+`.SCHEDULES_FOR_PLATFORM` 这类**唯一会用到它的读法**得到 `undefined`——包照跑、面板空白。
+
+所以这里接的是 `mtr.client.ClientData`（MTR 3.6.3 同名同类，内置渲染器读的就是它）：
+
+```js
+const stations = MTRClientData.STATIONS;      // 站台 -> 车站
+const arrivals = MTRClientData.SCHEDULES_FOR_PLATFORM;
+const platforms = MTRClientData.PLATFORMS;
+```
+
+`MinecraftClient` 保持原样（`worldDayTime()` / `worldIsRaining()` / …）。
+
+**沙箱连带改动**：Rhino **连显式塞进作用域的类也要过白名单**——第一次接上时
+`ScriptEngine.newScope()` 直接抛
+`Access to Java class "mtr.client.ClientData" is prohibited`，全部脚本检查一次失败（这正是
+`ScriptApiCheck` 里那几条断言的用处）。JCM 2.x 放行的是整个 `mtr.*`；这里只放行这个全局
+实际能交出去的 5 个类：`mtr.client.ClientData`、`mtr.client.ClientCache`、`mtr.data.Station`、
+`mtr.data.Platform`、`mtr.data.Route`、`mtr.data.ScheduleEntry`。
+
+### 4.11 补齐 v2 的脚本 API 面：`Files` 全局（本次新增）
+
+> 需求来源是**反向**的：不是从 v2 文档推「应该有什么」，而是把 11 个真实资源包里的
+> 121 个 `.js` 全扫一遍，统计出它们**实际用到**的每一个全局名、对象方法、属性，再和
+> `javap` 挖出来的 v2 注册表对差。完整频率表见工作区根目录的 `V2-API-COVERAGE.md`。
+
+**v2 的作用域一共注册 18 个全局**（依据：`javap -p -c` 里 `ParsedScript` 构造器的
+`ldc String` / `ldc class` 序列给出 12 个通用全局，`JCMScripting` 的 PIDS 分支再给 4 个，
+另有 `console` 与我们的 `Rectangle`/`Vector3f` 扩展）。逐条核对后**只有 `Files` 是真缺的**：
+
+```
+// javap -p -c com.lx862.mtrscripting.core.ParsedScript
+  ldc  #136   // String Files
+  ldc  #138   // class com/lx862/mtrscripting/util/FilesUtil
+```
+
+`Files` 在真实包里**只有 `met transit` 一个包用**（`met_running_board.js` 三处调用），
+但缺了它那个预设第一行就 `ReferenceError`——属于「用得少、一缺整包废」。
+
+#### `FilesUtil` 逐方法对照
+
+| v2（`javap -p`） | 我们 | 说明 |
+|---|---|---|
+| `static String read(String...) throws IOException` | ✅ | 根 = `Minecraft.gameDirectory`（v2 的 `rootMinecraftPath`） |
+| `static String readData(String...) throws IOException` | ✅ | 根 = `<gameDir>/data/mtrscripting`（v2 的 `dataPath`） |
+| `static void saveData(String, String...) throws IOException` | ✅ | 额外 `createDirectories(parent)`：v2 靠 `FileUtils.writeStringToFile` 隐含做这件事，不补的话第一次 `saveData` 就抛 |
+| `static void deleteData(String...) throws IOException` | ✅ | v2 用 `Files.deleteIfExists`，文件不存在不报错 |
+| `static boolean hasData(String, String) throws IOException` | ✅ | v2 是**固定两参**，不是可变参数；真实包写的正是两参形式 |
+| `private static Path resolvePathSafe(Path, String...)` | ✅ 同逻辑 | 逐段 `resolve` 后交给防护 |
+| `private static void ensurePathNotEscaped(Path, Path)` | ✅ 在 `ScriptPaths.ensureWithin` | 从规范化路径向上走父目录，走到根之前耗尽即拒绝；**错误文案逐字沿用 v2**：`Path must be within the "%s" directory!` |
+
+**一处实测发现（写检查时才撞上）**：Rhino 对 `NativeJavaClass` 会暴露**全部 `public static` 成员**
+给脚本——`typeof Files.someStatic` 不会得到 `"undefined"`，而是**抛**
+`EvaluatorException: Java class "..." has no public instance field or method named "..."`。
+所以测试用的根目录 setter 必须是**包私有**的，否则一个预设就能自己决定文件写到哪里。
+`FilesCheck` 里有一条断言专门盯住它。
+
+**一处刻意的实现差异**：v2 的 `FilesUtil.<clinit>` 直接读 `Minecraft.getInstance().gameDirectory`，
+**没有客户端时这个类根本加载不了**。我们改成惰性解析（无客户端时退回进程工作目录），
+否则无头检查没办法把 `Files` 放上作用域去验证防护。有客户端时两者得到同一个目录。
+
+无头检查真的跑到了磁盘上：
+
+```
+[Joban Client] [PIDS script] [MET Running Board] Station ID: 0_64_0
+[Joban Client] [PIDS script] [MET Running Board] Loading from: met_running_board/0_64_0_departed.json
+[Joban Client] [PIDS script] [MET Running Board] No saved data found
+```
+
+### 4.12 大写脚本文件名：绕过资源管理器直接问包（本次新增）
+
+**现象**：`met transit.zip` 的条目表里真的是
+
+```
+assets/jsblock/scripts/Cyberpunk_Transit.js
+assets/jsblock/scripts/Digital_Rail.js
+```
+
+（`zipfile.namelist()` 的原始条目名），而它的 `joban_custom_resources.json` 也原样引用。
+该包 14 个预设里有 **2 个此前永远编译不出来**。
+
+**两条独立的原因**（缺一不可，都实测过）：
+
+1. **`ResourceLocation` 拒绝大写**：
+
+   ```
+   REFUSED jsblock:scripts/Digital_Rail.js
+     -> ResourceLocationException: Non [a-z0-9/._-] character in path of location: jsblock:scripts/Digital_Rail.js
+   ```
+
+   所以连 `new ResourceLocation(...)` 都构造不出来，根本到不了读文件那一步。
+   注意 `jsblock:scripts/met_running_board.js` 是 **OK** 的——该包其余 12 个脚本名全小写，
+   所以「大小写」只影响那 2 个。
+
+2. **折叠成小写也不管用**：Minecraft 的包加载器**索引**时把每个路径段的**首字母**小写化
+   （`Digital_Rail.js` → `igital_Rail.js`、`Cyberpunk_Transit.js` → `yberpunk_Transit.js`），
+   索引里既没有原名、也没有全小写名。
+
+**修复**：新增 `ScriptPackFiles`，在资源管理器两条路都失败**之后**才直接问包本身：
+
+- 包列表来自 `Minecraft.getResourcePackRepository().openAllSelected()`（公开 API，MTR 3 上是
+  `forge-1.20-46.0.14-minecraft-merged` 的 1.20.1 映射，已 javap 确认存在）；
+- **目录包**：走 `PathPackResources.root` 字段，逐段做忽略大小写的目录列举；
+- **zip 包**：走 `FilePackResources.file` 字段，`ZipFile` 先做一次精确条目查找，再退回忽略大小写扫描；
+- 全程 `try/catch(Throwable)`：**任何反射失败都只是「这个包搜不了」**（并只报一次日志），
+  **永远不会把渲染器带崩**。
+
+**写检查时发现的第二个坑**：在**大小写不敏感**的文件系统上（本项目自己的 Windows 卷就是这样），
+`Files.isRegularFile("scripts/digital_rail.js")` 对 `Scripts/Digital_Rail.js` 返回 **true**，
+而那个 `Path` 会把文件名回显成**我们请求的拼写**。所以查找函数的返回值必须取自
+**目录列举的真实拼写**，不能取自构造出来的 `Path`——否则交给引擎的是一个包里根本不存在的名字。
+`ScriptCaseCheck` 里有一条断言专门盯这件事。
+
+**这是「对包的宽容」，不是 MC 规范**：日志与注释都写明了；`ScriptCaseCheck` 另有 6 种逃逸形态
+（`..`、绝对路径、反斜杠……）断言在**两条路径上都仍然被拒**——大写不是逃出资源包的办法。
+
+### 4.13 `create()` 拿到的是真 `pids`，不是 null（本次修复；只有实机能暴露）
+
+**症状**（用户实机日志，`met transit` 包的 `met_running_board.js`）：
+
+```
+[Joban Client] PIDS script "MET Running Board@met_running_board#…" threw in create():
+    org.mozilla.javascript.EcmaError: TypeError: Cannot call method "blockPos" of null
+    JS stack: at jsblock:scripts/met_running_board.js:10 (create)
+[PIDS script] [MET Running Board] Saved 1 departed trains to met_running_board/undefined_departed.json
+```
+
+**根因**：`ScriptEngine.Program` 的构造函数里那句 `invoke("create", null, null)`——第三参数是
+Java 字面量 `null`。`met_running_board.js#10` 是 `let pos = pids.blockPos();`，用来给存档日志文件命名，
+于是 `state.stationId` 从未被赋值，`render()` 拼出的文件名就是 `undefined_departed.json`。
+**注意报错里的 `blockPos` 只是「被调用的那个方法名」**，错的是接收者 `pids` 为 null
+（`blockPos()` 是我们自己的扩展，见 §4.4 与 `V2-API-COVERAGE.md`）。
+
+**依据：v2 不会传 null。** javap 反编译 `com.lx862.mtrscripting.core.ParsedScript`：
+
+- `lambda$invokeFunction$0` 构造**同一个三元素数组**
+  `{getScriptContext(), ScriptInstance.state, ScriptInstance.getWrapperObject()}`，
+  用它调用 **create / render / dispose 全部三个函数**；
+- `PIDSScriptInstance.<init>` 字节码第 13–14 条就是 `setWrapperObject(wrapper)`，
+  在任何生命周期函数可能运行之前完成。
+
+顺带确认：v2 的 `PIDSWrapper` **没有** `blockPos()`（字节码里只有 `getBlockPos` 出现在
+`station(..., BlockPos)` 的参数位置），也就是这个脚本在真 v2 上会在同一行**以另一种方式**失败
+（方法不存在）。也就是说 `blockPos()` 是**我们的扩展**，把这个包在真 v2 之外救活了；
+v2 语境下这属于「包用了 v2 没有的 API」，但我们既然提供了它，就必须让它拿到正确的对象。
+
+**修法**：
+
+- `Program` 构造函数不再调 `create`；
+- 新增 `Program.start(PIDSWrapper)`：幂等，用 `invoke("create", null, pids)`，
+  在 `create` 被调用的那一刻才把包装对象交出去；
+- `RenderPIDSBase` 在**包装对象构造之后、两条渲染路径分叉之前**调用 `program.start(wrapper)`，
+  于是直接路径与像素化路径共用同一次 `create`。
+
+包装对象无法在编译期构造：到站列表、自定义文案、隐藏行、站台过滤全部来自世界与
+`mtr.client.ClientData` 的每帧数据。所以 `create` 顺延到首帧之前执行——对脚本而言
+「`create` 仍然先于第一次 `render` 出现、且只出现一次」这一点没有变。
+
+**为什么无头检查看不见**：`ScriptApiCheck` 自己调 `create`（`callLifecycle`）并递给它一个真的
+`PIDSWrapper`，而真引擎走的是另一条路；更根本的是，**编译期→包装对象**这条路径无法在无头下复现
+（`ScriptEngine` 的编译路径需要已加载的资源管理器，`Minecraft.getInstance()` 在游戏外为 null）。
+本次新增的检查分两半把这件事钉住：
+
+1. 正例：断言 `create` 收到的那个对象**就是本面板的**——`pids.blockPos()` 读回 `12|65|-34`
+   （`PANEL_POS` 特意改成非零、含负数，见 `ScriptApiCheck.PANEL_POS`）、`pids.type` 读回 `crt_pids`；
+2. 反例：同一段 pack 写法（`var pos = pids.blockPos();`）在第三参数为 `null` 时**必须仍然抛**
+   `TypeError: Cannot call method "blockPos" of null`——即用户日志里那一行原文。
+   如果哪天有人再把 `null` 传回去，这条断言会失败，而不是悄悄产出 `undefined_departed.json`。
+
+> 已知限制：本仓库的无头检查**无法**直接断言 `Program.start()` 实际传了什么（同上，编译路径依赖
+> 资源管理器）。第 1 条断言建立在检查自己构造的包装对象上，第 2 条钉住的是 pack 写法对 null 敏感。
+> 两者合起来能防住回归，但真正的端到端确认只有实机一条路——见 §7.8 一类的实机记录做法。
+> **不要**为了让某个包不报错去改 `FilesUtil` 的读写语义：本 bug 里 `Files` 全程工作正常，
+> `undefined` 只是上游 `state.stationId` 没赋值的结果。
+
+### 4.14 HKR 的「不載客列車」判定：终点站判真、中间站判假（本次修复）
+
+**规格**（`HKR PIDS.zip` → `assets/jsblock/scripts/hkr_pids_default.js:396-410`，与
+`hkr_pids_platform.js:239-252` **逐字相同**）：
+
+```js
+function isNonPassenger(train, pids) {
+    let route = train.route();
+    if (!route) return true;
+    let platforms = route.getPlatforms();          // ← route().getPlatforms()，即本班次的停靠序列
+    if (!platforms || platforms.size() === 0) return true;
+    let currentStation = pids.station();           // ← 面板自己在哪一站
+    if (!currentStation) return false;
+    let curName = "" + currentStation.name;
+    for (let i = 0; i < platforms.size(); i++) {
+        if ("" + platforms.get(i).getStationName() === curName) {
+            return i >= platforms.size() - 1;      // ← i = 面板站在这条线路站表里的下标
+        }
+    }
+    return false;
+}
+```
+
+`i` 由**面板站名**去 `route().getPlatforms()`（我们这边是 `PIDSWrapper.RouteInfo#getPlatforms()`
+→ `RouteStopList`，每站一个 `RouteStopInfo`，`getStationName()` 读 `PIDSData.stationOf(platformId)`）
+里逐个比对得来；`platforms.size()` 就是 `Route#platformIds` 的长度。**所以这条判定的答案完全取决于
+`pids.station()` 报的是不是面板真正所在的那一站。**
+
+**两套 fixture 的实测**（`ScriptHkrCheck`，线路 `你好 → 测试 → 114514`，三站三站台，
+面板放在站台上、`ScheduleEntry.currentStationIndex = 2` 指向终点）：
+
+| # | 面板位置 | 面板 `platformIds` | 修复前 | 修复后 | 期望 |
+|---|---|---|---|---|---|
+| 1 | 终点站 114514 | `[103]` | 显示「不載客列車」 ✓ | 同左 ✓ | true |
+| 2 | 中间站 测试 | `[102]` | 显示真实班次 ✓ | 同左 ✓ | false |
+| 3 | **终点站 114514** | **空（自动）** | **`pids.station()` = null ⇒ 显示真实班次 ✗** | 显示「不載客列車」 ✓ | true |
+| 4 | 中间站 测试 | 空（自动） | 显示真实班次 ✓ | 同左 ✓ | false |
+| 5 | **中间站 测试** | **`[103]`（过滤器指向终点端）** | **`pids.station()` = "114514" ⇒ 显示「不載客列車」 ✗** | 显示真实班次 ✓ | false |
+| 6 | 终点站 114514 | `[101]`（指向另一端） | 显示真实班次 ✗ | 显示「不載客列車」 ✓ | true |
+
+第 3 行与第 5 行是**同一处缺陷的两个方向**，都不是 fixture 造成的：
+
+1. **自动面板（无过滤器）**：`pids.station()` 过去只从 `platformIds` 推，而自动面板的这个集合**是空的**，
+   于是 `primaryPlatformId()` 返回 0、`stationOf(0)` 返回 null、`pids.station()` 报 null。
+   脚本对 null 的回答是 `return false`（第 402 行），**终点站因此被判为「载客」**，画出一班真实班次。
+2. **多站台过滤器**：集合是 `Set<Long>`，`platformIds.get(0)` 是**哈希顺序**而不是面板自己的站台
+   （`PIDSWrapper#primaryPlatformId` 的 javadoc 早就写着这一点，之前的修法只改了「空间查询优先」那一半）。
+   面板站名被报成线路另一端的站，判定就按**那一站**回答：中间站的面板戴上终点站的名字 ⇒
+   `i == size-1` 成立 ⇒ 每一班都印「不載客列車」。
+
+**MTR 自己的规则**（这是我们该对齐的）：`IPIDS.TileEntityPIDS#getPlatformId` 取的是**离方块最近的站台**，
+**完全不查 `platformIds`**。渲染器在收集本帧到站列表时算的就是这个值（`RenderPIDSBase#renderScripted`
+的 `else` 分支，`RailwayData.getClosePlatformId(...)`），所以修法不是再猜一次，而是**把这个答案交给包装对象**：
+
+- `PIDSWrapper` 新增 `resolvedPlatformId` 字段与一个 12 参构造器（旧的 5 参与 11 参构造器**保留不变**，
+  分别委托给它并传 0，所以既有调用点一个都不用改）；`withLenientArrivals()` 把该字段一并复制，
+  否则「首次渲染抛异常 → 宽松重试」那条路上的面板会丢掉自己的站。
+- `PIDSWrapper#primaryPlatformId()` 的解析顺序改为：**渲染器给的答案**（且它确实能解析出站）→
+  按方块位置现查最近站台（同样要求能解析出站）→ 过滤器首元素（同样要求能解析出站）→ 0。
+  最后一档加了「必须真的指向某个站」这道闸：过去一个解析不出来的 id 会把 `stationOf` 的 null 直接
+  变成 0，现在宁可报 0（脚本本来就要求会处理 null），也不报一个不相干的站名。
+- `RenderPIDSBase#renderScripted` 只在**方块自身没有过滤器**时把 `getClosePlatformId` 的结果传下去；
+  有过滤器的面板传 0，走原来的解析（最近站台优先、过滤器首元素兜底），**行为不变**——
+  这正是不破坏其它 10 个包的那条边界。
+
+**为什么不是改脚本**：`isNonPassenger` 的两行原文在资源包里，资源包只读；脚本没有别的办法知道
+「面板站在哪」，这个答案只能由宿主给。
+
+**「不載客列車」这个字符串的检查口径**：两个预设的文案都走 `TextUtil.cycleString("不載客列車|Not in Service")`，
+哪一半取决于**墙钟**，所以检查断言的是**判定结果**（终点站画徽标 / 中间站不画徽标、
+终点站不画真实班次），而不是某一帧恰好落在哪种语言上——一次运行里同一段文案可能在两次调用间切换语言。
+
+**`Text.marquee(number)` 的核查结论：本来就有，不需要补。** 语料里 55 处带参数的调用
+（`World_PIDS-Pack-200` ×37、`琼岭追加包26.8.3` ×6、`上海地铁-PIDS` ×5、`met transit` ×4、
+`HKR PIDS` ×2、另有 1 处）**全部是数字字面量**：`.marquee(3)` / `(3.0)` / `(10)` / `(12)` / `(20)` / `(25.0)`。
+我们 `ScriptDrawCalls.Text` 同时有 `marquee()` 与 `marquee(double durationTickOverride)`
+（`ScriptDrawCalls.java:327` 与 `:332`），Rhino 把 JS number 归一到 `double` 重载，
+所以 `EvaluatorException: Can't find method …marquee(number)` 在本分支**复现不出来**。
+`ScriptHkrCheck` 里加了一组断言把这条钉住（`marquee(12)` / `marquee(3.0)` / `marquee(25.0)` / `marquee()` 四种写法
+都必须落到包装对象上），并额外核对：**没有任何真实包用字符串调用它**（字符串不会被 Rhino 自动转成 double，
+真要用得自己加重载，但那不是「脚本普遍这么写」）。
+
+**本次没有验证的事（诚实清单）**：
+
+- **没有实机验证**。全部结论来自编译 + 无头检查；`Renderer` 那条路径（`panelPlatformId` 的真实取值）
+  在游戏里才跑得到。无头侧复现的是**同一条规则**——`RailwayData.getClosePlatformId` 的快速查表
+  （fixture 里把站台方块写进 `DataCache.blockPosToPlatformId`）——但「面板方块真的站在站台上的哪个位置」
+  是 fixture 摆出来的，不是从存档里读的。
+- **自动面板（无过滤器）在游戏里能否解析出站台，仍未实测**。这条依赖
+  `getClosePlatformId` 在 5 格内找到一个站台；找不到时本修复**不会**让终点站面板变对
+  （它仍旧报 `null`，脚本仍旧 `return false`）。这是刻意的保守取舍：宁可「终点站画真实班次」
+  也不要「中间站印不載客列車」，但它在很稀疏的站台布置下仍可能复现。
+- **过滤器里混了不同车站的站台**时，有过滤器的面板仍按旧规则解析（最近站台优先、过滤器首元素兜底）。
+  空间查询成功时这没问题（上面第 6 组 fixture 就是：过滤器指向另一端，解析结果照样是面板所在的终点站）；
+  **真正没兜住的是「空间查询也失败、只剩过滤器首元素」那一档**——面板自己的过滤器指向另一站时会再次误报。
+  这一档没改，是为了不破坏另外 10 个包的通过率。
+- **`marquee` 只验证了数字**。字符串参数（`.marquee("12")`）在本分支与真实语料里都不存在；
+  确认过语料里**没有**这种写法，所以没有为它加重载。
+- 检查里用的是自建的三站线路与真实 `Station` / `Platform` / `Route` 对象，
+  **不覆盖 MTR 存档里的环形线路、支线、多站台同站名**这些编组方式。
+
+---
+
+### 4.15 Rhino importer 全局：`importPackage` / `importClass` / `Packages` / 包根（本次新增；这就是「面板透明」的根因）
+
+#### 现象与根因链
+
+`HKR-Split-Flap-Display`（预设 id `next_train`，「HKR Split-Flap Display」）在我们这里是**一块透
+明的面板**。这个包只有 1 个预设、1 个 81 KB 的脚本（`next_train.js`），除缩略图外**没有任何贴图**：
+整屏——标题、种别徽章、目的地、月台圆圈、停靠站线路图、翻牌动画——全部由 AWT 画进一张
+`GraphicsTexture` 再当贴图铺满。用 `tools/run-pids-check.ps1` 的 `ScriptApiCheck` 单跑，拿到的是：
+
+```
+FAIL org.mozilla.javascript.EcmaError: ReferenceError: "importPackage" is not defined. (next_train.js#27)
+```
+
+脚本第 27 行是 `importPackage(java.awt);`。我们的引擎在 `ScriptEngine.newScope(cx)` 里用
+`cx.initStandardObjects()` 建作用域——那是**纯标准对象**（ECMAScript 内建），
+**没有** `importPackage` / `importClass` / `Packages`，也没有 `java` / `javax` / `org` / `com` /
+`edu` / `net` 六个包根。所以脚本在**加载阶段**就抛了 `ReferenceError`：`create()` 从未被定义，
+一帧都没画过，面板自然是透明的。日志里只有一行「脚本抛了异常」——而**加载期就抛的脚本**与
+**故意什么都不画的预设**在现象上完全一样，这正是它难判的原因。
+
+#### 依据：v2 用的就是 `ImporterTopLevel`
+
+```
+// javap -p -c com.lx862.mtrscripting.core.ParsedScript
+  49: invokestatic   Context.enter:()L.../Context;
+  54: aload 4
+  56: sipush 200                                   // VERSION_ES6
+  59: invokevirtual  Context.setLanguageVersion:(I)V
+  62: aload 4
+  64: aload_1
+  65: invokevirtual  ScriptManager.getClassShutter:()L.../MTRClassShutter;
+  68: invokevirtual  Context.setClassShutter:(L.../ClassShutter;)V
+  71: aload_0
+  72: new            class .../ImporterTopLevel          <-- 就是它
+  75: dup
+  76: aload 4
+  78: invokespecial  ImporterTopLevel."<init>":(L.../Context;)V
+  81: putfield       ParsedScript.scope:L.../Scriptable;
+```
+
+`ImporterTopLevel.initStandardObjects(cx, sealed)` 的字节码与
+`Context.initStandardObjects()` 内部做的是**同一次调用**（`Context.initStandardObjects(ScriptableObject, Z)`），
+之后才是 `exportAsJSClass(3, this, false)` 与 `delete("constructor")`。所以换成
+`new ImporterTopLevel(cx)` 加的是 importer，**不是另一套内建对象**；
+`getClassName()` 仍是 `"global"`（`topScopeFlag` 为 true）。
+
+`ScriptEngine.newScope()` 现在是：
+
+```java
+cx.setLanguageVersion(Context.VERSION_ES6);
+cx.setOptimizationLevel(-1);
+ScriptClassShutter.install(cx, SHUTTER);   // v2 也是先 setClassShutter 再建作用域
+final Scriptable scope = new ImporterTopLevel(cx);
+registerGlobals(cx, scope);
+```
+
+`newScope()` 是**唯一的建作用域入口**：引擎的编译路径（`ScriptEngine.compile`）与 8 个无头检查
+全部走它，所以「游戏里」和「检查里」拿到的作用域在构造上就是同一个。
+
+#### 沙箱：importer 没有绕过 `ClassShutter`（先验证，再依赖）
+
+这是本次唯一需要警惕的地方——importer 是**第二条**够到 Java 类的路。结论是**没有绕过**，
+两条字节码证据 + 七条实跑证据：
+
+1. **`importPackage` 是惰性的。** `javap -p -c` 的
+   `ImporterTopLevel.importPackage(ScriptableObject, NativeJavaPackage)` 里**一个类都没解析**：
+   它只把包对象记进挂在 scope 上的 `ObjArray`（`associateValue("importedPackages", ...)`），
+   重复导入同一个包直接返回。所以这一步本来就不需要检查。
+2. **解析发生在按名字取值时，而那里就查沙箱。** `ImporterTopLevel.get` → `getPackageProperty`
+   依次问每个已导入的包；`javap -p -c org.mozilla.javascript.NativeJavaPackage` 的
+   `getPkgProperty` 里：
+   ```
+    90: invokevirtual  Context.getClassShutter:()L.../ClassShutter;
+   105: invokeinterface ClassShutter.visibleToScripts:(Ljava/lang/String;)Z
+   112: ifeq 184                                   <-- 不在白名单就跳过
+   ...
+   131: invokestatic   Kit.classOrNull:(...)Ljava/lang/Class;   <-- 四十几条指令之后才加载类
+   ```
+   即**先问白名单，再加载类**；被拒时 `getPkgProperty` 退化成一个 `NativeJavaPackage`（不是 `Class`）。
+
+实跑（`ScriptImporterCheck`，真 `newScope` 作用域）：
+
+| 脚本写法 | 结果 |
+|---|---|
+| `importPackage(java.lang); System.nanoTime()` | `ReferenceError: "System" is not defined` |
+| `java.lang.System.nanoTime()` | `TypeError: Cannot call property nanoTime in object [JavaPackage java.lang.System]` |
+| `Packages.java.lang.System.nanoTime()` | 同上 |
+| `importClass(java.lang.System)` | `EvaluatorException: Function importClass must be called with a class; had "[JavaPackage java.lang.System]"` |
+| `importPackage(java.io); new File(".").getName()` | `ReferenceError: "File" is not defined` |
+| `importPackage(java.lang.reflect); Method.class.getName()` | `ReferenceError: "Method" is not defined` |
+| `importPackage(java.lang)` 后 `typeof System / Class / Runtime` | `undefined,undefined,undefined` |
+
+**白名单一个字都没放宽。** `java.awt.*` / `java.awt.geom.*` 早在 2.3 做运行时画布时就在
+`ScriptClassShutter` 的放行表里，`importPackage` 走的是同一条规则。反过来说一句有对照价值的：
+**JCM 2.x 自己的 `MTRClassShutter` 并不放行 `java.awt.*`**——它的构造器只 `allowClass` 了
+`net.minecraft.*`、`java.lang.*`、`java.util.*`、`sun.java2d.*`、`java.io.Closeable`、
+`java.io.InputStream`、`java.io.OutputStream`、`jdk.proxy1.*`，`denyClass` 了
+`java.lang.reflect.*` 与 `java.io.*`；`JCMScripting.register` 另外放行 `org.mtr.*`、`mtr.*` 和它自己的两个包
+（javap）。也就是说**需要 AWT 的包在 v2 上要靠玩家关掉脚本限制才能跑**。本分支当初为画布做的
+决定正好相反，这里沿用，并把它写成一条对照记录。
+
+#### 新增检查：`ScriptImporterCheck`
+
+见 §7.1 的表。它同时覆盖「importer 全局可用」「沙箱经 importer 仍拒 `java.lang.System` 等」
+「`next_train.js` 级别的 AWT 画布路径」三件事，与 `ScriptShutterCheck`（直接拼写那条路）互补。
+
+---
+
+### 4.16 `Resources.getSystemFont(name)`（本次新增）
+
+脚本第二件依赖的事是字体。它按 v2 文档的写法用 `base.deriveFont(style, size * k)`，
+**从不** `new Font(family, ...)`——因为 `Font.createFont` 载入的字体**不注册进
+`GraphicsEnvironment`**，没有别人找得到的 family，而且只有一面。包自己的头注释把这条列为「踩过的坑」。
+
+`javap -p -c com.lx862.mtrscripting.util.ScriptResourceUtil` 给出完整语义（三个分支）：
+
+| `name` | 参考实现 |
+|---|---|
+| `"Noto Sans"` | 缓存的 `Font.createFont`，来源是 `mtr:font/noto-sans-cjk-tc-medium.otf`（当类字段 `hasNotoSansCjk` 为真）或 `mtr:font/noto-sans-semibold.ttf`；失败记日志、缓存仍为 `null`，于是返回 `null` |
+| `"Noto Serif"` | 缓存的 `Font.createFont`，来源 `mtr:font/noto-serif-cjk-tc-semibold.ttf`；失败记日志并**立即**返回 `null` |
+| 其余全部 | `new Font(name, Font.PLAIN, 1)`——**JVM 字体注册表查询**，字号 1，由调用方缩放 |
+
+`hasNotoSansCjk` 那个分支**没有照搬**，这是读字节码的结果而不是漏掉：`javap -p -c` 显示该字段在
+整个类里**只有一处赋值**，在静态初始化块里，值是 `iconst_0`——它在一整个进程生命周期里恒为
+`false`，所以 `.otf` 那条分支在「本移植的参照 jar」里**不可达**。MTR 3.6.3 也没有这个文件
+（列 `libs/mtr-common.jar`：`assets/mtr/font/` 下只有 `mtr.json`、`noto-sans-semibold.ttf`
+(515204 B)、`noto-serif-cjk-tc-semibold.ttf` (28120132 B)）。照搬只会多一条永远打的警告，
+可观测行为完全一致；这一点写在 `Resources#getSystemFont` 的 javadoc 里。
+
+字体读取放在新的 `ScriptFonts`（与 `ScriptTextures` 同构）：走资源管理器、按
+`Font.createFont(Font.TRUETYPE_FONT, stream)`、**失败返回 `null` 并只报一次**（v2 也是软失败，
+包也是这么写的：HKR 的 `sysFont()` 外面套 `try`，兜底 `new Font("SansSerif", PLAIN, 12)`）。
+资源重载时随 `ScriptEngine.reset()` 一起清缓存。
+
+**HKR 实际写的三个名字——`"Noto Sans CJK TC Medium"`、`"Noto Sans SemiBold"`、`"Monospaced"`——
+全部落到第三个分支**，在 v2 上也是一样，而第三支是「JVM 字体注册表查询」，名字查不到时 AWT 会
+**静默替换**。**这一节当时写的「刻意保持一致、就用 JVM 默认字面」已经不成立，见 §4.19**：系统里
+**确实找不到**该名字时，先看 AWT 的替换字体画不画得出名字标记的字形——画得出就**原样保留**（本机的
+`"Noto Sans CJK TC Medium"` 就是这种，与 v2 逐字一致），画不出才改用 MTR 自带的 Noto；系统里有的
+名字（包括 `"Monospaced"` 这类逻辑族）行为一个字没变。
+
+无头环境没有客户端、也就没有资源管理器，`ScriptFonts` 因此留了一个**包私有**的读取口
+（`headlessSource`），由 `ScriptImporterCheck` 接上 `assets/mtr/font/...` 的 classpath 资源——
+与 `ScriptApiCheck` 给 `include()` 接一个「读真实目录」的实现是同一手法。游戏里有客户端时这个口
+**永远不会被用到**（先问资源管理器）。这样 `Font.createFont` 与
+`deriveFont(int, float)` 这两条**在无头下也能真验证**，而不是只跑通「返回 null 也不崩」。
+
+---
+
+### 4.17 `SoundManager` 的可选参数：Rhino 按**参数个数精确匹配**（本次修复）
+
+同一个脚本顺带查出来的第二个真缺口。HKR 的翻牌声是：
+
+```js
+sm.playSound(id, state.soundOrigin, FLIP_SOUND_VOLUME, pitch);   // 4 个参数
+sm.playLocalSound(id, FLIP_SOUND_VOLUME, pitch);                 // 3 个参数（退路）
+```
+
+而我们的 `SoundManager.playSound` 是 5 参（末位 `String soundCategory`）、
+`playLocalSound` 是 4 参。**Rhino 不会补默认值，它按参数个数精确匹配**——实测（一个独立的最小
+复现程序，不依赖本仓库）：
+
+```
+ERR  SM.playSound('id', null, 0.5, 1.2)        =>  EvaluatorException: Can't find method ArityProbe$SM.playSound(string,null,number,number).
+OK   SM.playSound('id', null, 0.5, 1.2, 'block')  =>  5
+ERR  SM.playLocalSound('id', 0.5, 1.2)         =>  EvaluatorException: Can't find method ArityProbe$SM.playLocalSound(string,number,number).
+OK   SM.playLocalSound('id', 0.5, 1.2, 'block')   =>  4
+```
+
+于是两次调用都解析失败，而脚本把整个播放包在 `try { ... } catch (e) { /* 静默失败 */ }` 里——
+**现象是没声音，日志里什么都没有**。
+
+修法是补两个少参数的重载（`playSound(id, pos, volume, pitch)`、`playLocalSound(id, volume, pitch)`），
+把 `soundCategory` 传 `null`，交给**现有的** `toCategory(null)` → `Source.MASTER`——也就是这个类
+javadoc 里早就写着的「默认 MASTER」，没有新语义。
+
+依据说明：参考 jar 里**根本没有 `SoundManager`**（全 jar 扫描 `getSoundManager` /
+`playLocalSound` 字符串均为 0 命中），所以这个类没有字节码可依，只能依官方文档的签名；而包的调用
+本身就是「签名允许省略类别」的证据。这一点在 `ScriptSound` 的 javadoc 里写清楚了。
+
+`ScriptApiCheck` 新增 `checkOptionalArgumentForms`：两种拼写都从真实作用域里调一遍——短的那个是
+包在用的，长的那个是防止为重载而改坏原有形式。无头没有声音引擎也没有客户端，断言的是**解析**与
+**返回**（这正是缺重载时会失败的东西）。
+
+---
+
+### 4.18 画布贴图到 GL 的整链复核，以及**必须实机确认的那一条**（本次复核）
+
+HKR 这块屏的核心就是「用 AWT 画进 `GraphicsTexture` 再铺满屏幕」，而 2.3 交付时
+`GraphicsTexture.upload()` 的**真实 GL 路径从未在实机验证过**（当时只验证了降级分支）。本次把
+`javap -p -c com.lx862.mtrscripting.util.GraphicsTexture` 与我们的实现逐行对照了一遍：
+
+| 步骤 | 参考实现（javap -c） | 本分支 |
+|---|---|---|
+| `BufferedImage` | `new BufferedImage(w, h, 2)` = `TYPE_INT_ARGB` | 相同 |
+| 渲染提示 | `KEY_TEXT_ANTIALIASING = VALUE_TEXT_ANTIALIAS_ON`、`KEY_STROKE_CONTROL = VALUE_STROKE_PURE` | 相同 |
+| 上传循环 | `for x∈[0,w) for y∈[0,h) pixels.setPixelRGBA(x, y, toAbgr(image.getRGB(x, y)))` | 同一双重循环，上下界与两个下标都一致（2.7 起读 `DataBufferInt` 批量拷贝，字节序不变；实测与原因见 §4.21） |
+| `toAbgr` | `(a<<24)\|(b<<16)\|(g<<8)\|r` | 逐条一致（`GraphicsTexture.abgr`） |
+| `NativeImage` | `new NativeImage(w, h, false)` | 相同 |
+| `DynamicTexture` | 构造器里 `new DynamicTexture(image)`，其构造器设 `setFilter(false, false)` → **最近邻、无 mipmap** | 相同；只是**改到第一次 `upload()` 才建**，这样「创建→画→关」在没有游戏时也能跑 |
+| 注册 | 构造器里 `Minecraft.execute(() -> getTextureManager().register(id, tex))` | 第一次 upload 时 `register(id, tex)` |
+| 真上传 | `RenderSystem.recordRenderCall(dynamicTexture::upload)`（**延迟到帧末**） | 已在渲染线程时**就地上传** `texture.upload()`；不在（BackgroundWorker）时 `Minecraft.execute` 排到主线程。这两者都只是"上传在哪个线程/哪一刻"，不解释 HKR 的掉帧差异；真正的差异是脚本执行线程，见 §4.21 |
+
+两处差异都是「把 GPU 侧延后」的连带结果，脚本能观察到的语义没有变化。
+
+**无头能验到哪一步，这里说清楚**：
+
+| 环节 | 无头可验？ | 由谁验 |
+|---|---|---|
+| AWT 画布真的画上了像素 | ✅ | `ScriptCanvasCheck`（`fillRect` / `clear` 的像素读回比对）、`ScriptImporterCheck`（1088×608 画布 + 背景 + 色块 + `drawString` 的白色像素计数） |
+| ARGB→ABGR 字节序 | ✅ **本次新增** | `ScriptCanvasCheck.checkAbgrSwap`：`FF112233 → FF332211`、alpha 位保持、`0` 仍透明、`FFFFFFFF` 不变、自反 |
+| 色彩简写 `0xRRGGBB` → 不透明 | ✅ | `ScriptCanvasCheck.checkColourRules` |
+| identifier 作为贴图进入绘制调用 | ✅ | 两个检查都断言了 `Texture(... texture=jsblock:dynamic/graphics/<uuid> ...)` |
+| 无 GL 时降级且**只报一次** | ✅ **本次新增断言** | `GraphicsTexture.degradeReports()`：连续 `upload()` 两次必须仍是 1 |
+| 创建 / 释放 / 资源重载回收 | ✅ | `ScriptCanvasCheck`（含第 65 张被拒） |
+| `new NativeImage` → `setPixelRGBA` → `DynamicTexture.upload()` → 屏幕上出现图像 | ❌ **必须实机** | 见下 |
+
+**实机自检方法（本次为它加了一条日志）**：第一次成功上传时打一行 INFO
+
+```
+[Joban Client] PIDS script canvas 1088x608 uploaded as texture jsblock:dynamic/graphics/<uuid>.
+```
+
+于是排查路径变成两条互斥的结论：
+
+1. **日志里有这行** → 像素已经进了显存，问题不在上传。接着看同一帧的绘制调用
+   （`Joban Client` 的脚本调试覆盖层 / `ScriptRenderContext` 的 trace），确认那条
+   `Texture(... texture=jsblock:dynamic/graphics/<uuid> ...)` 的尺寸、uv 与 z 是否正常；
+   若调用在而画面不在，问题在**采样与混合**（最近邻、半透明层）或**像素化离屏**，不在画布。
+2. **日志里没有这行**，而有
+   `A PIDS script canvas (WxH) cannot be uploaded to the GPU: ... It is drawn on but never appears`
+   → 上传本身失败（没有 GL 上下文 / 驱动拒绝 / 尺寸超限），警告里带了原因。**这一条就是无头验不到、
+   必须实机看的那一步。**
+3. 两种都没有 → 脚本没走到 `upload()`（例如 `create()` 提前抛了）；此时 `ScriptApiCheck` 的
+   `state.err` 断言会先在无头检查里报出来。
+
+**与像素化、z-order 的关系**：画布贴图**按普通贴图处理，不做离屏嵌套**。
+`GraphicsTexture` 构造时就把自己的 identifier 记进 `ScriptTextures` 的
+`markExternal`，所以 `ScriptTextures.resolve` 对它直接返回，不会去找同名文件；`Texture` 调用落到
+与任何包内贴图相同的半透明光照层（`MoreRenderLayers.getLight(id, true)`）。
+`PIDSPixelatedPanel` 那趟离屏照旧把脚本的绘制调用画进它自己的 target，画布在其间
+`upload()` 改变的是**绑定的纹理**，不是**绑定的 framebuffer**，两者不冲突。
+
+---
+
+### 4.19 `getSystemFont` 第三支：名字查不到时改用 MTR 自带的 Noto（本次修复；**有意偏离 v2 的一处**）
+
+§4.16 记的是「三个分支照字节码一一对应」，其中第三支 `new Font(name, PLAIN, 1)` 是**JVM 字体
+注册表查询**。HKR 翻牌屏问的 `"Noto Sans SemiBold"`（F_LATIN，`next_train.js:308`）与
+`"Noto Sans CJK TC Medium"`（F_CJK，`:307`）都不等于 `"Noto Sans"`，所以两个都走第三支。问题就
+在这里：**注册表里没有这个名字时，AWT 不报错，直接换成一个别的字面**。
+
+#### 实测（本机 Java 21 Azul，就是本次诊断用的那台）
+
+| 请求 | `getFamily()` | `getFontName()` | 说明 |
+|---|---|---|---|
+| `"Noto Sans SemiBold"` | `Dialog` | `Dialog.plain` | 本机没有这个名字 |
+| `"Noto Sans CJK TC Medium"` | `Dialog` | `Dialog.plain` | 同上 |
+| `"Monospaced"` / `"Dialog"` / `"Noto Sans SC"` | 同名 | 同名 | 逻辑族与真实族都正常 |
+
+本机 `getAvailableFontFamilyNames()` 里含 Noto 的族只有 `Noto Sans SC`、`Noto Sans SC Medium`、
+`Noto Serif SC` 三个。v2 在没装这两个字体的机器上**行为完全相同**：面板画出来不是作者写下的
+Noto，而是 JVM 随手替换的字面，且日志里一个字都没有。
+
+#### 裁决：这是本移植有意偏离 v2 的一处（字体方面）
+
+依据是上表的实测加上一条硬约束：**系统里能找到时必须原样返回系统字体**——已经在 v2 下画对的机器，
+行为不许变。v2 在「查不到」时的做法是**静默接受 AWT 的替换**；本移植只在**替换字体画不出请求名所
+标记的字形**（以及名字是拉丁/serif、本来就没有 CJK 标记）时才改用别的东西，其余情况逐字保留 v2 的
+行为：
+
+| 情况 | v2 | 本移植 |
+|---|---|---|
+| 系统里有这个名字 | 系统字体 | **一样**（逐字一致） |
+| 查不到，替换字体**画得出**名字标记的字形（本机的 `"Noto Sans CJK TC Medium"`） | AWT 的替换字体 | **一样**，另加一行 INFO 说明走了这条路 |
+| 查不到，替换字体**画不出**该字形 | AWT 的替换字体——**缺字方框** | MTR 自带的 CJK Noto + 一行 INFO |
+| 查不到，名字是拉丁 / 含 `serif`（无 CJK 标记） | AWT 的替换字体 | MTR 自带的拉丁 / serif Noto + 一行 INFO |
+
+用到的两个内置文件是 MTR 3.6.3 自带的 `mtr:font/noto-sans-semibold.ttf`（515204 B）与
+`mtr:font/noto-serif-cjk-tc-semibold.ttf`（28120132 B），都在 `libs/mtr-common.jar` 里（jar 内容已列过）。
+读它们走的是原来那条 `ScriptFonts.read`（`ScriptPaths` 防护 + 失败只报一次），复用 `notoSans` /
+`notoSerif` 两个缓存。
+
+#### 怎么判「系统里没有」：两条规则，缺一不可
+
+1. **一次性缓存的族名表**：`GraphicsEnvironment.getLocalGraphicsEnvironment()
+   .getAvailableFontFamilyNames()`，忽略大小写比较；**同时**并入 `getAvailableFontFamilyNames(
+   Locale.ENGLISH)`。英文表不是冗余：本机是 `zh_CN`，默认表里是 `Microsoft YaHei`，而
+   `new Font("Microsoft YaHei", …).getFamily()` 返回 `微软雅黑`——只看默认表 + `getFamily()` 会把
+   一个**装了的**字体判成没装。
+2. **解析出来的那个 `Font` 自己的 family / fontName**（默认与英文两个 locale 都比，忽略大小写）。
+   这条专治「face 拼写不在族名表里」：`"Arial Bold"` 解析成 family `Arial` + fontName
+   `"Arial Bold"`，族名表里根本没有 `"Arial Bold"` 这一项，只有 `getFontName()` 能证明它存在。
+   **不用 `Font.getName()`**：它返回的就是调用方传进来的字符串，对任何名字（包括不存在的）都相等，
+   拿它做判据等于永远判「存在」。
+
+两条都不过的名字，典型特征就是 `getFamily()` 变成了 `Dialog`——这正是静默替换的指纹。族名表只读
+一次，`Resources.resetFonts()` 里和新增的按名缓存一起清掉。
+
+#### 选哪张面：先按名字里标出的脚本**探测替换字体**，探测不过才用内置面
+
+判定被抽成**一个吃（替换字体, 请求名）两个参数的包私有 static 函数** `Resources.substituteFor(...)`，
+返回「用哪张面 + 为什么」。抽出来是为了**可测**：拿一张字面覆盖已知的字体直接调用它，就能在**有 CJK
+的机器上**验「没有 CJK 的那条路」，不必换一台机器。
+
+三个答案，按顺序：
+
+1. 名字**标记了 CJK 字面**（作为独立词出现 `CJK` / `SC` / `TC` / `JP` / `KR` / `Hans` / `Hant` /
+   `chinese` / `japanese` / `korean` / `yahei` / `mincho` / `gothic` …，或名字本身就是 CJK / 假名 /
+   谚文，如 `微软雅黑`）**且替换字体画得出名字标记的每一个脚本** → **保留替换字体**。探测字符：汉字
+   `下`（每个 CJK 名字都要过这一条），日语标记**另加** `あ`，韩语标记**另加** `한`；一个名字里同时
+   出现多种标记就都要满足，只写 `cjk` 的只要汉字那条。本机的 `"Noto Sans CJK TC Medium"` 走这条：
+   AWT 替换成 `Dialog`，它是**逻辑/复合字体**，`下` 画出 198 px、`班` 443 px，是**真字形**——与 v2
+   画出来的东西逐字一致；
+2. 名字标记了 CJK 字面，但替换字体**画不出** → MTR 自带的 CJK 面
+   `mtr:font/noto-serif-cjk-tc-semibold.ttf`（唯一带 CJK 字形的内置文件）；
+3. 其余 → 按名字的样式选内置面：含 `serif` → 同一个 CJK 文件，其它 → 自带的拉丁面
+   `mtr:font/noto-sans-semibold.ttf`（HKR 的 `"Noto Sans SemiBold"` 要的就是它）。
+
+##### 最初那条规则是错的：错在把「逐字回退」当成了物理字体也有的能力
+
+第一版写的是「名字标记了 CJK 就一律用内置 CJK 文件」，它隐含的假设是：自带拉丁文件缺的中文字，
+Java2D 会**逐字回退**补上——浏览器是这样，**复合字体**也是这样。但**物理字体没有这条链**：
+`Font.createFont` 载入的面只有一面，缺字就画缺字字形。实测（本机，40 px，抗锯齿）：
+
+| 字体 | `canDisplay('下')` | `drawString("下")` | `drawString("班")` |
+|---|---|---|---|
+| 自带 `noto-sans-semibold.ttf`（物理字体） | `false` | 246 px 方框 | **同样 246 px 方框** |
+| 自带 `noto-serif-cjk-tc-semibold.ttf`（物理字体） | `true` | 293 px | 611 px |
+| `Dialog`（**逻辑/复合字体**） | `true` | 198 px | 443 px |
+
+也就是说「CJK 交给逐字回退」这条规则错在**把逻辑字体的能力当成了所有字体的能力**：对 `createFont`
+出来的物理字体，缺字不是「去别的面找一个补上」，而是**一个和生僻字一模一样的空心方框**（`.notdef`），
+四个不同汉字画出来像素完全相同。两个后果，正好就是上面的规则：
+
+* 内置文件**绝不能**用在它没有字形的脚本上——所以替换字体画不出时给 CJK 文件，哪怕名字要的是无衬线
+  而内置只有衬线 CJK 这一张；
+* 而**已经画得出该脚本的替换字体绝不能被扔掉**——所以先探测。第一版那条无条件规则会把一块本来画对
+  的 `Dialog` 换成包从没要过的衬线面。
+
+`ScriptFontFallbackCheck` 把两条都钉住，含像素。
+
+#### 缓存、日志、软失败
+
+* 第三支的解析结果**按请求名缓存**（`ConcurrentHashMap`，双检锁与 `notoSans`/`notoSerif` 同一把锁），
+  渲染线程每帧的调用就是一次 map 查询；命中直接返回同一个 `Font` 实例。
+* 每次「这个名字系统里没有」的裁决都打**一行 INFO**：请求名 + AWT 替换成了什么 + 最终用的是哪张面
+  + 原因；走「保留替换字体」那条路时也打（文案是 `keeping the substitution, because …`），**每个名字
+  只打一次**（写在那次缓存写入旁边，不是每帧判一次）。`resetFonts()` 清掉全部新增缓存，资源重载后
+  重新解析、重新打。
+* **软失败不变**：内置字体读不到（无客户端/无资源管理器、文件缺失、资源包被替换）时**不抛异常**，
+  仍然返回 AWT 那个替换字体——与改动前逐字一致；`ScriptFonts` 那边已经按 location 只警告一次，
+  所以不会每帧刷日志。包自己的 `sysFont()` 外面还有 `try/catch` 与 `new Font("SansSerif", …)` 兜底。
+  自适应那条路还更稳一点：替换字体画得出字形时**一个文件都不用读**（无头检查里断言了这一点）。
+
+#### 无头验证
+
+新增 `tools/checks/com/jsblock/script/ScriptFontFallbackCheck.java`，已挂进
+`tools/run-pids-check.ps1`。关键输出（本机实跑）：
+
+```
+OK   "Noto Sans SemiBold" is not AWT's silent substitution: family=Noto Sans SemiBold, fontName=Noto Sans SemiBold
+OK   it is MTR's bundled face for that name (Noto Sans SemiBold from mtr:font/noto-sans-semibold.ttf)
+OK   a raw AWT lookup for "Noto Sans SemiBold" answers "Dialog.plain" on this machine, which is the substitution the fallback replaced
+OK   it can draw the panel's Chinese station names: 下=true
+OK   and it paints 下 and 班 as two different characters (198 vs 443 pixels), not as the same missing-glyph box
+OK   this machine's own substitution for "Noto Sans CJK TC Medium" already draws Chinese, so it is kept rather than replaced: family=Dialog
+NOTE this machine takes the adaptive path: AWT substitutes "Dialog.plain", which draws Chinese, so no bundled font is needed for a CJK name
+OK   a CJK name given a substitute with no CJK glyph selects MTR's bundled CJK face: Noto Serif CJK TC SemiBold
+OK   it paints real characters rather than one missing-glyph box (293 vs 611 pixels)
+OK   a substitute that already draws every script the name marks is returned unchanged: Noto Serif CJK TC SemiBold
+OK   "Noto Sans SC" is installed, so it comes back as the machine's own font, not as bundled Noto: family=Noto Sans SC
+OK   a face spelling the family table does not hold ("Noto Sans SC Bold" -> Noto Sans SC Bold) is still served by the machine, not by bundled Noto
+OK   drawing 下 and 班 through it paints the identical missing-glyph box (246 pixels), i.e. Java2D does not substitute a face per glyph for a physical font
+OK   the bundled CJK Noto paints them as two different characters (293 vs 611 pixels)
+OK   the fallback logs one INFO line per request name however many frames ask (lines=1)
+OK   with no resource manager "Noto Sans SemiBold" still answers a Font instead of throwing or answering null: family=Dialog
+OK   and a CJK name is answered without reading a file at all: family=Dialog
+
+RESULT: FONT FALLBACK OK
+```
+
+日志一行（走自适应那条路时的原文）：
+
+```
+[Joban Client] PIDS script font "Noto Sans CJK TC Medium" is not installed on this machine, so AWT substitutes
+"Dialog"; keeping the substitution, because AWT's substitution already draws 下, and MTR bundles no CJK sans face
+to replace it with
+```
+
+`tools/run-pids-check.ps1` 整体仍是 `RESULT: ALL CHECKS PASSED`；HKR 的
+`_hkr_split/assets/jsblock/scripts/next_train.js` 在 0/2/4 班次下仍是 `RESULT: SCRIPT OK`；十一包
+回归仍是 112 支脚本 **108 通过**。这 112 支脚本里**一支都没有**按名字取过字体
+（`getSystemFont` 在十一包里 **0 处命中**），唯一用它的是 HKR 翻牌屏，所以这次改动碰不到它们；
+那 4 个失败也与字体无关——`tools.js` / `pids_util.js` 是**没有 `render()`** 的工具模块，
+`pids_ql.js` / `sound_transit.js` 在无头环境下分别取不到平台数据与钟表分支上的对象。
+
+---
+
+### 4.20 更正：字体回退的最终规则（前面那节记录的是被推翻的两次尝试）
+
+§4.19 里那段实测输出属于**第二次尝试**（"替换字体能画就用它"），它已经被推翻。推翻它的证据是像素级的：
+
+```
+Dialog       下/班: 198 / 443 px   hash 0da9f560 / 63f5bfb0
+SimSun       下/班: 198 / 443 px   hash 0da9f560 / 63f5bfb0     ← 与 Dialog 完全同源
+Noto Sans SC 下/班: 459 / 882 px   hash cb30eb8b / 7b6aa33d
+```
+
+也就是说本机上 `Dialog` 的中文是 **SimSun（宋体）**：面板会出现"无衬线拉丁 + 宋体中文"的混搭，
+这是用户明确否掉的观感。而 MTR 自带的 `noto-serif-cjk-tc-semibold.ttf` 同样是**衬线**，
+所以它也只能算最后手段，不能算答案。
+
+**最终规则**（2.7 起）：CJK 名字 → 先按顺序在**真实安装**的族名里找无衬线 CJK
+（Noto Sans SC/TC/HK/JP/KR 及其 Medium/SemiBold、Source Han Sans、Microsoft YaHei/JhengHei、
+PingFang SC/TC、Hiragino Sans、Meiryo、Yu Gothic、Malgun Gothic），并优先匹配请求里的字重；
+都没有才用内置衬线。拉丁名字 → 内置 Noto Sans。**逻辑字体原样返回**（`Monospaced` 等，翻牌钟点
+的等宽对齐靠它；实测逻辑字体确实出现在 `getAvailableFontFamilyNames()` 里）。真装了的族名不受影响。
+
+三条走错的路，各错在哪（下一个接手者不必重走）：
+
+| 尝试 | 错在哪 |
+|---|---|
+| ① CJK 交给 Java 逐字回退 | 只对**逻辑字体**成立；`createFont` 的物理字体缺字画 .notdef 豆腐块 |
+| ② 替换字体能画就保留 | 把 CJK 交给了 `Dialog` = 宋体（本机） |
+| ③ CJK 一律用内置衬线 | 内置那份也是衬线，用户否掉的就是这个观感 |
+| ④（最终）无衬线 CJK 优先，内置衬线兜底 | 本机 → `Noto Sans SC Medium` ✓ |
+
+### 4.21 画布上传的拷贝路径、HKR 掉帧，以及 v2 为什么只掉 2 帧（2.7 优化与诊断）
+
+#### 现象与已经排除的猜想
+
+HKR `next_train.js`（81 KB）把整屏画进一张 `GraphicsTexture`（`SS = 8` →
+`136×76×8 = 1088×608`），再用**一个** `Texture` 绘制调用铺满面板。它自己的
+`render()` 已经做了缓存：`stateSignature()` 不变且没有翻牌时不重画、不 `upload()`；
+`ledBrightness` / `stopBlinkBrightness` 的相位被量化（`TERMINAL_LED_STEPS = 10`、
+`TERMINAL_LED_PERIOD = 1100 ms`），所以稳定状态下**约每秒 9～10 次重画**，不是每帧。
+
+用户实测：同一张屏在 JCM 2.x（MTR 4）只掉约 2 帧，在本分支掉几十帧，且面板越多越掉。
+在改任何代码之前，先把无头能测的两段分开量了：拷贝本身、以及脚本层的重画频率与单帧开销。
+
+#### 测量一：像素拷贝（纯 Java，不需要 GL）
+
+`NativeImage` 的分配与 `setPixelRGBA` 不需要 GL 上下文（只有 `DynamicTexture.upload()`
+需要），所以 1088×608 = **661,504 像素**的整条拷贝路径可以在无头环境里跑真代码。
+下表是本机 Java 21（Zulu）上 40 次预热 + 60 次计时、随机顺序交错的中位数；两组输出
+逐字节比对相同：
+
+| 拷贝方式 | 中位耗时 | 相对旧路径 |
+|---|---|---|
+| 旧：逐像素 `bufferedImage.getRGB(x,y)` + `abgr()` + `pixels.setPixelRGBA()` | **1.64 ms** | 1.0× |
+| 新：`((DataBufferInt) raster.getDataBuffer()).getData()` 一次取出，紧凑循环写 `setPixelRGBA` | **0.37 ms** | **4.3×**（每次省 1.26 ms） |
+| 参考：`bufferedImage.getRGB(0,0,w,h,int[],0,w)` 批量取出再转换 | 2.64 ms | 0.6×（比旧路径还慢） |
+
+两条被否掉的候选，理由都来自上面的数字与 API 本身：
+
+* **没有 `NativeImage.getPixels()` 的 `IntBuffer` 视图可用**。`javap -p` 1.20.1 的
+  `NativeImage` 只有 `getPixelRGBA` / `setPixelRGBA` / `applyToAllPixels` 等，
+  没有可以整块写入的 `IntBuffer`；`applyToAllPixels` 只能对已有像素做一元变换，
+  不能把外部数组灌进去。所以**批量写只有 `setPixelRGBA` 一条路**，能省的是读的那一半。
+* **`getRGB(0,0,w,h,...)` 不是更快**：它内部仍逐像素走颜色模型，2.64 ms 反而比旧路径慢。
+
+顺带确认了**没有 mipmap 生成**：1.20.1 的 `DynamicTexture.upload()` 调
+`NativeImage.upload(0,0,0,0)`，其 `_upload` 字节码只做 `_pixelStore` /
+`_texSubImage2D` / `_texParameter`，没有 `glGenerateMipmap`；`DynamicTexture` 构造器
+本身也只 `setFilter(false, false)`（最近邻）。
+
+#### 测量二：脚本层的重画频率与单帧开销
+
+用 `ScriptApiCheck` 把 `next_train.js` 跑 120 次 `render()`，并给 `GraphicsTexture`
+加了一个包内可见的 `upload()` 计数（该脚本每次重画恰好调用一次 `upload()`，所以这个计数
+就是重画次数）。直接背靠背跑 120 次只经过约 60～80 ms 墙钟，跨不过一个 110 ms 的 LED
+量化台阶，所以给检查器加了 `--frame-ms=16`，把 120 帧按 60 fps 配速（约 2.18 s）：
+
+```
+120 render() iterations in 2184 ms (18.20 ms/frame; render calls 1.33 ms/frame);
+canvas upload() calls: 21 (redraws, 0.18/frame);
+redrawing frames avg 5.13 ms vs 0.52 ms otherwise
+```
+
+| 指标 | 数值 | 说明 |
+|---|---|---|
+| 120 帧内的重画次数 | **21 次**（0.18/帧，**~9.6 次/秒**） | 与 `10 档 / 1100 ms` 的 LED 量化一致，**证实不是每帧重画** |
+| 重画帧的脚本耗时 | **5.13 ms** | `stateSignature` + `drawAll`（AWT 全屏重绘）+ 提交绘制调用；无头环境没有 MTR 线路/站点数据，实机只会更高 |
+| 只重交绘制调用的帧 | **0.52 ms** | 每帧固定开销（脚本 + 签名 + 一个 `Texture` 调用） |
+| 强制每帧重画时 | 5.60 ms/帧 | 120/120 帧重画，与上一行互证 |
+
+按这个数字估算一块 136×76 的面板：每帧固定约 0.5 ms（双面 PIDS 的两半各跑一次，
+约 1 ms/帧），再加平均 0.18×5.13 ≈ 0.9 ms/帧。**一块面板约 2 ms/帧量级**，十块就接近
+20 ms/帧——这就是"面板越多越卡"的线性项；而重画集中在同一个 110 ms 边界上（所有面板用
+同一个墙钟、同一个量化表），所以还会叠加成一次几十毫秒的卡顿波。
+
+#### 测量三：每帧固定开销里那个"看着可疑"的字符串解析
+
+`Texture.texture(String)` 每帧经 `ScriptPaths.resource()` 重新构造 `ResourceLocation`。
+实测：
+
+```
+ScriptPaths.resource: 198.5 ns/call (0.199 us)
+new ResourceLocation: 118.5 ns/call
+```
+
+十块面板 × 60 fps = 600 次/秒 ≈ **0.12 ms/秒**。加缓存省下的部分比一次缓存查找的复杂度还小，
+**不值得改**，所以没有改。
+
+#### v2 的 `GraphicsTexture.upload()`：没有脏检查，也没有更快的拷贝（javap 结论）
+
+任务最初最可疑的假设是"v2 的 `upload()` 有脏检查/批量拷贝，所以只掉 2 帧"。逐条对了
+`NeoJCM-neoforge-2.0.0-prerelease.2+fork.1+1.21.1.jar` 的字节码，结论是**两者都不是**：
+
+```
+public void upload();
+   ... for (i = 0; i < width; i++)
+       for (j = 0; j < height; j++)
+           dynamicTexture.getPixels().setPixelRGBA(i, j, toAbgr(bufferedImage.getRGB(i, j)));
+   ... RenderSystem.recordRenderCall(dynamicTexture::upload);
+```
+
+* **没有脏检查**：每次调用都整张重拷，和我们旧代码逐像素、上下界、下标、ABGR 交换完全一样；
+* **没有更快的拷贝路径**：连 `getRGB` 的调用形状都一致；
+* 唯一差别是**真 GL 上传**用 `RenderSystem.recordRenderCall(dynamicTexture::upload)` 延到帧末，
+  而我们是就地上传。这一条能解释少量差别，解释不了"2 帧 vs 几十帧"。
+
+真正的差别在**执行线程**，也是本次排查最有价值的结论：
+
+| 证据（javap） | 含义 |
+|---|---|
+| `com.lx862.mtrscripting.core.ScriptInstance` 有 `public java.util.concurrent.Future<?> scriptTask;` | 每个脚本实例的任务是异步提交的 |
+| `com.lx862.mtrscripting.ScriptManager` 有 `private java.util.concurrent.ExecutorService scriptThread;` 与 `submitScriptTask(Runnable)` | 脚本跑在自己的线程池上 |
+| `ParsedScript.invokeRenderFunction(ScriptInstance, Runnable)` → `ScriptManager.submitScriptTask(...)` | 每帧的 `render` 是**提交**，不是内联执行 |
+| `ScriptPIDSPreset.render(...)`：先 `invokeRenderFunction(...)`，再把 `PIDSScriptInstance.drawCalls` **复制一份**交给渲染线程执行 | 脚本、AWT 画布、像素拷贝都在 scriptThread；渲染线程只画**上一帧**的绘制调用，帧末再上传纹理 |
+
+也就是说，v2 的 2 帧 = 帧末那几次 `glTexSubImage2D`；我们的"几十帧" = 每块面板每帧的
+Rhino 执行 + 每秒约 10 次、每次约 5 ms 的 AWT 全屏重绘 + 像素拷贝，**全部发生在渲染线程**。
+`RenderPIDSBase.renderScripted()` → `ScriptEngine.Compiled.renderOrFail()` 是同步调用链，
+这是移植时有意选的简单模型（脚本能直接拿到当前帧的 `PoseStack`），不是 `upload()` 的细节。
+
+#### 本次改了什么
+
+1. **`GraphicsTexture.copyPixelsTo(NativeImage)`**：画布永远是 `TYPE_INT_ARGB`，其
+   `DataBufferInt` 里的 int 就是 `getRGB(x,y)` 的返回值；一次取出数组、紧凑循环
+   `abgr()` + `setPixelRGBA`。非 `TYPE_INT_ARGB` 时仍退回旧的逐像素路径（构造函数保证了
+   走不到，但方法本身不假设）。**字节序不变**，`ScriptCanvasCheck` 新增
+   `checkPixelCopy()`：在真实的 `NativeImage` 上写入 6 个不同 alpha/通道的像素，再
+   `getPixelRGBA` 逐像素读回比对，`FF112233 → FF332211` 的断言仍在。
+2. **`-Djsblock.pids.canvasStats=true` 诊断开关**（默认关闭，读一次静态常量）：
+   每块画布每秒最多一行，见下。
+3. **`ScriptApiCheck` 的计时/计数**：每次跑脚本都会打印"多少帧、其中多少次重画、
+   重画帧平均多少 ms、其它帧平均多少 ms"；`--frame-ms=N` 用来按真实帧率配速。
+   这些只是打印，不参与通过/失败判定，CI 不会因为机器快慢变红。
+4. **`MTR3-PIDS-PORT.md` 本节 + CHANGELOG**。
+
+#### 优化前后对比
+
+| 项目 | 优化前 | 优化后 | 依据 |
+|---|---|---|---|
+| 1088×608 一次像素拷贝 | 1.64 ms | **0.37 ms** | 上表，4.3×，字节一致 |
+| 十块面板一次同步重画波里的拷贝总耗时 | ~16.4 ms | **~3.7 ms** | 1.64→0.37 × 10 |
+| 每帧固定开销（`stateSignature` + 绘制调用） | 0.52 ms/帧 | 0.52 ms/帧 | **没有改**：这是包自己的 JS，且没有便宜的外部缓存点 |
+| 每次重画的 AWT `drawAll` | 5.13 ms | 5.13 ms | **没有改**：见下"未做" |
+| `Texture.texture(String)` 的 location 解析 | 0.2 µs/次 | 0.2 µs/次 | 量级太小，不做缓存 |
+
+**为什么没有顺手把 AWT 重绘也搬走**：那需要 v2 的异步脚本模型——把脚本的绘制调用捕获成
+可重放的列表、双缓冲到下一帧、再在渲染线程回放。`ScriptRenderContext` 现在是即时执行
+（`beginQuad`/`endQuad`），没有可重放的调用对象；这是渲染管线级改动，无法在无头环境验证
+正确性，超出这次"按证据做小步优化"的范围。所以本次的定位是：**把属于我们的 1.26 ms/次
+拷贝从渲染线程拿掉，并把"到底是谁在花时间"变成可测量的**；要完全对齐 v2 的 2 帧，下一步
+是异步脚本执行，已记入下面的"未验证/待办"。
+
+#### 诊断开关怎么用、看哪一行
+
+启动参数（默认关闭，不加时热路径只多一次静态布尔判断）：
+
+```
+-Djsblock.pids.canvasStats=true
+```
+
+每块画布在"上一次打印满 1 秒"后的下一次上传时打一行：
+
+```
+[Joban Client] PIDS canvas stats jsblock:dynamic/graphics/<uuid> (1088x608) over 1003 ms:
+upload() calls 10, pixel copies 10, copy avg 0.382 ms (max 0.501), GL upload avg 0.214 ms, script redraws 10.
+```
+
+判读：
+
+* `upload() calls` ≈ **10/秒** → HKR 的正常 LED 节奏（每 110 ms 一档），说明包自己的签名缓存
+  在工作；接近 **60/秒** → 脚本在每帧重画，`stateSignature` 没起作用（或者包的 LED 档数被调高了）；
+* `pixel copies` **小于** `upload() calls` → 上传被排到了别的线程（`Minecraft.execute`），
+  差额就是排队量；相等 → 全在调用线程上同步执行；
+* `copy avg` 在 1088×608 上应约 **0.37～0.5 ms**（旧实现约 1.6 ms）。如果仍看到 1.5 ms 以上，
+  说明跑的不是本次优化后的类（部署了旧 jar）；
+* `script redraws` 与 `upload() calls` 同值：HKR 的 `render()` 每次重画只调一次 `upload()`，
+  所以这一列就是**脚本重画次数**；
+* 画布停止上传时不再打印——这本身也是答案："它现在不传了"。
+
+另外，第一次成功上传时那条一次性日志仍在：
+
+```
+[Joban Client] PIDS script canvas 1088x608 uploaded as texture jsblock:dynamic/graphics/<uuid>.
+```
+
+**实机判据**：`canvasStats` 行里 `copy avg` ≈0.4 ms、`upload() calls` ≈10/秒，说明上传路径与
+包的重画节奏都正常；若此时仍掉帧，问题不在上传/拷贝，而在每次重画的 AWT `drawAll`（渲染线程
+上的 ~5 ms/次），需要的是 v2 那套异步执行，而不是继续优化 `upload()`。
+
+#### 本次验收
+
+* `tools/run-pids-check.ps1` → **`RESULT: ALL CHECKS PASSED`**（`gradle build` 一并通过）；
+* `ScriptCanvasCheck` → `RESULT: CANVAS OK`，含新增的 `copyPixelsTo` 字节序断言；
+* `next_train.js` 在 0/1/2/4 班次 → 4 × `RESULT: SCRIPT OK`；
+* 十一包回归 → **108/112**（与基线一致；4 个失败为既有的工具模块/无头缺数据）。
+
+#### 未验证 / 待办
+
+1. **GL 上传耗时无法无头测量**：`copy avg` 与 `GL upload avg` 分开打印，但后者需要实机；
+   v2 的 `recordRenderCall` 延迟是否比我们就地 `texture.upload()` 更省，本次**没有改**，
+   也没有实机数据，不做断言。
+2. **AWT `drawAll` 的实机成本**：无头检查没有 MTR 线路/站点数据（`pickLine` 返回 null），
+   实机每帧/每次重画只会更贵；5.13 ms 是**下限**。
+3. **异步脚本执行**：v2 的 `scriptThread + drawCalls 双缓冲` 是"只掉 2 帧"的根因，本次只在
+   文档里定位，没有实现。实现它需要可重放的绘制调用缓冲与线程安全审计，另开任务。
+4. 微基准是单机、单 JVM 的数字（Java 21 Zulu、Windows），只用于比较两条路径的相对快慢；
+   绝对值会随 CPU/缓存变化。上表的"十块面板 ×10 次/秒"是算术外推，不是实机采样。
+
+### 5.1 缺失 `ForgeConfig.java`
+
+`forge/src/main/java/com/jsblock/JobanForge.java` 引用了 `com.jsblock.mappings.ForgeConfig`，
+但该文件**从未被提交**——它位于 `com.jsblock.mappings` 这个由 `setupFiles` 任务生成、
+且未被 `.gitignore` 覆盖却也没进版本控制的目录里。`setupFiles` 下载的
+`Minecraft-Mappings-1.20.zip` 里只有 `FabricRegistryUtilities.java` 和 `ForgeUtilities.java`，
+不含 `ForgeConfig`。
+
+已按其在 Fabric 侧的对等物 `ModMenuConfig` 还原：把 YJCM 的 `ConfigScreen`
+注册为 Forge 的配置界面扩展点（`ConfigScreenHandler.ConfigScreenFactory`）。
+
+### 5.2 Gradle 8 不兼容
+
+`fabric/build.gradle` 与 `forge/build.gradle` 使用了 `classifier`，该 API 在 Gradle 8.0
+已被移除（项目原本面向 Gradle 7）。已改为等价的 `archiveClassifier`。
+
+### 5.3 `font` / `fonts` 键不一致
+
+上游 `PIDSPreset.fromJson` 读的键是 **`fonts`（复数）**，而字段和所有渲染器都叫
+`font`。资源包写 `font` 时字体被静默丢弃。现在两个键都接受。
+
+---
+
+### 4.22 帧内分段计时：画布之后，一块面板的每帧到底花在哪（2.8 优化与诊断）
+
+#### 已经排除的部分（实机数据）
+
+2.7 把 `GraphicsTexture` 的整张像素拷贝改成批量之后，用户实例（1 块 HKR 面板，1088×608）
+每秒输出：
+
+```
+upload() calls 10, pixel copies 10, copy avg 0.20-0.27 ms, GL upload avg 0.11-0.17 ms, script redraws 10
+```
+
+每秒 10 次上传 ×（0.2~0.27 + 0.11~0.17 ms）≈ **0.06 ms/帧**。画布这一条结案：它不再是瓶颈。
+
+无头 `ScriptApiCheck` 此前给的 0.52 ms（只重交绘制调用的帧）/ 5.13 ms（重画帧）是**下限**——
+没有 MTR 线路数据时 `pickLine()` 立刻返回 `null`，预设的整段线路遍历根本没跑。所以这一轮要
+在**渲染线程上**把一帧拆开量，并且要在**真实线路数据**下量。
+
+#### 分段计时的口径与埋点位置
+
+开关沿用 2.7 的 `-Djsblock.pids.canvasStats=true`（一个开关同时开画布统计和帧分段）。
+实现是 `com.jsblock.script.PidsFrameStats`，只在渲染线程读写、全部累加原始数值、每秒格式化一行：
+
+| 段 | 含义 | 埋点 |
+|---|---|---|
+| **A** | 进入脚本之前的准备：预设查表、`customMessages`（`parseVariable`×4）、平台过滤集合、`scheduleList` 收集与排序、`PIDSWrapper` 构造、面板变换、像素化决策 | `RenderPIDSBase.render` 最开头取 `nanoTime`，`renderScripted` 里 `program.start()` 之前收口 |
+| **B** | `create()` / `render()` 调用本身 | `program.start()` 与 `renderOrFail()`（含重试、含像素化路径里的那两次）前后成对 |
+| **C** | 绘制调用执行（本移植里 `ctx.draw()` 是**立即画**，不是排队重放，所以 C 在 B 之内） | `ScriptRenderContext.draw()` / `renderComponent()` 里 `drawCall.draw()` 前后 |
+| **D** | 其余：交给脚本的渲染状态、`immediate.endBatch()`、像素化 FBO 包围、`popPose` | 不埋点，按 `total - A - B` 算，保证与 total 自洽 |
+| **api** | 脚本→本移植 Java 对象的耗时（`PIDSWrapper`/`Arrivals`/`Arrival`/`RouteInfo`/`RouteStopList`/`RouteStopInfo` 的热点访问器） | 各访问器里 `apiStart()`/`apiEnd()` 成对 |
+| **redrawFrames** | 本帧脚本重画过画布（`GraphicsTexture.upload()` 被调用） | `GraphicsTexture.upload()` 里打标记 |
+
+代价：开关关掉时是静态布尔判断；打开时每帧约 5 次 `nanoTime`（外加每个绘制调用、每次被
+插桩的访问器各一次），不拼字符串、不分配对象、不加锁，攒满一秒才格式化一次并 `LOGGER.info`。
+双面 PIDS 的两半按 `preset@x,y,z` 分成两条记录，各自一行——**这正好也是"两半是否各跑一次脚本"
+的可观测证据**。
+
+#### 无头测量：真实线路数据下的分段
+
+探针（`build/costprobe`，未入库）用真实 MTR 客户端缓存对象铺一条 24 站、两条线路（各停 + 快车）、
+该站台 8 班车的线路，脚本用 `ScriptRenderContext.dryRun`（不碰 GL，但 Rhino、包装类、绘制调用
+构造全是真的），60 fps 配速跑 180 帧。稳定窗口：
+
+| 指标 | 数值（每帧） | 占比 |
+|---|---|---|
+| A 准备 | 0.04-0.06 ms | ~2% |
+| B 脚本 | 2.1-2.9 ms | ~98% |
+| C 绘制调用 | 无头为 0（dry-run 不画） | 实机看日志 |
+| D 其余 | 0.01 ms | <1% |
+| api（我们的 Java） | 0.02-0.05 ms | **1-2%** |
+| 重画帧 | 9-10 次/秒，B 7-10 ms | 每秒 ~0.9 ms/帧均摊 |
+
+**结论一：这一帧的钱几乎全在 B，而 B 里几乎没有我们的代码。** 进一步用探针直接计时预设自己的
+函数（每次 1500 次调用、5 轮取中位）：
+
+| 预设函数 | 耗时/次 | 说明 |
+|---|---|---|
+| `render(ctx,state,pids)` | 0.65 ms | 每帧整段 |
+| `stateSignature(pids,state)` | 1.20 ms | 冷调用测得；里面含 `pickLine` |
+| `pickLine(arr,state,pids)` | 0.54 ms | 线路遍历，`render` 里最大的单项 |
+| `hasActiveFlip(state)` | 0.006 ms | 与猜测相反，可以忽略 |
+
+`pickLine` 每帧都跑（`stateSignature` 无条件调用它），它遍历最多 16 班车的线路、按站去重、
+逐站比较候选线路。**我们的每个 Java 访问器只有 155 ns**（`api` 总量 0.02-0.05 ms/帧 已证明），
+所以省查表、省包装类分配都只能动到这 1-2%。
+
+#### 真正的元凶：一个缺失的方法让每站每帧抛一次异常
+
+`next_train.js` 的 `stationKey(plat)` 这样写：
+
+```js
+var sid = null;
+try { sid = plat.getStationId(); } catch (e) { sid = null; }
+if (sid != null) { var ss = "" + sid; if (ss !== "") return ss; }
+try { return "" + plat.getPlatformId(); } catch (e2) { return "?"; }
+```
+
+而本移植的 `RouteStopInfo` **没有 `getStationId()`**（JCM 官方 API 文档 `tsc.md` 里
+`SimplifiedRoutePlatform.getStationId(): long` 存在，本仓库 `README.md` 的覆盖表也早已把它列为
+应实现的条目）。于是**每个站、每条候选线路的每一次探测**都是一次 Rhino
+`TypeError: Cannot find function getStationId`，被预设的 `catch` 吞掉后走回退分支。
+
+探针在同一个 scope 里直接量了跨语言调用的单价（20000 次循环、含 JS 循环本身）：
+
+| 调用 | ns/call |
+|---|---|
+| 纯 JS 循环迭代（基线） | 600-900 |
+| 存在的字段读（`pids.rows`） | 约 +100 |
+| 存在的方法（`getPlatformId()`、`routeName()`） | 约 +400-1400 |
+| **不存在的方法（抛 + 被 catch）** | **5700-6500** |
+
+一条 24 站的线路，`pickLine` 每帧要探测 **48-72 次**（建 stopSet 一遍、`routeCovers` 每个候选
+一遍、最后建站点表一遍），双面面板还要 ×2。这就是"每帧 2 ms"里最大的那一块。
+
+#### 做了什么：补 `RouteStopInfo.getStationId()`
+
+* 语义按官方文档：**返回所属车站区域的 id**；车站解析不出来时回退到**站台自己的 id**，
+  而不是 `0`——`0` 会让"按车站去重"的预设把整条线路塌成一个站（客户端缓存还没同步时尤其糟），
+  回退到站台 id 则与补这个方法之前的行为一致。
+* 只补这一个。`route.getColor()`（`SimplifiedRoute.getColor()`，HKR 也探测它）**故意没补**：
+  补了会让 HKR 的"同色即同线"匹配真正生效，**换掉线路图的底图线路**——那是画面变化，
+  不该混在性能提交里，已单独记在下面"剩下什么"。
+* 实测（探针，1500 次/轮，5 轮中位）：
+
+| 每次脚本调用 | 补之前 | 补之后 | 变化 |
+|---|---|---|---|
+| `render()` | 0.65 ms | **0.33 ms** | **-49%** |
+| `pickLine()` | 0.54 ms | **0.29 ms** | **-45%** |
+| `stateSignature()` | 1.20 ms | 0.93 ms | -22% |
+
+* **画面没变**：同一份 fixture 下线路图仍是 24 站，首末站名相同（`Fixture Station 1` /
+  `Fixture Station 24`）；只有"一条线路在同站两个站台都停"时才会按车站去重成一个站，
+  那正是 JCM 2.x 用同一个方法得到的结果。
+* 折算到实机：一块双面面板每帧跑两遍脚本，节省 **约 0.6-0.7 ms/帧**，重画帧同样少这么多。
+  这是本轮**唯一**按数据做的优化。
+
+#### 没有做的事，以及为什么
+
+* **没跳脚本执行**（例如不可见面板、或"内容没变就不跑"）：会改行为——预设的翻牌动画、
+  帧计数、音效都靠每帧执行；JCM 2.x 之所以能这么做，是因为它把脚本放到自己的线程上，
+  渲染线程只重放上一帧的 `drawCalls`（`ScriptPIDSPreset.render` → `ScriptManager.scriptThread`）。
+* **没动双面**：两半各自 `renderScripted`（`isKeyBlock()` 是预设自己的判断），
+  跳过任一半都会让 `st_ql.js` 这类"按 key 半决定画哪面"的预设画错。
+* **没补 `route.getColor()`**：见上，会换底图线路。
+* **没在 `PIDSData` 加每帧记忆化**：`api` 实测 1-2%，加了也测不出来。
+
+#### 剩下什么（下一轮的入口）
+
+1. **off-thread + replay（真正的解法）**：把"执行脚本"和"画上一帧的绘制调用"分开，
+   像 v2 的 `ScriptManager.scriptThread` / `ScriptInstance.scriptTask` 那样。本轮的实机数据支
+   持这个判断：一帧的 98% 在 B，而 B 里 98% 是预设自己的解释执行——除了不在这条线程上跑，
+   没有别的办法把它从帧时间里拿掉。
+2. **`SimplifiedRoute.getColor()` / `getStationId()` 之外仍缺的 API**：补 `getColor()` 要单独做，
+   并核对线路图底图的变化。
+3. **首帧 `create()` 很贵**：探针里 HKR 的 `create()` 一次 **380-500 ms**（AWT 字体装载 + 整屏
+   首次重绘）。它只在面板首次出现/资源重载后发生，但用户在登录时会感到一次明显卡顿。
+   值得单独做"首帧分帧绘制"或"延后到面板可见时再建画布"。
+
+#### 实机怎么看那一行
+
+```
+[Joban Client] PIDS script stats hkr:next_train@100,64,-5: frames=58/s total avg=1.42 max=8.10
+ | A avg=0.05 max=0.21 | B avg=0.71 max=6.90 (create 0.00 once) | C avg=0.11 max=0.40, in B
+ | D avg=0.02 max=0.09 | redrawFrames=10 (B avg=6.20) | api avg=0.21 max=0.90 calls=118/s
+ | drawCalls avg=1.0 | worst=B,6.90
+```
+
+判读顺序：
+
+1. **`frames=N/s`**：这块面板每秒被渲染多少次。双面面板会出现**两行**（坐标不同），
+   每行都≈屏幕 fps → 证实"两半各跑一次脚本"，实机开销就是两倍。
+2. **`B avg` / `worst=B,x`**：每帧脚本的真实代价。`B avg` 0.5-1 ms、`worst` 5-10 ms 属于
+   "静止时还行、每隔 110 ms 卡一下"（重画）；`B avg` 已经 3 ms 以上就要看 `pickLine` 那类遍历。
+3. **`redrawFrames` 与 `(B avg=x)`**：每秒重画次数，以及重画帧贵多少。HKR 正常是 **9-11 次/秒**；
+   接近 `frames` 就是每帧重画（预设的缓存失效了，或者 `ledBrightness` 相位在变）。
+4. **`C avg`**：真正变成顶点/贴图的那一段。窗口 1.0 的面板应该是 **0.05-0.3 ms**；
+   如果是文本类预设的几十个绘制调用，这里会明显变大——那时候该看的是绘制调用数而不是脚本。
+5. **`A avg`**：每帧准备。正常 **<0.1 ms**；突然变大 = 该站台的 `scheduleList` 很长，或者开了自动换预设。
+6. **`api avg` 占比**：`api/B` 只有几个百分点 → 别去优化我们的查表；占比大才是我们的事。
+7. **`D avg`**：包装与收尾。开启像素化（`pixelScale`/`pixelResolution`）时它会包含 offscreen 的
+   FBO 与合成，正常应 <0.3 ms。
+
+#### 验收（本轮）
+
+```
+gradle build                      → BUILD SUCCESSFUL
+tools\run-pids-check.ps1          → RESULT: ALL CHECKS PASSED
+next_train.js 0/1/2/4 arrivals    → RESULT: SCRIPT OK
+_v2api\run-all.ps1（11 包）       → 108/112（与 2.7 相同）
+```
+
+### 4.23 异步脚本执行 + 绘制调用重放（2.10；对齐 JCM 2.x/v2 的执行模型）
+
+#### 为什么必须异步
+
+4.22 的实机数据已经把答案写得很清楚：稳定帧里 **98% 的时间在 B（脚本解释执行）**，其中
+98% 又是预设自己的 JavaScript；我们的包装类只占 1-2%。只要脚本还在渲染线程上跑，优化查表
+和包装类分配都只能动到那 1-2%。JCM 2.x/v2 的做法是把这两件事拆开：
+
+* `ScriptManager.scriptThread`（共享 `ExecutorService`）执行脚本；
+* `ScriptInstance.scriptTask`（`Future`）保证同一面板同一时刻最多一个任务；
+* 渲染线程每帧只**提交**下一帧任务，并**重放**上一帧录下的 `drawCalls`。
+
+本移植现在采用同一模型。另一个直接动机是首帧：HKR 的 `create()` 实测 **380-500 ms**
+（AWT 字体装载 + 1088×608 首次整屏重绘）。这段开销无法从脚本里省掉，但可以保证它只发生
+一次，并且之后每一帧的脚本解释都不再占用渲染线程。
+
+#### 实例管理（`ScriptInstances` / `ScriptInstance`）
+
+* `ScriptInstances` 按 `ScriptEngine.Program` 的 key（预设 + key block 坐标）缓存
+  `ScriptInstance`；双格面板的两半**共用一个实例、一个 Program、一个 `state`**，与 4.22
+  之前的行为一致。
+* 每个**渲染半块**（`BlockPos`）在实例内拥有自己的 `lastCalls`、`running` 门和一次性首帧
+  标记。原因很实际：两半的 `pids.isKeyBlock()` 不同，`st_ql.js` 这类预设会按它画不同的面；
+  如果两半共用一个 `lastCalls`，后跑的半块会把前一个半块的绘制列表覆盖掉。
+* 程序本身在 `synchronized (program)` 下进入，保证同一 scope/state 不会被两个半块同时调用；
+  两半的 pass 仍然可以排队，只是执行串行。这与旧的"每帧跑两次脚本"顺序一致。
+* 执行器是**共享的有界线程池**（2-4 个 daemon 线程），不是每面板一个线程：一个玩家视野里
+  可能有几十块面板，每线程一个 Rhino Context 的代价不划算；共享池的线程数与面板数无关，
+  每个半块用 `AtomicBoolean` 做串行门，慢脚本只会丢帧，不会堆积任务。
+* 资源重载（`ScriptEngine.reset()`）和世界切换/退出（`ScriptInstances.beginFrame`，客户端
+  tick 与渲染路径双保险）都会 `requestDispose()` 并在脚本线程上调用 `dispose()`，不阻塞渲染
+  线程。世界切换同时清空编译缓存，让新世界重新跑 `create()`，也避免旧实例的 dispose 碰到
+  新实例正在用的 Program。
+
+#### 首帧策略：同步一次，之后全异步
+
+`ScriptInstance.runFirstFrame()` 在渲染线程上同步执行 `create() + render()`，录制结果后
+**在同一帧立即重放**，所以面板不会闪一帧空白。它每个半块只允许发生一次（`AtomicBoolean`），
+第二个半块只多付一次 `render()`（`create()` 已由 `Program.started` 挡住）。之后每帧：
+
+1. 若该半块空闲，提交一个 `render()` 任务（不阻塞）；
+2. 立刻重放该半块上一帧的 `lastCalls`；
+3. 任务成功才发布新列表，失败则保留上一帧的好结果。
+
+#### 数据快照：`PIDSWrapper` 现在是渲染线程构造的不可变快照
+
+旧实现惰性读取 `ClientData` / `PIDSData`，而脚本线程运行时渲染线程仍在写这些缓存。现在
+**构造时一次性解析**，脚本线程只读 final 字段：
+
+* `PIDSWrapper`：`station()`/`stationName()` 的站点（含 nearest-platform 回退链）、
+  `platformIds`（`List.copyOf`）、`customMessages`/`rowHidden`（clone）、`scheduleList`
+  （`List.copyOf`）。
+* `Arrival`：`arrivalMillis`、`carCount`、`routeId`、`destination`、`routeName`、`routeColor`、
+  `routeNumber`、`routeType`、`isLightRailRoute`、`circularState`、`platformId`、`platformName`、
+  `currentStationIndex`、dwell（`departureTime` 的基数）、`RouteInfo`、`PlatformInfo` 全部
+  final。`arrived()`/`departed()`/absent 占位符的 `arrivalTime()` 仍读系统时钟，这是纯时间
+  比较，不碰客户端缓存。
+* `RouteInfo`：`name` 与整条 `platformIds` 的 `RouteStopInfo` 列表在构造时解析完；
+  每个 wrapper 内的 `HashMap<routeId, RouteInfo>` 让同一线路的 4 班车共享一次遍历。
+* `RouteStopList`：只读 `List`，越界返回预先构造的空站，不在渲染期查 `PIDSData`。
+* `RouteStopInfo`：`station`、`route`、`stationName`、`platformId` 全 final；
+  `getStationId()` 仍按 4.22 的回退规则。
+* `PlatformInfo`：`name`/`id` 从 `Platform` 复制。
+* `PIDSContext`：`primaryPlatform`、`primaryPlatformName`、`primaryStationName` 在构造时解析，
+  `PlatformComponent`/`StationNameComponent` 的 `canRender()` 改用这些字段，因为脚本线程也会
+  调用组件的 `canRender()`。
+* `PIDSData` 的 `route()`/`platform()`/`stationOf()` 对无缓存（无头、断线瞬间）返回 null 而不是
+  NPE。
+
+对外 API 的成员名、签名和返回值语义完全不变。
+
+#### 录制与重放
+
+`ScriptRenderContext` 原来只有 `dryRun`（存字符串）。现在同一个 seam 分成两半：
+
+* 录制：`ctx.draw(...)` / `renderComponent(...)` 生成不可变 `RecordedCall`，按值捕获
+  `Text`、`Texture`、`Rectangle`、`Component` 的所有绘制参数（位置/尺寸/颜色/UV/对齐/溢出/
+  阴影/字体/行高/marquee 覆盖/naturalLight/`Matrices` 的 4×4 矩阵副本/`z`），不持有脚本的
+  `state` 或 builder；
+* 重放：`RecordedCall.replay(ctx)` 按记录重建同一个 builder（或 component 视图），用**记录时
+  的 z** 调用同一条 `draw()` 路径。`setAutoZOrdering`/`setZOrderStep` 的效果在录制时已经体现
+  在每条记录的 z 上，重放不会二次计算。
+
+覆盖类型：`Text`、`Texture`（普通贴图与 `GraphicsTexture` 画布都只是 `ResourceLocation`，
+画布像素上传仍由脚本线程的 `GraphicsTexture.upload()` 负责）、`Rectangle`、
+`ctx.parseComponent(...)`/`ctx.draw(component)` 的 `Component`。没有模型类绘制调用；若将来
+新增，只需在 `RecordedCall.of` 加一个分支。
+
+一致性证明（`ScriptAsyncCheck`）：同一脚本分别走"内联 dry-run"和"录制 → 重放到第二个
+dry-run 上下文"，比较**逐条 describe 字符串**和**逐条完整签名**（签名包含 describe 不打印的
+shadow/bold/字体/矩阵/naturalLight 等字段）。4 条调用（Rectangle/Texture/带矩阵的 Text/
+Component）逐条相同。这证明录制不丢字段、重放不依赖脚本线程的 live 对象，且顺序一致。
+
+`dryRun` 的字符串输出保留：`RecordedCall.describe()` 重建 builder 后调用原 `describe()`，
+所以现有检查依赖的文本格式不变。
+
+#### 像素化：保留同步内联
+
+像素化路径（`drawPixelatedPanel`）仍然同步内联执行，理由是实现复杂度而不是性能：
+offscreen pass 绑定一个本帧的 FBO，`ScriptRenderContext` 还带 `QuadUploader` 和反向 facing；
+把 `RecordedCall` 重放到一个跨帧的 offscreen 目标，需要把 FBO 生命周期、目标尺寸变化、
+readback 和 `flush()` 的时序一起搬过去，回归风险远大于收益。像素化预设按定义是低分辨率的，
+脚本解释开销本来就小。文档与代码注释都写明这一点；其余路径全部异步。
+
+#### 回退开关
+
+`-Djsblock.pids.asyncScript=false` 强制回到旧的内联执行：`ScriptInstances.asyncEnabled()` 为
+false 时渲染器不会创建/提交实例，`create()+render()` 仍在渲染线程上跑。默认开启。诊断开关
+`-Djsblock.pids.canvasStats=true` 的输出新增：
+
+```
+| async=on submit=1 firstSync=0 replay=1
+```
+
+`async` 是开关状态，`submit` 表示本帧提交了任务，`firstSync` 表示本帧等了那一次同步首帧，
+`replay` 是本帧重放的调用数。异步模式下 `B` 只包含重放和提交的时间；脚本解释发生在脚本
+线程，不计入渲染线程的帧时间（首帧同步那一次单独计入 `create`/`D`，并由 `firstSync=1` 标出）。
+静默统计仍然只在渲染线程读写：脚本线程访问 `PIDSWrapper` 时 `apiStart()` 返回 0，不会和
+渲染线程的 `Record` 竞争。
+
+#### 剩下什么
+
+1. **真正的零拷贝重放**：现在每帧 `List.copyOf` 一次记录列表，`RecordedCall` 也是新对象；
+   对每帧几十条调用的面板可以忽略，但"脚本线程直接写环形缓冲、渲染线程按代读取"能省掉这批
+   分配和引用计数。
+2. **跨世界/卸载的强制清扫**：目前靠客户端 tick 的 `client.level` 变化和渲染路径的
+   `beginFrame(world)` 双保险；如果未来有"世界对象不变但维度切换"的路径，需要再挂一个
+   `ClientLevel` 事件或在 `ScriptInstances` 里比较维度 key。
+3. **双面面板的同步首帧**：两个半块各自同步首帧；`create()` 只跑一次，但第二个半块的
+   `render()` 仍在首帧渲染线程上。若首帧 render 本身很贵（HKR 是 create 贵，render 便宜），
+   可以改成"首帧只跑 key 半块，另一面等下一帧"，代价是另一面闪一帧。
+4. **像素化异步化**：见上，需要把 offscreen 目标的生命周期也纳入实例。
+5. **`Text.measureWidth()`**：它调用 `Minecraft.getInstance().font.width`，现在可能在脚本
+   线程上发生。字体宽度读取在 1.20.1 的 `Font` 里会懒加载 glyph；HKR 不调用它，但其他包可能。
+   实机若出现字体相关崩溃/竞态，先把 `measureWidth()` 改成在渲染线程预取，或给 Font 的访问
+   加锁。这是本轮**唯一没有完全消除**的跨线程 API。
+6. **实机确认项**：首帧不再闪空、异步后翻牌音效/动画仍按预期、双面面板两面内容不串、
+   资源重载后画布释放正常。无头检查只能覆盖录制/重放、线程门和状态快照，GL/FBO 与真实
+   帧时序仍需进游戏看。
+
+### 4.24 AmberUI 与列表式 PIDS 配置界面（2.10）
+
+三块 PIDS 的配置界面原来是手写的三份滚动画布：各自计算行位置、各自画滚动条、各自复制一份
+"自定义信息 / 隐藏行" 的逻辑。投影仪那块最糟 —— 2.7 给它补自定义信息时又抄了一遍，离再次丢失只差一步。
+
+JCM 2.3 把这些界面建在 **AmberUI**（它自己的 GUI 工具库）上，界面本身只剩一个构造函数加一个 `onSave`。
+本轮把 AmberUI 移植进来，界面重建在它上面：
+
+| 类 | 行数 | 角色 |
+|---|---|---|
+| `PIDSBlockConfigScreen` | 261 | 所有 PIDS 共用的抽象列表界面：预设、月台筛选、可选的隐藏月台号开关、自定义信息 ×N、隐藏行 ×N |
+| `PIDSScreen` | 143 | JCM 2.3 的条目 + **YJCM 专属的自动切换**（到达/出发各一组，共 2 个分区标题 + 9 个控件）|
+| `PIDSPresetScreen` | 188 | 缩略图选择页：网格、缩略图、名称，点选回填 `presetId` |
+| `JobanPIDSConfigScreen` | 61 | 1A / LCD 的薄子类 |
+| `RVPIDSConfigScreen` | 59 | RV / SIL 的薄子类（多一个隐藏月台号）|
+| `PIDSProjectorScreen` | 115 | 投影仪：预设 + 7 个数字框（偏移/旋转/缩放）+ 信息/隐藏行/隐藏月台号 |
+
+合计 **827 行**，替换掉原来 374 + 391 + 277 = **1042 行**手写界面，且新增了缩略图选择。
+
+#### 移植范围与 MTR 4 → MTR 3 映射
+
+AmberUI 取自 JCM 2.3 的 MIT 源码（`com.lx862.amberui`，24 个类），改包名为 `com.jsblock.amberui`。
+源代码按 MTR 4 的映射层写，MTR 3.6.3 没有这些类，逐项替换：
+
+| 源（MTR 4） | 目标（MTR 3 / 原版） |
+|---|---|
+| `ScreenExtension` | `mtr.mappings.ScreenMapper`（extends 原版 `Screen`）|
+| `ButtonWidgetExtension` | 原版 `Button` |
+| `CheckboxWidgetExtension` | `mtr.screen.WidgetBetterCheckbox` |
+| `TextFieldWidgetExtension` | `mtr.screen.WidgetBetterTextField` |
+| `Text` / `MutableText` | `Component` / `MutableComponent` |
+| `TextCase` | 无对应物，改用普通字符串 + 长度上限 |
+| `MinecraftClient` | `Minecraft.getInstance()` |
+| `RenderSystem` | `com.mojang.blaze3d.systems.RenderSystem` |
+
+`ListViewWidget` 自带滚动（替代我们手写的滚动条与 `contentHeight/maxScroll` 逻辑）。
+
+#### 保留的 YJCM 功能（逐项）
+
+- 到达自动切换：启用 / 预设 / 倒计时 / 时长
+- 出发自动切换：启用 / 预设 / 倒计时 / 时长 / 直到关闭
+- 自定义信息（逐行）、隐藏行（逐行）
+- 隐藏月台号（RV / 投影仪）
+- 月台多选筛选（沿用 `mtr.screen.PIDSConfigScreen.getPlatformFilterButton`）
+- 投影仪 7 个数字框
+- 保存仍走原有的 `PacketClient.send*C2S`，网络包格式未改
+
+#### 缩略图字段
+
+`PIDSPreset` 之前只读 `background`，**不读 `thumbnail`**。本轮补上：
+
+- 新增 `public ResourceLocation thumbnail`，构造时默认等于 `image`
+- `fromJson` 读 `thumbnail`，缺省回退 `background`
+- 选择页优先用 `thumbnail`，没有就用 `background`，再没有画占位色块
+- `PIDSPresetCheck` 增加两条断言：显式 thumbnail 生效、缺失时回退 background
+
+#### 语言键
+
+沿用现有 `gui.jsblock.*` 命名，补齐中英两份（选择预设、自定义信息、隐藏行、隐藏月台号、保存、取消、分区标题等），
+没有引入 JCM 2.3 的 `pids.listview.*` 体系。
+
+#### 验证与已知限制
+
+- `gradle build` 通过；`tools/run-pids-check.ps1` → `RESULT: ALL CHECKS PASSED`；`PIDSPresetCheck` 的 thumbnail 断言通过
+- **界面本身无法无头验证**（需要真实 MC 客户端），必须实机逐项确认：三种方块的界面能打开、分区齐全、
+  预设选择页能点选回填、保存后生效、投影仪 7 个数字框能改
+- AmberUI 是**改编**而非逐字移植：`AnimatedScreen` 的动画、`WidgetHost` 的焦点管理与原版有细微差异，
+  滚动惯性也由 `ListViewWidget` 自己的实现决定
+
+### 4.25 QuadDrawCall / ctx.renderManager()：JCM 2.x 包给面板画的 3D 外壳（2.10）
+
+Japanese_PIDS 的 `drawShell()` 用 5 个 `QuadDrawCall` 给面板套一圈灰色外壳（白色内框被灰包住）。
+这两样 API（`QuadDrawCall` 全局、`ctx.renderManager()`）此前都没有实现，而脚本把 `drawShell` 包在
+`try/catch` 里 —— 于是整层外壳被**静默跳过**，面板本身看起来正常，只是没有壳。
+
+现在补上：
+
+| API | 行为 |
+|---|---|
+| `QuadDrawCall.create()` / `.renderType()` / `.texture()` / `.color()` / `.normal()` / `.quad(V×4)` | 一个 3D 四边形，顶点以**方块**为单位 |
+| `ctx.renderManager()` | 返回 `ScriptRenderManager`，`draw()`/`queue()` 立即绘制；`drawModel()`/`drawDynamicModel()` 接受但忽略 |
+| 重放 | 新增 `QuadCall` 录制类型，异步模式也会重放外壳 |
+
+**空间转换**：脚本空间是 y 向下、-z 朝外；而四边形的顶点写的是方块空间（y 向上、+z 朝外）。
+JCM 2.x 在绘制前做了 `rotateXDegrees(-180)`，我们做同一件事（y、z 取反），再按 96 倍换到脚本单位。
+没有这一步，外壳会翻到面板另一侧，表现为几块黑平面横插出去。
+
+验证：`kamino_jp_pids.js` 无头运行输出 5 条 `Quad(...)` 并 `RESULT: SCRIPT OK`；实机白色内框+灰色外壳正常。
+## 5. 顺带修复的三个上游缺陷
+
+移植过程中发现 YJCM 公开仓库本身**编不过**，以下问题与本分支的功能无关，但必须修复。
+
+
+## 6. 构建
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
+$gradle = "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.8-bin\dl7vupf4psengwqhwktix4v1\gradle-8.8\bin\gradle.bat"
+cd work\yjcm-mtr3
+& $gradle build --no-daemon --console=plain --max-workers=1
+```
+
+### 6.1 MTR 3 编译依赖从哪来
+
+MTR 官方的开发 jar（`MTR-common-1.20-*-dev.jar`）下载地址**已经全面 404**，
+`storage.zbx1425.cn` 的 `latest` 路径同样 404。解决办法是利用本机 Gradle 缓存中已有的
+**YMTR 3.6.3 经 ForgeGradle 反混淆后的 Mojang 映射版 jar**：
+
+```
+~/.gradle/caches/forge_gradle/deobf_dependencies/maven/modrinth/ymtr/
+    1.20.1-3.6.3_mapped_official_1.20.1/ymtr-1.20.1-3.6.3_mapped_official_1.20.1.jar
+```
+
+把它复制成 `checkouts/1.20/mtr-common.jar`（以及 `mtr-fabric.jar` / `mtr-forge.jar`）即可。
+已核对 YJCM 需要的 **65 个 MTR 类全部存在**。注意 `fabric` 与 `forge` 子模块本身
+**不依赖 MTR**——MTR 只是 `common` 模块的 `files(...)` 依赖。
+
+### 6.2 离线配置
+
+`gradle.properties` 把 `architectury_version` / `fabric_loader_version` / `fabric_api_version` /
+`forge_version` / `mod_menu_version` 全部固定，`build.gradle` 只在缺少这些值时才去查
+Modrinth / Fabric meta / Forge promotions。这样配置阶段不需要网络。
+
+> `setupFiles` 仍会尝试下载 `Minecraft-Mappings/1.20.zip`，失败时 `build.gradle` 会打印
+> 一整段堆栈再继续——**那段堆栈不是构建失败**，是它的 `catch` 分支在 `printStackTrace()`。
+
+### 6.3 Gradle 代理
+
+`~/.gradle/gradle.properties` 里曾把 Gradle 指向 FlClash 的 `127.0.0.1:7890`。该端口
+失效后，`architectury-plugin:3.4-SNAPSHOT` / `loom:1.0-SNAPSHOT` 这类**动态版本**的
+依赖解析会带着退避反复重试，构建看起来像是卡死在 `:forge:compileJava`（实测 20 分钟
+无输出，线程停在 `ErrorHandlingModuleComponentRepository...listModuleVersions`）。
+直连可达时已把代理配置注释掉，并把 `max.tentatives` 从 10 降到 3。
+
+---
+
+## 7. 验证状态（务必阅读）
+
+### 7.1 一条命令跑完全部无头检查
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1
+```
+
+它会：构建 → 导出 `:common` 运行时 classpath → 用 `javac` 编译 `tools/checks/` 下的检查 →
+运行它们。任何一步失败都以非零码退出。
+
+| 检查 | 覆盖内容 |
+|---|---|
+| `PIDSPresetCheck` | 三个附带布局预设的解析（逐条打印组件树）、未知组件的降级、**显示行映射**语义（4 组用例比对内置渲染器的推进规则） |
+| `ScriptShutterCheck` | 脚本沙箱。24 条白名单/黑名单断言，再用**真实引擎作用域**去够四个被禁类（见 §7.7） |
+| `ScriptImporterCheck`（2.5 新增） | Rhino importer：9 个全局（`importPackage` / `importClass` / `Packages` / 6 个包根）在脚本眼里的类型；`next_train.js` 用到的 AWT/Java2D 类经 `importPackage` 与全限定两条路都能解析；`Resources.getSystemFont` 三个分支（含 `Font.createFont` 真读 `mtr:font/noto-sans-semibold.ttf`、`deriveFont(int, float)`、`new Font(name, PLAIN, 1)` 的字号 1）；**12 条**「经 importer 仍被拒」的断言（`importClass` / `Packages` / 包根 / `importPackage` 后再使用，每条都**使用**类而不只是提名字）＋ 允许侧仍可用的正对照；最后把 AWT 画布路径当脚本跑一遍：`importPackage(java.awt)` → 派生字体 → `RenderingHints` → `new Color(int)` → `fillRect` / `drawString` × 1088×608 → 像素读回 → 1 条贴图绘制调用 → 两次 upload 只报 1 次 → 释放（见 §4.15、§4.16、§4.18） |
+| `ScriptPathCheck` | 脚本的**文件**可达范围：资源根**之外**放一个诱饵文件，脚本用 `include("jsblock:../../../secret.js")` 去读，断言的是「它设的那个全局不存在」而不是「防护抛了异常」；另有规则表、真实目录树上的物理防护、以及 `Texture.texture()` 的同一拒绝 |
+| `ScriptCanvasCheck` | 运行时画布：画上去的像素**读回来比对**、无客户端时 `upload()` 降级不抛、`close()` 释放、第 65 张未释放画布被拒、资源重载释放遗留画布 |
+| `ScriptApiCheck` | 真实 JCM 2.x 脚本经真实包装对象跑完整生命周期。除 GPU 绘制外全部真跑：Rhino 编译、`include()`、全局对象、`Text`/`Texture`/`Rectangle` 构建链。`ScriptRenderContext.dryRun()` 记录绘制调用而不是真的画。另外断言 `MTRClientData` 指向 `mtr.client.ClientData` 且可读，以及脚本里的 `ctx.parseComponent` 全路径（clock 组件、矩形、`canRender`、`render`、`ctx.draw(component)`、五种拒绝） |
+| `FilesCheck`（2.4 新增） | `Files` 全局——**唯一写盘的那一个**：存档/读回一致、缺文件返回 `null` 不抛、UTF-8 多行往返、`saveData` 自动建目录、`deleteData` 幂等、**7 种逃逸形态 × 4 个方法**全部拒绝且文案为 v2 原文；再从**脚本侧**（Rhino + 真作用域 + 真沙箱）跑一遍 `hasData`/`readData`/`saveData`（含 `met_running_board` 的真实调用形状）；最后断言包私有的根目录 setter 对脚本不可达 |
+| `ScriptCaseCheck`（2.4 新增） | 引用拼写的宽容：精确引用**不被折叠**、大写折叠成可用 `ResourceLocation`、命名空间大小写也折叠、**6 种逃逸形态在两条路径上都仍被拒绝**、候选顺序；以及基于真实临时目录树的磁盘查找（小写引用找到大写文件、精确拼写优先、多文件互不串味、拒绝爬出根），其中包含「返回值必须带磁盘上的真实拼写」这条 |
+| `ScriptFontFallbackCheck`（**新增**） | `Resources.getSystemFont` 第三支的裁决：系统里**有**的名字原样返回（族名表命中、族名表里没有的 face 拼写、逻辑族 `Dialog`/`Monospaced` 三种形态都断言）；系统里**没有**的名字按**名字标记的脚本**选面——标记了 CJK → 取**真实安装的无衬线 CJK 族**（清单顺序 + 请求字重优先），一个都没有才用 MTR 自带的 CJK 面；拉丁 / `serif` 名字用自带的拉丁 / 衬线面。判定函数 `substituteFor(替换字体, 请求名)` 是包私有 static，检查**直接传一张没有 CJK 字形的字体**过去——于是「没有无衬线 CJK 族」那条路在**有 CJK 的机器上**也能验；另有**像素级防豆腐块**断言（自带拉丁面画 `下`/`班` 是同一个 246 px 方框，自带 CJK 面 293 vs 611 px，本机拿到的 `Noto Sans SC Medium` 378 vs 738 px）与「每条裁决只打一行 INFO」的 log4j 现场抓取；无资源管理器时软失败不抛（最终规则见 §4.20） |
+
+沙箱检查排在脚本检查**之前**：白名单若写错，下面每个脚本要么被拦住、要么毫无防护，
+先看到沙箱那一块就能直接定位，不必从 16 个脚本失败里反推。
+
+`ScriptApiCheck` 默认对随 mod 附带的 `pids_1a.js` 跑 **0 / 1 / 2 / 4 四种班次数**
+（0 是空站台，4 超过所有 PIDS 的行数），并且每个用例跑 2 帧以捕捉状态漂移。
+
+### 7.2 把资源包预设也纳入检查
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
+    -ResourceRoot ..\..\yjcm-recon\hkr, ..\..\yjcm-recon\pids-fixed `
+    -Script `
+      ..\..\yjcm-recon\hkr\assets\jsblock\scripts\hkr_pids_default.js, `
+      ..\..\yjcm-recon\hkr\assets\jsblock\scripts\hkr_pids_platform.js, `
+      ..\..\yjcm-recon\pids-fixed\assets\nanbin\pids\script\crt_pids_1.js
+```
+
+`ScriptApiCheck` 那一路是「没崩、有绘制调用」级别的检查。要连 HKR 那两个预设的**文案**一起断言
+（终点站必须画「不載客列車」、中间站不许画），再加 `-HkrPack`：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-pids-check.ps1 `
+    -HkrPack ..\..\_v2api\packs-all\HKR PIDS\lower
+```
+
+`-HkrPack` 指向的是**解包后的包根**（里面有 `assets/jsblock/scripts/hkr_pids_default.js`），
+不带这个参数时 `ScriptHkrCheck` 仍然会跑，只是改用内嵌的那份「只有这条判定」的预设。
+
+### 7.3 最近一次验证结果
+
+> **2.5：HKR 翻牌屏「面板透明」的根因（§4.15–§4.18，本次）**
+>
+> - `.\tools\run-pids-check.ps1`（含完整 `gradle build`）汇总行 **`RESULT: ALL CHECKS PASSED`**；
+>   新增的 `ScriptImporterCheck` 单独跑是 **`RESULT: IMPORTER OK`**（42 条断言全绿）；`ScriptShutterCheck`
+>   仍是 **`RESULT: SHUTTER OK`**（24 条规则 + 4 条端到端**未放宽任何一条**）。
+> - **用出问题那个包真跑通**：
+>   `.\tools\run-pids-check.ps1 -SkipBuild -Script <_hkr_split>\assets\jsblock\scripts\next_train.js -ResourceRoot <_hkr_split>`
+>   → 汇总行 **`RESULT: ALL CHECKS PASSED`**；`next_train.js` 在 **0 / 1 / 2 / 4** 四种班次数下都是
+>   `RESULT: SCRIPT OK`，绘制调用 1 条（`Texture(... size=128.0x72.0 texture=jsblock:dynamic/graphics/<uuid> ...)`），
+>   且每个班次数下 `state keys create() left behind: W,H,err,tex,fonts` 之后都是
+>   `OK the preset's own create() recorded no error on state`——**`state.err` 为 `null`，即屏幕画的是它自己的
+>   内容，不是脚本自己的错误屏**（这一条是本次新加的断言，见 §7.1 的 `ScriptApiCheck` 行）。
+> - 修复前同一条命令的输出是
+>   `FAIL org.mozilla.javascript.EcmaError: ReferenceError: "importPackage" is not defined. (next_train.js#27)`。
+> - **9 个真实包、112 个 `.js` 全部重跑**：整轮 `run-all.ps1` 跑了 4 次，得到 **108 / 107 / 107 / 107**；
+>   把 `World_PIDS-Pack-200` 单独重跑一次拿到 **66/66**（`result-World_PIDS-Pack-200-rerun.txt`），
+>   与其余 8 个包合计即 **112 个脚本、108 通过、4 失败**——失败集与 2.4 逐条相同，
+>   即这次改动没有让任何一个既有脚本掉出通过。
+> - **一个必须一起报的口径问题**：`World_PIDS-Pack-200` 的 `london_bus.js` **按墙上时钟发作**。
+>   它的 `animation_arrive()` 在**秒数末位为 9** 时把三个行下标从 1/2/3 顶到 4/5/6、再顶到 7/8/9，
+>   而只有再遇到一个 `:09` 才复位——所以**长会话里下标有约 2/3 的时间是越界的**；第 1、2、3 行分支
+>   拿到 `pids.arrivals().get(x)` 后**没有判空**（第 0 行用的是 `get(i)`，安全），于是
+>   `null.routeNumber()` 在第 130 行抛。**是包自己的潜在缺陷，先于本次改动存在**：
+>   把脚本复制到临时目录、把 `let sec = now.getSeconds()` 改成 `let sec = 9`，任何时刻都能**稳定复现**
+>   （已做，两次 render 都抛在第 130 行）；本次改动碰的三个面（importer、`Resources.getSystemFont`、
+>   `SoundManager` 参数）该脚本一个都没用到。游戏里引擎在第一次抛出后
+>   `adoptLenientArrivals()` 换成占位到达重试并保持，玩家看到的是一行占位而不是黑屏，所以此前没人发现。
+>   一次 `ScriptApiCheck` 是个新进程、只渲染 3 帧，撞上那一秒的机会不大：**实测 20 次失败 2 次（10%）**，
+>   而三个班次数（0 安全）的一整轮约 10–19% 会掉这一分。详见 `V2-API-COVERAGE.md` §2.2b。
+> - `ScriptApiCheck` 新增的 `state.err` 断言**在 112 个脚本上全部通过**，没有误报。
+>
+> **HKR 终点站判定（§4.14）**：`.\tools\run-pids-check.ps1 -SkipBuild -HkrPack <HKR PIDS\lower>`
+> 的汇总行 **`RESULT: ALL CHECKS PASSED`**；新增的 `ScriptHkrCheck` 单独跑一遍是
+> **`RESULT: HKR TERMINUS RULE OK`**（6 组 fixture + 2 个真实预设 × 两站 + `marquee` 4 条断言）。
+> 11 个真实包、112 个 `.js` 在修复后**重跑一遍**：**仍是 108 通过 / 4 失败**，
+> 也就是说这次改动**没有让任何一个既有脚本掉出通过**（失败清单与 §2.2 的四条逐条相同）。
+> 反向验证也做了：把 `PIDSWrapper` / `RenderPIDSBase` 两处改动用 `git stash` 暂时退回，
+> 重新编译后**同一条检查在自动面板的终点站 fixture 上失败**（`pids.station()` 读回 `null`），
+> 恢复改动、重编译后再次全绿——即这组 fixture 确实盯住了这个缺陷，而不是恒真。
+>
+> **`create()` 拿到真 `pids`（§4.13）**：`.\tools\run-pids-check.ps1`（含完整
+> `gradle build`）汇总行 `RESULT: ALL CHECKS PASSED`；`gradle :common:compileJava`
+> `BUILD SUCCESSFUL`。另用
+> `-ResourceRoot <解包目录> -Script @('<解包目录>\assets\jsblock\scripts\met_running_board.js')`
+> 把出问题的那个脚本单跑一遍，4 个班次数全绿，日志里是
+> `[MET Running Board] Station ID: 12_65_-34` /
+> `Loading from: met_running_board/12_65_-34_departed.json`——**不再是 `undefined`**。
+> 反例断言（第三参数为 `null` 时必须抛）复现出的正是用户实机那一行：
+> `TypeError: Cannot call method "blockPos" of null`。
+>
+> **2.4 那一轮**：`PIDSPresetCheck` / `PixelationCheck` / `ScriptShutterCheck` /
+> `ScriptPathCheck` / `ScriptCanvasCheck` / `FilesCheck` / `ScriptCaseCheck` /
+> `ScriptApiCheck`（4 个班次数）全部通过，汇总行 `RESULT: ALL CHECKS PASSED`。
+> 另外把 **9 个真实资源包、112 个 `.js`** 全部过了一遍 `ScriptApiCheck`：
+> **108 通过**，4 个失败里 2 个是 `include` 用的工具模块（本来就没有 `render()`）、
+> 2 个是无头环境没有世界/玩家数据。逐脚本表与失败行号见 `V2-API-COVERAGE.md`。
+> 下表是 2.2 那一轮的记录，保留作对照。
+
+#### 2.4 真实资源包通过率
+
+| 包 | 脚本数 | 通过 | 失败 |
+|---|---|---|---|
+| `met transit` | 14 | **14** | 0 |
+| `GURIGRUI_PIDS_JCM2.2.1_MTR4.0.5` | 1 | **1** | 0 |
+| `World_PIDS-Pack-200` | 66 | 66 | 0 |
+| `US PIDS Pack v4.2` | 21 | 20 | 1（无头无世界：`pids.station()` 为 null） |
+| `琼岭追加包26.8.3` | 4 | 2 | 2（1 无头无玩家 + 1 工具模块） |
+| `HKR PIDS` | 2 | 2 | 0 |
+| `上海地铁-PIDS` | 2 | 1 | 1（工具模块） |
+| `Japan_Style_PIDS日式PIDSv1.0.6` | 1 | 1 | 0 |
+| `Japanese_PIDS v1.5` | 1 | 1 | 0 |
+| **合计** | **112** | **108** | **4** |
+
+**换算口径**：扣掉 2 个不可执行的工具模块，**110 个预设脚本通过 108 个**；
+剩下 2 个记为「不适用（无头环境）」，**不是缺陷**。
+
+| 项目 | 状态 | 证据 |
+|---|---|---|
+| `:common` / `:fabric` / `:forge` 全量 `gradle build`（含 `mergeJars`） | ✅ **BUILD SUCCESSFUL** | 本次运行 |
+| `PIDSPresetCheck` | ✅ **ALL CHECKS PASSED** | 本次运行 |
+| `ScriptFontFallbackCheck`（字体回退，50 条 `OK` + 2 条 `NOTE`） | ✅ **FONT FALLBACK OK** —— `"Noto Sans SemiBold"` 拿到自带拉丁面；`"Noto Sans CJK TC Medium"` 拿到本机真实安装的**无衬线 CJK 族** `Noto Sans SC Medium`（不采用替换字体 `Dialog`，因为本机它的中文是宋体，见 §4.20）；把拉丁字体直接喂进判定函数时选到自带 CJK 面（293 vs 611 px）；本机实有的族与 face 拼写原样返回 | 本次运行 |
+| `ScriptShutterCheck`（24 条规则断言 + 4 个真实作用域探针） | ✅ **SHUTTER OK** —— 四个被禁类在**使用**时全部被拒 | 本次运行 |
+| `ScriptApiCheck` × 4 预设 × 4 班次数 = **16 个用例** | ✅ 全部 `RESULT: SCRIPT OK` | 本次运行 |
+| 「每个 Texture/Rectangle 的最终颜色必须不透明」新断言 | ✅ 全部通过（2/3/4/6 个调用随班次数变化） | 本次运行 |
+| 「`arrivals().get(i)` 越界必须是 `null`」新断言 | ✅ 通过（越界 4 个下标 + 有效下标 1 个） | 本次运行 |
+| 「`create` 收到的 `pids` 是本面板的」新断言（§4.13） | ✅ 通过（`blockPos()` 读回 `12\|65\|-34`、`type` 读回 `crt_pids`） | 本次运行 |
+| 「`create` 第三参数为 `null` 时必须抛」新反例（§4.13） | ✅ 通过（复现 `TypeError: Cannot call method "blockPos" of null`） | 本次运行 |
+| `met transit` 的 `met_running_board.js` 单跑 `ScriptApiCheck` × 4 班次数 | ✅ 全部 `RESULT: SCRIPT OK`，站点 id 为真实坐标 | 本次运行 |
+| 脚本沙箱（ClassShutter）开启后仍能跑通全部 16 个用例 | ✅ 通过（首轮 16/16 失败，见 §4.6，修好后全绿） | 本次运行 |
+| **实机运行**（`Minecraft 1.20.1 + Forge 47.4.10 + YMTR 3.6.3`） | ✅ 脚本管线跑通，多个资源包预设同屏渲染，聊天栏无报错 | 见 §7.8、§7.9 |
+
+### 7.8 / 7.9 实机验证记录
+
+两轮实机的逐条记录（颜色与路线图、双格面板、空行、翻牌闪烁、日式外壳、投影仪偏移……）已移到
+[`docs/history/REAL-CLIENT-VALIDATION.md`](docs/history/REAL-CLIENT-VALIDATION.md)，
+正文只保留结论：限制见 §7.6，逐版本的「做了什么 / 没做什么」见 CHANGELOG。
+
+### 7.4 编译通过证明不了的事
+
+`.ps1` 检查覆盖的是脚本 API、JSON 解析与行语义，**覆盖不到矩阵变换**。
+第一次进游戏实测时 PIDS 画面整体向左偏移约 40%，根因是面板原点被从尺寸反推：
+
+```java
+public float panelLeft() { return startX - panelWidth / 2F; }   // 错的
+```
+
+两个渲染器**并不是**把背景以 `startX` 居中画的：
+
+| 渲染器 | 背景实际左边界 | `startX - panelWidth/2` | 误差 |
+|---|---|---|---|
+| `RenderLCDPIDS` | `startX - 21F/2` = `startX - 10.5` | `startX - 111/2` = `startX - 55.5` | 偏左 45 |
+| `RenderRVPIDS` | `startX - 26F/2` = `startX - 13` | `startX - 119/2` = `startX - 59.5` | 偏左 46.5 |
+
+`21F/2` 和 `26F/2` 这两个常数**既不等于背景宽度的一半，两者之间也没有比例关系**——
+它们是原作者硬写的。所以原点必须**逐字照抄**那两个绘制调用，不能推导。
+`PIDSGeometry` 因此改成显式的 `panelOffsetX`，两个渲染器分别传 `-21F/2F` 与 `-26F/2F`。
+
+### 7.5 检查程序为什么不放进 Gradle 的 test 源集
+
+`build.gradle` 的 `allprojects` 块把 `-Xplugin:Manifold` 加到了每一个 `JavaCompile` 任务上，
+而 Manifold 编译器插件在 test 源集上会失败（`找不到符号: Manifold`），导致 `gradle build`
+整体变红。放在 `tools/checks/` 下不进入任何源集，`gradle build` 保持干净。
+
+### 7.6 已知限制
+
+- **1A 型「乘客资讯显示屏」（`jsblock:pids_1a`）在「未选择预设」时会套用铁路愿景（RV PIDS）
+  的版式。** 为了让 1A 接入预设体系，它的渲染器从 MTR 自带的 `RenderPIDS<>` 换成了 YJCM 的
+  `RenderRVPIDS<>`（见附录），而没选预设时走的就是后者内置的那套版式，与方块型号无关——
+  它是这次强制改动带来的副作用，不是渲染错位。**规避方法**：用刷子右键该方块，把「PIDS 预设」
+  改成任意资源包提供的显示格式；之后面板由脚本/布局路径绘制。
+  （`jsblock:pids_4`（LCD）与 `jsblock:pids_rv` 本来就是各自的渲染器，不受影响。）
+- `weather_icon` 不附带任何贴图——MTR 3/YJCM 没有可复用的天气美术资源，
+  必须由预设提供三张纹理，否则该组件自动跳过。
+- `PIDSComponent.COMPONENTS` 只含 JCM 那 11 种组件；组件树里若有未实现的类型，
+  加载时会**一次性告警**并跳过该元素，其余组件照常渲染，不会整份预设失败。
+- 脚本子系统目前只服务 PIDS。JCM 2.x 的 `mtrscripting` 还带 Lift / Vehicle / EyeCandy
+  三套脚本绑定，本分支**未移植**。
+- JCM 2.x 没有 PIDS 脚本文本编辑器，本分支也没有：改预设仍然是编辑资源包里的 `.js`。
+  画面上的 GUI 只有 §4.6 那四件（沙箱开关、限制警告、失败提示、调试浮层）。
+- 脚本的 GPU 绘制路径只有实机才能验证；无头检查覆盖不到像素结果。
+- 第三方预设若不判空就索引 `pids.arrivals().get(i)`，越界时会抛——这与 JCM 2.x 完全一致
+  （它自己也这么做）。引擎会**用占位班次重试一帧**把它救回来（见 §4.4），救不回来才退回
+  预设背景图并报红字。重庆轨道交通包的 `crt_pids_1.js` 属于前者；`yjcm-recon\pids-fixed\`
+  下那份副本补上了判空，是「改预设」这条路的样子，但**不需要**它也能显示。
+- 一处已知的世界观差异：`pids.getCustomMessage(i)` 越界给的是空串，JCM 2.x 给 `null`。
+  范围内的行为两者一致（都是块实体里那条消息，没设过就是空串），而空串对预设更友好。
+
+### 7.7 沙箱检查暴露的一件事：光提名字不等于够得着
+
+写 `ScriptShutterCheck` 的端到端那一半时，第一版断言是这样写的：
+
+```java
+cx.evaluateString(scope, "java.lang.System", ...)   // 期望抛异常，结果没抛
+```
+
+它**没抛**，返回的是 `[JavaPackage java.lang.System]` —— Rhino 里裸写一个类名得到的是
+**懒解析的包对象**，白名单要到真正**碰成员**时才查。也就是说：
+
+> 对裸类名做断言，无论白名单怎么写都会「通过」。这样的测试等于没有。
+
+改成会强制解析的表达式后，四个探针全部被拒：
+
+| 探针 | 结果 |
+|---|---|
+| `java.lang.System.nanoTime()` | 拒绝（`EcmaError`） |
+| `java.lang.Class.forName("java.lang.String")` | 拒绝 |
+| `new java.io.File(".").getName()` | 拒绝 |
+| `java.lang.Runtime.getRuntime().availableProcessors()` | 拒绝 |
+
+结论是**沙箱在使用点确实有效**，此前那次失败是断言写错，不是白名单漏了。这条经验也适用于
+`ScriptApiCheck`：它之所以有价值，是因为它**真的调用** API，而不是检查 API 存在。
+
+### 7.10 2.3 这四项里，哪些只是"推演过"
+
+无头检查能证明的都证明了，以下是**没有**被证明的部分，逐条写明依据与验证方式，避免下一位接手者
+把推断当实测：
+
+| 项 | 现状 | 依据 / 怎么验 |
+|---|---|---|
+| `GraphicsTexture.upload()` 的**真实 GL 路径**（建 `DynamicTexture`、逐像素拷贝、`texture.upload()`） | ❌ 未实测 | 无头 JVM 没有 GL 上下文，检查只跑到降级分支（"there is no client running"）。API 形状（`DynamicTexture(NativeImage)`、`getPixels()`、`setPixelRGBA`、`upload()`、`TextureManager.register/release`、`RenderSystem.isOnRenderThread`）已对 1.20.1 的命名 jar `javap` 逐个确认存在。实机验证方式：脚本里 `upload()` 后把 `canvas.identifier` 贴到面板上，看画布内容是否出现、红蓝是否互换 |
+| ABGR 像素转换（`abgr()`） | ⚠️ 逐行照抄 v2 字节码，未实测 | 若实机发现画布颜色红蓝对调，就是这里 |
+| `close()` → `TextureManager.release()` 的释放 | ⚠️ 代码路径已确认，未实测 | 释放链：`release` → `AbstractTexture.close()` → `DynamicTexture.close()` → `NativeImage.close()`（原生内存）。可实机反复重载资源包并用 F3 观察内存 |
+| 直接路径上的 `ctx.parseComponent` 绘制（`RenderPIDSBase.renderScripted` 里的 `PIDSGraphics`） | ⚠️ 编译 + 代码路径推演，无截图 | 与组件数组路径共用同一份 `PIDSContext`/`PIDSGraphics` 构造（`renderLayout` 已验证过的那套）。实机验证方式：脚本里 `ctx.parseComponent('{"component":"clock",...}').render(ctx)`，看时钟是否出现在面板上 |
+| **像素化（`PIDSPixelatedPanel`）下的 `ctx.parseComponent`** | ⚠️ 同上，且这一条风险最高 | 离屏 pass 用的是同一套 `OffscreenSource`（文本走它正是 `PIDSPixelatedPanel` 存在的理由）；重试那一遍也设置了，否则用过 `parseComponent` 的预设抛一次异常后就再也不会被像素化。**没有实机截图**；若出问题，`drawPixelatedPanel` 的"全有或全无"设计会让面板退回非像素化绘制，不会画错 |
+| `MTRClientData` 里**数据的内容** | ⚠️ 只验证了字段可读与类型 | 无头环境没有 MTR 数据，`STATIONS`/`PLATFORMS` 是空表；检查断言的是「解析到 `mtr.client.ClientData`」与「三个字段读得到」。实机验证方式：脚本里 `MTRClientData.STATIONS.size()` |
+| `ScriptPaths` 对**游戏内资源管理器**的拦截效果 | ⚠️ 拦截点已断言，逃逸本身只在真实目录树上演示 | 无头环境没有资源管理器；`ScriptPathCheck` 用真实目录树证明「不拦就会读到根之外的文件」（负向对照）与「拦了就抛」。游戏内是同一个引用在解析前被拒 |
+| README 里那份"脚本 API 覆盖率"表（机械 `javap` 比对） | ⏳ 未重跑 | 本轮新增了 `ctx.parseComponent` / `MTRClientData` / `GraphicsTexture` / `Resources.readBufferedImage`，表已手工同步，但生成脚本没再跑一遍 |
+
+---
+
+## 8. 与 JCM 2.x 的 API 对照（供后续移植参考）
+| JCM 2.x (MTR 4) | 本分支 (MTR 3) |
+|---|---|
+| `org.mtr.core.operation.ArrivalResponse` | `mtr.data.ScheduleEntry`（`arrivalMillis` / `trainCars` / `routeId` / `currentStationIndex`） |
+| `org.mtr.mapping.holder.*`、`org.mtr.mapping.mapper.*` | 直接用 Minecraft 类 + `mtr.mappings.*` |
+| `GraphicsHolder` / `GuiDrawing` | `PoseStack` + `MultiBufferSource` |
+| `Identifier` | `ResourceLocation` |
+| `org.mtr.mod.render.StoredMatrixTransformations` | `mtr.render.StoredMatrixTransformations` |
+| `org.mtr.mod.client.MinecraftClientData` | `mtr.client.ClientData` |
+| `PIDSPresetBase.BASE_SCALE` | 由 `PIDSLayout` 的 `size` 画布等比换算 |
+| `Text.translatable`（MTR 4） | `mtr.mappings.Text.translatable` |
+| `ComponentParser` / `PIDSComponent.componentList` | 同名接口 / `PIDSComponent.COMPONENTS`（同样可被第三方扩展） |
+| `ScriptPIDSPreset` + `mtrscripting` + 内嵌 Rhino | `ScriptEngine` + `ScriptDrawCalls` + Rhino 1.7.15 依赖 |
+| `PIDSWrapper` / `TextWrapper` / `TextureWrapper` / `RectangleWrapper` | `PIDSWrapper` / `ScriptDrawCalls.Text` / `.Texture` / `.Rectangle` |
+| `ScriptRenderManager` / `ScriptSoundManager` | `ScriptRenderContext`（音效未移植） |
+| `ctx.parseComponent(String)` → `PIDSComponent` | `ScriptRenderContext.parseComponent(String)` → `ScriptComponent`（参数表按本分支的渲染管线改写，见 §4.8） |
+| `MTRClassShutter` 放行 `mtr.*` | `ScriptClassShutter` 只放行 `MTRClientData` 实际交出的 5 个类 |
+| `FilesUtil`（`resolvePathSafe` / `ensurePathNotEscaped`） | `ScriptPaths`（`resolveWithin` / `ensureWithin` 为逐行移植；本分支没有 `Files` 全局） |
+| `GraphicsTexture`（`DynamicTexture` 在构造器里建） | `GraphicsTexture`（同名同 API；GL 纹理改到第一次 `upload()` 才建，并加了上限与重载释放） |
+| `Resources.readBufferedImage(Identifier)` | `Resources.readBufferedImage(Object)`（接受 `Resources.id(...)` 或字符串） |
+
+---
+
+# 附录：1A PIDS（`jsblock:pids_1a`）预设支持
+
+### 目标
+
+让 `jsblock:pids_1a` 像 LCD / RV 型号一样支持「刷子右键切换显示格式（预设）」。
+
+### 改动
+
+只有三处，都能编译、且**界面已在游戏内确认出现**：
+
+```java
+// PIDS1A.java
+public class PIDS1A extends JobanPIDSBase {                       // 原 BlockPIDSBaseHorizontal
+public static class TileEntityBlockPIDS1A
+        extends JobanPIDSBase.TileEntityBlockJobanPIDS { ... }    // 原 ...TileEntityBlockPIDSBaseHorizontal
+
+// JobanClient.java
+new RenderRVPIDS<>(...)                                           // 原 MTR 的 RenderPIDS<>
+renderer.setScriptPanelProfile(-0.47F, -0.155F, -0.112F, 186, 60); // 1A 自己的字面量
+```
+
+**为什么前两行就够**：预设存储、自动切换、消息、站台筛选和它们的 NBT 读写**全部在
+`JobanPIDSBase.TileEntityBlockJobanPIDS` 里**，而它继承的正是 `TileEntityBlockPIDS1A`
+原本用的 `TileEntityBlockPIDSBaseHorizontal`；`JobanPIDSBase.use()` 也已实现了
+「刷子 → 带预设框的配置界面」。1A 只是没接入这个继承体系。
+
+而原渲染器是 MTR 的 `RenderPIDS<>`（配置界面也是 MTR 自带的 `PIDSScreen`，因此**没有预设
+字段**——界面上有「页码」是识别它的标志）。换成 `RenderRVPIDS<>` 后即接入 `RenderPIDSBase`
+的 `renderScripted` 路径。
+
+### 面板偏移问题：已解决
+
+**症状**：1A 经 `RenderRVPIDS` 渲染时走的是基类默认值（= RV 的字面量），
+而 1A 的字面量是 `(-0.47, -0.155, -0.130)`，X 方向差
+`|-0.47 - (-0.21)| = 0.26` 方块——四分之一格的横向偏移足以让面板陷进方块内部。
+
+**解法**：`RenderPIDSBase` 提供可覆写的 `scriptPanelTranslateX/Y/Z()` 与
+`scriptCanvasWidth/Height()`；在 1A 的注册处**用一个泛型实参写明的局部变量接住实例**，
+再调用 `setScriptPanelProfile(...)`：
+
+```java
+final RenderRVPIDS<PIDS1A.TileEntityBlockPIDS1A> renderer =
+        new RenderRVPIDS<>(dispatcher, PIDS1A.TileEntityBlockPIDS1A.MAX_ARRIVALS, ...);
+renderer.setScriptPanelProfile(-0.47F, -0.155F, -0.112F, 186, 60);
+```
+
+Z 值在 JCM 2.x 的 `-0.130` 基础上向方块内侧收回 **0.018**，即 `-0.112`。
+
+### 两次失败的接法（勿重复）
+
+两次都在类型系统上失败，均**已回退、构建保持绿色**：
+
+| 尝试 | 写法 | 报错 |
+|---|---|---|
+| 1 | 块 lambda + 声明 `RenderRVPIDS<PIDS1A.TileEntityBlockPIDS1A> renderer = new RenderRVPIDS<>(...)`，再调 setter | `JobanClient.java:86: 无法推断 RenderRVPIDS<> 的类型参数` |
+| 2 | 让 `setScriptPanelProfile` 返回 `this` 并链式调用 `new RenderRVPIDS<>(...).setScriptPanelProfile(...)` | `JobanClient.java:85: 找不到符号` |
+
+**失败原因**：两次都建立在「`RenderRVPIDS` 有一个与 MTR `RenderPIDS` 同形的 13 参数
+构造函数」这一**未经核实的假设**上。该行最初能编译，是因为 `new RenderPIDS<>(...)` 与
+`new RenderRVPIDS<>(...)` 在**替换时**恰好都通过；但一旦需要接住实例（声明变量或链式
+调用），类型推断就暴露了假设不成立。
+
+**教训**：先一次读完构造函数重载、`RegistryClient.registerTileEntityRenderer(...)` 的
+参数类型、以及能编译的那四行（LCD / RV / RV-SIL）的确切写法，再动手。
+
+### 备份与回滚点
+
+```
+tag                 backup-before-pids1a-config   （1A 改动之前的最后一版）
+branch              backup/pids1a-start
+jar 备份            yjcm-recon\backup-jar\
+```
+
+回滚 1A 全部改动：
+
+```powershell
+git checkout backup-before-pids1a-config -- common/src/main/java/com/jsblock/block/PIDS1A.java
+git checkout backup-before-pids1a-config -- common/src/main/java/com/jsblock/JobanClient.java
+```
+
