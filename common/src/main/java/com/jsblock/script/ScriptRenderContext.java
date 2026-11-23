@@ -1,0 +1,664 @@
+package com.jsblock.script;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
+import net.minecraft.core.Direction;
+import mtr.data.IGui;
+import mtr.render.MoreRenderLayers;
+import org.joml.Matrix4f;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Per-frame render state handed to a PIDS script as its {@code ctx} argument.
+ *
+ * <p>Ported from JCM 2.x's {@code PIDSScriptContext}, reduced to what PIDS scripts actually
+ * touch. JCM 2.x queues draw calls and replays them afterwards so it can sort them by
+ * z-order and cache panels for distant blocks; on MTR 3 the panel is drawn during the
+ * block-entity pass anyway, so calls execute immediately and layering is reproduced by
+ * giving each successive call a slightly larger depth offset — the same {@code 0.0002}
+ * step JCM 2.x uses.</p>
+ *
+ * <h2>Coordinate space</h2>
+ * <p>Scripts position everything in JCM 2.x's unit: {@code 1/96} of a block
+ * ({@code PIDSPresetBase.BASE_SCALE}). {@code pos(0, 0)} is the panel's top-left corner and
+ * {@code pids.width} x {@code pids.height} is the panel's size in those units, so a preset
+ * authored for a 128x72 panel keeps its proportions.</p>
+ *
+ * <p>JCM 2.x can hard-code {@code 1/96} because its matrix stack is already in block space.
+ * MTR 3's block-entity renderers hand us a stack scaled by {@code 1/geometry.scale} instead,
+ * so the multiplier is supplied as {@link #scriptScale} and is computed by the caller as
+ * {@code geometry.scale / 96}. Drawing at script coordinate {@code s} therefore lands at
+ * world offset {@code s/96} blocks, exactly as in JCM 2.x.</p>
+ */
+public class ScriptRenderContext {
+
+	/**
+	 * Depth step between successive draw calls, in <b>script units</b>, applied as a
+	 * <b>negative</b> offset. JCM 2.x's own value ({@code zOrderStep = 0.0002} in
+	 * {@code PIDSScriptContext}), in its unit.
+	 *
+	 * <p>The panel is drawn inside a space that has been rotated 180 degrees about Z, so
+	 * positive Z points <em>into</em> the block — the same reason YJCM's own renderers pull
+	 * their geometry out with a negative {@code SMALL_OFFSET}. Offsetting later calls
+	 * <em>outward</em> therefore separates them from the background without burying them
+	 * behind it.</p>
+	 *
+	 * <h2>Why this went up by 500x and came back</h2>
+	 * <p>One script unit is 1/96 block, so JCM 2.x's step is 2e-6 blocks — far below anything
+	 * the depth buffer can resolve. That was fine in JCM 2.x, which queues its draws and replays
+	 * them in order. This port used to hand its quads to the block entity's buffer instead,
+	 * where they were sorted by distance and drawn as one batch, and 2e-6 blocks was too little
+	 * to keep the background, the advert and the text from resolving differently from frame to
+	 * frame: the panel flickered. The step was raised to {@code -0.1} (about 0.001 blocks) to
+	 * force the order.</p>
+	 *
+	 * <p>That workaround cost more than it bought. Every call moved a little further out, and a
+	 * preset that draws a row as several elements — {@code met_bus_stop} and most of the
+	 * Japanese-style packs do — accumulated it into a visible staircase, one row per step, with
+	 * forty calls reaching 4 cm.</p>
+	 *
+	 * <p>Quads are no longer batched at all ({@link #beginQuad}), so the order is the call order
+	 * and nothing competes for depth. The step is back to JCM 2.x's value: it only has to keep
+	 * the calls nominally apart, not to settle a sort.</p>
+	 */
+	public static final float Z_ORDER_STEP = -0.0002F;
+
+	public final PoseStack matrices;
+	public final MultiBufferSource vertexConsumers;
+	/**
+	 * Where the script's text goes. A caller drawing into its own framebuffer supplies a
+	 * {@code BufferSource} subclass whose {@code getBuffer} keeps the text out of the world; the
+	 * font renderer's signature requires this type, so the interface alone will not do.
+	 */
+	public final MultiBufferSource.BufferSource immediate;
+	public final Direction facing;
+	/** Packed light value; a PIDS panel is emissive so callers pass {@code MAX_LIGHT_GLOWING}. */
+	public final int light;
+	/** Panel width in script units, exposed to scripts as {@code pids.width}. */
+	public final int panelWidth;
+	/** Panel height in script units, exposed to scripts as {@code pids.height}. */
+	public final int panelHeight;
+	/** Multiplier converting script units into the caller's local drawing units. */
+	public final float scriptScale;
+
+	/** The sound manager handed to scripts by getSoundManager(). */
+	private final ScriptSound.SoundManager soundManager = new ScriptSound.SoundManager();
+
+	/** Index of the next draw call, used to derive its depth offset. */
+	private int drawCallIndex = 0;
+	/** Set from {@code ctx.setAutoZOrdering(false)}; draw calls then share one depth. */
+	private boolean autoZOrdering = true;
+	private double zOrderStep = Z_ORDER_STEP;
+
+	/**
+	 * When set, {@link #draw(Object)} records what would have been drawn instead of touching
+	 * Minecraft's renderer.
+	 *
+	 * <p>Two callers set it. The headless API check uses {@link #dryRun} to run real preset
+	 * scripts through the real wrappers without a game, and the asynchronous engine uses
+	 * {@link #recording} to capture a frame's calls on the script thread so the render thread can
+	 * replay them; see {@link RecordedCall}.</p>
+	 */
+	private final boolean recording;
+	/** The calls captured while {@link #recording} is set, in call order. */
+	private final List<RecordedCall> recordedCalls;
+
+	/**
+	 * Whether this frame's draw calls should also be described into {@link #traceCalls}.
+	 *
+	 * <p>Set from {@link #tracingEnabled()} when the context is built. Kept off by default:
+	 * building a description per call costs a {@code String.format} each, which a PIDS that
+	 * redraws several times a frame should not pay for unasked.</p>
+	 */
+	private final boolean tracing;
+	/** Descriptions of this frame's calls, in call order; {@code null} when not tracing. */
+	private final List<String> traceCalls;
+
+	public ScriptRenderContext(PoseStack matrices, MultiBufferSource vertexConsumers,
+							   MultiBufferSource.BufferSource immediate, Direction facing, int light,
+							   int panelWidth, int panelHeight, float scriptScale) {
+		this(matrices, vertexConsumers, immediate, facing, light, panelWidth, panelHeight, scriptScale, false);
+	}
+
+	private ScriptRenderContext(PoseStack matrices, MultiBufferSource vertexConsumers,
+								MultiBufferSource.BufferSource immediate, Direction facing, int light,
+								int panelWidth, int panelHeight, float scriptScale, boolean recording) {
+		this.matrices = matrices;
+		this.vertexConsumers = vertexConsumers;
+		this.immediate = immediate;
+		this.facing = facing;
+		this.light = light;
+		this.panelWidth = panelWidth;
+		this.panelHeight = panelHeight;
+		this.scriptScale = scriptScale;
+		this.recording = recording;
+		this.recordedCalls = recording ? new ArrayList<>() : null;
+		this.tracing = !recording && tracingEnabled();
+		this.traceCalls = tracing ? new ArrayList<>() : null;
+	}
+
+	/**
+	 * @return whether scripts should have their draw calls described each frame.
+	 *
+	 * <p>Two switches, either of which is enough: the script debug switch in the config
+	 * screen, and the {@code jsblock.pids.trace} system property for a launch that should
+	 * trace without touching the player's config.</p>
+	 */
+	private static boolean tracingEnabled() {
+		try {
+			return com.jsblock.client.ClientConfig.getScriptDebugMode()
+					|| Boolean.getBoolean("jsblock.pids.trace");
+		} catch (Throwable t) {
+			/* The headless checks build contexts without ever loading the config. */
+			return Boolean.getBoolean("jsblock.pids.trace");
+		}
+	}
+
+	/** @return whether this context is recording the calls handed to it. */
+	public boolean isTracing() {
+		return tracing;
+	}
+
+	/**
+	 * @return a one-line description of every call drawn so far this frame, in call order, or
+	 * an empty list when tracing is off.
+	 */
+	public List<String> traceCalls() {
+		return traceCalls == null ? Collections.emptyList() : traceCalls;
+	}
+
+	/**
+	 * Builds a context that records draw calls instead of rendering them.
+	 *
+	 * <p>Everything except the final draw goes through the real code path, so a script that
+	 * calls a wrapper method this port does not implement fails here exactly as it would in
+	 * game — which is what makes this usable as a headless check.</p>
+	 *
+	 * <p>{@code ctx.parseComponent(...)} is part of that path, so a headless context carries an
+	 * empty panel's data: no world, no arrivals, no custom messages. A script that parses a
+	 * component still gets a component, still gets its rectangle, and still reaches the recording
+	 * half — and one that asks {@code canRender()} gets the same answer the JSON path would give on
+	 * a panel with no data, which is what the check asserts.</p>
+	 */
+	public static ScriptRenderContext dryRun(int panelWidth, int panelHeight, float scriptScale) {
+		final ScriptRenderContext context =
+				new ScriptRenderContext(null, null, null, null, 0, panelWidth, panelHeight, scriptScale, true);
+		context.componentContext = new com.jsblock.pids.PIDSContext(null, net.minecraft.core.BlockPos.ZERO,
+				Direction.NORTH, new String[0], Collections.emptyList(), Collections.emptyList(),
+				new boolean[0], 0D, 0L);
+		return context;
+	}
+
+	/**
+	 * Builds a context that captures a frame's draw calls for the asynchronous engine.
+	 *
+	 * <p>Only immutable frame data is held: the panel size, the facing and light the replay will
+	 * use, and the frame's {@link com.jsblock.pids.PIDSContext} for {@code ctx.parseComponent}.
+	 * There are no matrices, vertex sources or graphics because nothing is drawn on this context;
+	 * the render thread replays the captured calls into a live one.</p>
+	 *
+	 * <p>Safe to hand to a script thread: this object is written by that thread alone until the
+	 * completed list is published through {@code ScriptInstance.lastCalls}.</p>
+	 */
+	public static ScriptRenderContext recording(int panelWidth, int panelHeight, float scriptScale,
+												Direction facing, int light,
+												com.jsblock.pids.PIDSContext componentContext) {
+		final ScriptRenderContext context = new ScriptRenderContext(
+				null, null, null, facing, light, panelWidth, panelHeight, scriptScale, true);
+		context.componentContext = componentContext;
+		return context;
+	}
+
+	/** @return the descriptions recorded in dry-run mode, in call order. */
+	public List<String> recordedCalls() {
+		if (recordedCalls == null) {
+			return Collections.emptyList();
+		}
+		final List<String> descriptions = new ArrayList<>(recordedCalls.size());
+		for (RecordedCall call : recordedCalls) {
+			descriptions.add(call.describe());
+		}
+		return Collections.unmodifiableList(descriptions);
+	}
+
+	/** @return whether this context captures draw calls instead of executing them. */
+	public boolean isRecording() {
+		return recording;
+	}
+
+	/**
+	 * @return the captured calls themselves, in call order, as an immutable snapshot.
+	 *
+	 * <p>The list is copied so that a later {@link #restartDrawCalls()} on a recording context
+	 * cannot change a list another thread is already holding.</p>
+	 */
+	public List<RecordedCall> recordedCallList() {
+		return recordedCalls == null ? Collections.emptyList() : List.copyOf(recordedCalls);
+	}
+
+	/**
+	 * Replays a captured frame into this (live) context, in order.
+	 *
+	 * <p>The depth stored in each call is used as-is, not recomputed: {@code setAutoZOrdering} and
+	 * {@code setZOrderStep} were applied when the frame was recorded, so replaying must not apply
+	 * the frame's call order to them a second time.</p>
+	 */
+	public void replay(List<RecordedCall> calls) {
+		if (calls == null) {
+			return;
+		}
+		for (RecordedCall call : calls) {
+			call.replay(this);
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// API exposed to scripts
+	// ------------------------------------------------------------------
+
+	/** {@code ctx.setAutoZOrdering(false)} — stop giving each draw call its own depth. */
+	public void setAutoZOrdering(boolean autoZOrdering) {
+		this.autoZOrdering = autoZOrdering;
+	}
+
+	/** {@code ctx.setZOrderStep(f)} — change the depth step between draw calls. */
+	/**
+	 * {@code PIDSScriptContext.getSoundManager()} -- plays sounds for this script.
+	 *
+	 * <p>One per context, as the docs describe; the caller does not have to hold on to it.</p>
+	 */
+	public ScriptSound.SoundManager getSoundManager() {
+		return soundManager;
+	}
+
+	public void setZOrderStep(double distance) {
+		this.zOrderStep = distance;
+	}
+
+	/**
+	 * Rewinds the per-call depth counter and forgets the calls recorded so far.
+	 *
+	 * <p>Used when a frame is retried — see {@code RenderPIDSBase.renderScripted}. Without it
+	 * the second attempt would stack a second copy of everything <em>behind</em> the copy the
+	 * first attempt had already drawn: the retry has to land on the same depths, where a
+	 * repeated call is the same geometry at the same place rather than a competing layer.</p>
+	 */
+	public void restartDrawCalls() {
+		drawCallIndex = 0;
+		if (traceCalls != null) {
+			traceCalls.clear();
+		}
+		/* The retry redraws the whole frame, so the failed attempt's partially-recorded calls must
+		   go too; otherwise a replay would draw the first attempt's prefix a second time. */
+		if (recordedCalls != null) {
+			recordedCalls.clear();
+		}
+	}
+
+	/**
+	 * How many draw calls this context has been handed since it was made.
+	 *
+	 * <p>For the pixelation diagnostic: an offscreen pass that reports the right number of calls
+	 * and a still-black target has a sampling problem, while one that reports none never ran.</p>
+	 */
+	public int drawCallCount() {
+		return drawCallIndex;
+	}
+
+	/**
+	 * One quad buffer for the whole script engine, begun and drained per draw call.
+	 *
+	 * <p>Only ever touched on the render thread, and only between a {@link #beginQuad} and its
+	 * matching {@link #endQuad}, so a single shared builder is enough — and it keeps the engine
+	 * from allocating one per panel per frame.</p>
+	 */
+	private static BufferBuilder SCRIPT_QUADS;
+
+	/**
+	 * Starts a quad in {@code layer} in the script engine's <b>own</b> buffer and returns the
+	 * consumer to write it to. Pair every call with {@link #endQuad}.
+	 *
+	 * <h2>Why the panel does not use the block-entity buffer source</h2>
+	 * <p>Scripts draw a full-panel background and then small overlays on top of it, and expect
+	 * each call to land on top of the one before — that is what JCM 2.x's queued renderer
+	 * gives them. Neither way of going through the {@code MultiBufferSource} handed to the
+	 * block entity does:</p>
+	 *
+	 * <ul>
+	 *   <li>MTR's light layer is {@code RenderType.beaconBeam(texture, true)}, built with
+	 *       {@code sortOnUpload = true} and a {@code COLOR_WRITE} write-mask. It sorts the
+	 *       quads it is given by distance from the camera and draws them without writing depth,
+	 *       so a small overlay whose centre is farther away than the panel's centre is painted
+	 *       <em>first</em> and then covered by the background. Which overlays survive depends
+	 *       on where the player stands.</li>
+	 *   <li>Mods that take over entity rendering are free to group those quads into their own
+	 *       batches. <i>Accelerated Rendering</i>, for one, mixes into
+	 *       {@code MultiBufferSource.BufferSource.getBuffer} and hands back its own consumer,
+	 *       so the quads never reach a buffer that {@code endBatch} could flush in order — on a
+	 *       pack with that mod installed, every overlay vanished and only the background was
+	 *       left, from every angle.</li>
+	 * </ul>
+	 *
+	 * <p>Going through a buffer of our own and drawing it immediately fixes both: a batch
+	 * holding one quad cannot be reordered, and no other mod ever gets a say in it. The text
+	 * path already worked this way by accident — it draws through MTR's immediate source, which
+	 * is not the one the block-entity pass is given.</p>
+	 *
+	 * <p>The cost is one draw call per quad instead of one per layer per frame, which for a
+	 * handful of overlays per panel is not worth trading the layering for.</p>
+	 */
+	public VertexConsumer beginQuad(RenderType layer) {
+		if (SCRIPT_QUADS == null) {
+			SCRIPT_QUADS = new BufferBuilder(1536);
+		}
+		SCRIPT_QUADS.begin(VertexFormat.Mode.QUADS, layer.format());
+		return SCRIPT_QUADS;
+	}
+
+	/**
+	 * Draws the quad {@link #beginQuad} started, now.
+	 *
+	 * <p>Normally through {@code RenderType.end}, which sets the layer's state up, uploads and clears
+	 * it again in one go. A caller drawing into its own framebuffer supplies an {@link QuadUploader}
+	 * instead, because {@code RenderType}'s state setup ends by binding the layer's <em>output</em>
+	 * target, and for every layer Minecraft builds that is the main one: a quad drawn through
+	 * {@code end} lands in the world no matter which framebuffer was bound beforehand. The uploader
+	 * puts the caller's target back between the two steps, which is the only order that works.</p>
+	 */
+	/**
+	 * Draws one {@code QuadDrawCall}.
+	 *
+	 * <p>The vertices arrive in blocks and the script matrix is in 1/96-block units, so they are
+	 * scaled by 96 here — the same conversion the pack author already did by writing
+	 * {@code -32 / 96} for a 32-unit offset.</p>
+	 */
+	void drawQuad(ScriptQuadDrawCall call, float z) {
+		final RenderType layer = MoreRenderLayers.getLight(call.textureId(), true);
+		final VertexConsumer vertexConsumer = beginQuad(layer);
+		final Matrix4f pose = matrices.last().pose();
+		final int argb = call.color() | 0xFF000000;
+		final float red = ((argb >> 16) & 0xFF) / 255F;
+		final float green = ((argb >> 8) & 0xFF) / 255F;
+		final float blue = (argb & 0xFF) / 255F;
+		final float alpha = ((argb >>> 24) & 0xFF) / 255F;
+		final float nx = call.normal().x();
+		final float ny = call.normal().y();
+		final float nz = call.normal().z();
+		final float[] us = {0F, 1F, 1F, 0F};
+		final float[] vs = {0F, 0F, 1F, 1F};
+
+		for (int i = 0; i < 4; i++) {
+			final ScriptMath.Vector3f vertex = call.vertex(i);
+			/* JCM 2.x runs its quad through rotateXDegrees(-180) before drawing, because the
+			   block-space vertices have y up and +z towards the viewer while this port's script
+			   space has y down and -z towards the viewer. Applying the same half-turn here is what
+			   keeps the shell around the panel instead of mirrored through it. */
+			vertexConsumer.vertex(pose,
+							vertex.x() / ScriptDrawCall.BASE_SCALE,
+							-vertex.y() / ScriptDrawCall.BASE_SCALE,
+							-vertex.z() / ScriptDrawCall.BASE_SCALE + z)
+					.color(red, green, blue, alpha)
+					.uv(us[i], vs[i])
+					.overlayCoords(0)
+					.uv2(IGui.MAX_LIGHT_GLOWING)
+					.normal(nx, ny, nz)
+					.endVertex();
+		}
+
+		endQuad(layer);
+	}
+
+	/** {@code ctx.renderManager()} — the JCM 2.x door to the 3D draw calls. */
+	public ScriptRenderManager renderManager() {
+		if (renderManager == null) {
+			renderManager = new ScriptRenderManager(this);
+		}
+		return renderManager;
+	}
+
+	public void endQuad(RenderType layer) {
+		if (SCRIPT_QUADS == null) {
+			return;
+		}
+		if (quadUploader != null) {
+			quadUploader.upload(layer, SCRIPT_QUADS);
+			return;
+		}
+		layer.end(SCRIPT_QUADS, RenderSystem.getVertexSorting());
+	}
+
+	/**
+	 * Uploads one finished layer, in the caller's own framebuffer.
+	 *
+	 * <p>Implementations must run the layer's state setup, re-bind the target afterwards — the setup
+	 * binds the main one — and only then upload.</p>
+	 */
+	public interface QuadUploader {
+		void upload(RenderType layer, BufferBuilder builder);
+	}
+
+	/** Set to draw through an {@link QuadUploader} rather than straight into the world. */
+	private QuadUploader quadUploader = null;
+	private ScriptRenderManager renderManager;
+
+	/** @see QuadUploader */
+	public void setQuadUploader(QuadUploader uploader) {
+		this.quadUploader = uploader;
+	}
+
+	/** {@code ctx.draw(call)} — draws a {@code Text}/{@code Texture}/{@code Rectangle}. */
+	public void draw(Object call) {
+		/* A parsed component is a legitimate thing to hand to draw(): JCM 2.x's own draw() takes an
+		   Object and accepts the draw-call wrappers, and a script author who has just written
+		   ctx.parseComponent(...) reaches for ctx.draw(...) next. Both spellings land in the same
+		   place. */
+		if (call instanceof ScriptComponent) {
+			renderComponent((ScriptComponent) call);
+			return;
+		}
+		if (!(call instanceof ScriptDrawCall)) {
+			throw new IllegalArgumentException(
+					"ctx.draw() expects a Text/Texture/Rectangle or a ctx.parseComponent(...) result, got "
+							+ (call == null ? "null" : call.getClass().getName()));
+		}
+		final ScriptDrawCall drawCall = (ScriptDrawCall) call;
+		drawCall.validate();
+		final float z = autoZOrdering ? (float) (drawCallIndex++ * zOrderStep) : 0F;
+		accept(drawCall, z);
+	}
+
+	/**
+	 * Records or draws one already-validated call at a fixed depth.
+	 *
+	 * <p>This is the single seam both the inline path and a replay go through. Recording it stores
+	 * a {@link RecordedCall} built from the builder's current field values; executing it keeps the
+	 * original code path, including the per-call statistics and the trace, untouched.</p>
+	 */
+	private void accept(ScriptDrawCall<?> drawCall, float z) {
+		drawCall.z = z;
+		if (recording) {
+			/* The depth is captured too: without it every recorded call would describe itself as
+			   z=0 and replay would stack everything at the same depth. */
+			recordedCalls.add(RecordedCall.of(drawCall, z));
+			return;
+		}
+		if (tracing) {
+			traceCalls.add(drawCall.describe());
+		}
+		/* Section C of the frame statistics: the geometry this call draws, here and now. During a
+		   replay this is the queued call being executed, which is the same work JCM 2.x does in its
+		   replay pass. */
+		final long drawStart = PidsFrameStats.mark();
+		drawCall.draw(this, z);
+		PidsFrameStats.noteDrawCall(PidsFrameStats.mark() - drawStart);
+	}
+
+	/**
+	 * Replays one captured call, counting it in this context's call index.
+	 *
+	 * <p>Package-private: the only caller is {@link RecordedCall#replay(ScriptRenderContext)}, so a
+	 * replay cannot accidentally go through {@link #draw(Object)} and have its depth recomputed.</p>
+	 */
+	void acceptRecorded(ScriptDrawCall<?> drawCall, float z) {
+		drawCallIndex++;
+		accept(drawCall, z);
+	}
+
+	// ------------------------------------------------------------------
+	// ctx.parseComponent(jsonString) -- JCM 2.x's declarative components, from a script
+	// ------------------------------------------------------------------
+
+	/**
+	 * The frame's panel data, so a parsed component can be asked the same questions a JSON preset
+	 * asks it. Supplied by the caller; {@code null} until it is, which only the headless check
+	 * sees.
+	 */
+	private com.jsblock.pids.PIDSContext componentContext;
+
+	/**
+	 * The render state a parsed component draws through.
+	 *
+	 * <p>Deliberately the same bundle the {@code components} array path builds in
+	 * {@code RenderPIDSBase.renderLayout}: the same panel matrices, the same vertex source and the
+	 * same immediate source for text. A component drawn from a script therefore lands on the panel
+	 * exactly where the same JSON would put it, and a preset can be moved between the two spellings
+	 * without redrawing itself.</p>
+	 */
+	private com.jsblock.pids.PIDSGraphics componentGraphics;
+
+	/**
+	 * Hands the context the panel data and render state {@code ctx.parseComponent} needs.
+	 *
+	 * <p>Called by the renderer once per frame, after the panel transform is on the stack, because
+	 * {@link com.jsblock.pids.PIDSGraphics} carries the live {@link PoseStack}.</p>
+	 */
+	public void setComponentSupport(com.jsblock.pids.PIDSContext context,
+									com.jsblock.pids.PIDSGraphics graphics) {
+		this.componentContext = context;
+		this.componentGraphics = graphics;
+	}
+
+	/**
+	 * {@code ctx.parseComponent(jsonString)} — parses one JCM 2.x component declaration.
+	 *
+	 * <p>Port of {@code PIDSScriptContext.parseComponent(String)}: the string goes through Gson into
+	 * {@code PIDSComponent.parse(JsonObject)}, which reads {@code component}, {@code x}, {@code y},
+	 * {@code width} and {@code height} and looks the type up in the registry — so every component
+	 * this branch implements, and every one a mod adds to
+	 * {@link com.jsblock.pids.PIDSComponent#COMPONENTS}, is reachable from a script.</p>
+	 *
+	 * <p>A declaration that cannot be used is refused with a message naming the problem rather than
+	 * a {@code null}: {@code PIDSComponent.parse} answers an unknown type with {@code null} and a
+	 * logged warning, because a JSON <em>preset</em> must keep loading the rest of its components,
+	 * but a script that receives {@code null} fails later with "cannot call method render of null"
+	 * and the author never sees the word "unknown".</p>
+	 *
+	 * @throws IllegalArgumentException when the string is not JSON, is not an object, names no
+	 *                                  component, or names one this build does not know
+	 */
+	public ScriptComponent parseComponent(String json) {
+		if (json == null || json.trim().isEmpty()) {
+			throw new IllegalArgumentException(
+					"ctx.parseComponent() needs a JSON object such as {\"component\":\"clock\"}");
+		}
+		final com.google.gson.JsonObject object;
+		try {
+			final com.google.gson.JsonElement parsed = com.google.gson.JsonParser.parseString(json);
+			if (!parsed.isJsonObject()) {
+				throw new IllegalArgumentException(
+						"ctx.parseComponent() expects a JSON object, got "
+								+ (parsed.isJsonArray() ? "an array" : "a " + parsed.getClass().getSimpleName()));
+			}
+			object = parsed.getAsJsonObject();
+		} catch (IllegalArgumentException typeError) {
+			throw typeError;
+		} catch (Exception syntaxError) {
+			throw new IllegalArgumentException(
+					"ctx.parseComponent() could not parse the JSON: " + syntaxError.getMessage());
+		}
+		if (!object.has("component") || !object.get("component").isJsonPrimitive()) {
+			throw new IllegalArgumentException(
+					"ctx.parseComponent() needs a \"component\" key naming the type, e.g. "
+							+ "{\"component\":\"clock\",\"x\":0,\"y\":0,\"width\":40,\"height\":10}");
+		}
+		final String type = object.get("component").getAsString();
+		final com.jsblock.pids.PIDSComponent component = com.jsblock.pids.PIDSComponent.parse(object);
+		if (component == null) {
+			throw new IllegalArgumentException("ctx.parseComponent(): unknown component \"" + type
+					+ "\". Known types: "
+					+ String.join(", ", com.jsblock.pids.PIDSComponent.COMPONENTS.keySet()));
+		}
+		return new ScriptComponent(component, type, componentContext);
+	}
+
+	/**
+	 * Draws a parsed component, giving it the same depth step a draw call would get.
+	 *
+	 * <p>Without the step a component would land at the same depth as the call before it — normally
+	 * the preset's own background — and the two would resolve in whatever order the layer's sort
+	 * produced. The step is the autoz-ordered one {@link #draw} uses, so a component takes its turn
+	 * in the script's call order like any other element.</p>
+	 *
+	 * <p>In dry-run mode nothing is drawn and the component describes itself instead, which is what
+	 * makes the whole path — parse, wrap, hand over, and the geometry that would be used — checkable
+	 * without a game.</p>
+	 */
+	public void renderComponent(ScriptComponent component) {
+		if (component == null) {
+			throw new IllegalArgumentException("ctx.draw() was given no component");
+		}
+		final float z = autoZOrdering ? (float) (drawCallIndex++ * zOrderStep) : 0F;
+		acceptComponent(component, z);
+	}
+
+	/** The recording/execution seam for a parsed component; see {@link #accept}. */
+	private void acceptComponent(ScriptComponent component, float z) {
+		if (recording) {
+			recordedCalls.add(RecordedCall.ofComponent(component, z));
+			return;
+		}
+		if (tracing) {
+			traceCalls.add(component.describe());
+		}
+		/* A component declares its own rectangle and draws through the panel's own graphics, so the
+		   only transform the engine adds is the depth step. */
+		if (componentGraphics == null) {
+			throw new IllegalStateException(
+					"ctx.parseComponent() is not available for this panel; no render state was set");
+		}
+		componentGraphics.matrices.pushPose();
+		componentGraphics.matrices.translate(0F, 0F, z);
+		final long drawStart = PidsFrameStats.mark();
+		try {
+			component.draw(componentContext, componentGraphics);
+		} finally {
+			PidsFrameStats.noteDrawCall(PidsFrameStats.mark() - drawStart);
+			componentGraphics.matrices.popPose();
+		}
+	}
+
+	/**
+	 * Replays a captured component at its recorded depth.
+	 *
+	 * <p>The component object is the immutable parsed declaration; the frame data comes from this
+	 * context, which is why a record never keeps the {@code PIDSContext} of the frame it was made
+	 * in. On a recording context the component is captured again, which is what the round-trip
+	 * check uses.</p>
+	 */
+	void replayComponent(com.jsblock.pids.PIDSComponent component, String type, float z) {
+		drawCallIndex++;
+		if (recording) {
+			recordedCalls.add(new RecordedCall.ComponentCall(component, type, z));
+			return;
+		}
+		acceptComponent(new ScriptComponent(component, type, componentContext), z);
+	}
+}
