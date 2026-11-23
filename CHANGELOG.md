@@ -154,7 +154,21 @@ Verified against the real pack: `kamino_jp_pids.js` now emits five `Quad` calls 
 * HKR's flip board no longer flickers: both faces of a panel replay one recorded frame, and a
   canvas snapshots its pixels before the upload is queued.
 
-## 维护性 / Maintainability
+## 1.3.0 新功能 / New in 1.3.0
+
+* **投影仪支持到站与发车自动切换。** 投影仪的方块实体本来就继承 `TileEntityBlockJobanPIDS`，九个字段、
+  NBT 与同步都是现成的，渲染器也早已为它解析自动切换预设——缺的只是界面和它自己的两个网络包。现在
+  投影仪界面和 1A/LCD、RV 一样有这两段，用同一套缩略图选择。旧版界面里没有这两段，但从旧版界面保存
+  会把原值原样带回，不会把功能关掉。
+* 投影仪的列表分区改用独立标题「乘客资讯显示屏投影仪」。此前它复用所有 PIDS 界面共用的
+  `category.pids`，于是窗口标题写着投影仪、分区标题却没有。
+* 行内复选框不再重复绘制标签。`WidgetBetterCheckbox` 继承原版 `Checkbox`，`render()` 会把自身
+  message 画在方框右侧；这些行左边已有标签，于是右边多出一份被裁切的文字。改为 `Component.empty()`
+  （与设置界面 `checkboxForConfig` 的写法一致）。
+
+## Maintainability
+
+
 
 这一版同时做了一次面向"人接手"的整理，功能行为不变：
 

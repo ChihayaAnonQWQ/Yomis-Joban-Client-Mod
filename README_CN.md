@@ -131,7 +131,7 @@ Yomi's Joban Client Mod（简称 YJCM）是一个基于 [Minecraft Transit Railw
 |---|---|
 | `jsblock:pids_1a`、`jsblock:pids_4`（LCD PIDS） | Joban PIDS 界面：显示格式（预设，从缩略图选择界面里挑）、月台筛选、逐行自定义信息 + 隐藏行、自动切换（发车另有一套自动切换） |
 | `jsblock:pids_rv`、`jsblock:pids_rv_sil`、`jsblock:pids_rv_sil_2` | RV PIDS 界面，字段相同，另外多一个「隐藏月台号」 |
-| `jsblock:pids_projector` | 投影仪自己的界面：显示格式（缩略图选择）、偏移、旋转、缩放、逐行信息、逐行隐藏、隐藏月台号、月台筛选 |
+| `jsblock:pids_projector` | 投影仪自己的界面：显示格式（缩略图选择）、偏移、旋转、缩放、逐行信息、逐行隐藏、隐藏月台号、月台筛选，以及和其它 PIDS 界面一样的到站 / 发车自动切换 |
 | 模组本身 | `ConfigScreen` —— Fabric 从 ModMenu 进，Forge 从模组列表进。客户端设置都在这里，包括脚本调试开关 |
 
 > **不是每块板子都能给自定义信息。** 上游 JCM 2.x 自己也有几个 PIDS 界面不提供信息输入框 —— MTR 4 上一样 ——
@@ -199,6 +199,9 @@ MTR 3 上，本 fork 就是还在继续做 PIDS 的那条线。
 执行；`-Djsblock.pids.canvasStats=true` 会输出帧内分段与当前模式。
 
 ### PIDS 投影仪
+
+投影仪和那些板子一样有自动切换：列车到站前 N 秒切到指定显示格式，发车前 N 秒切回来（或一直保持到车门
+关闭）。这些设置存在方块上而不是界面上，重启后仍在。
 
 JCM 2.x 的 PIDS 投影仪已移植：`jsblock:pids_projector` 把一块乘客资讯面板投到空中，投在哪由你摆。
 

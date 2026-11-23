@@ -138,7 +138,7 @@ Each row is expanded further down; this is the map.
 |---|---|
 | `jsblock:pids_1a`, `jsblock:pids_4` (the LCD PIDS) | the Joban PIDS screen: display format (preset, chosen from a thumbnail picker), platform filter, per-row custom text + hide row, auto-switch (and a second auto-switch for departures) |
 | `jsblock:pids_rv`, `jsblock:pids_rv_sil`, `jsblock:pids_rv_sil_2` | the RV PIDS screen, the same fields plus hide-platform-numbers |
-| `jsblock:pids_projector` | the projector's own screen: display format (thumbnail picker), offset, rotation, scale, per-row text, per-row hide, hide-platform-numbers, platform filter |
+| `jsblock:pids_projector` | the projector's own screen: display format (thumbnail picker), offset, rotation, scale, per-row text, per-row hide, hide-platform-numbers, platform filter, and the same arrival / departure automatic preset switching the other PIDS screens have |
 | the mod itself | `ConfigScreen` -- from ModMenu on Fabric, from the mods list on Forge. The client settings live here, including the script debug switch |
 
 > **Not every board can be given its own text.** A few of JCM 2.x's own PIDS screens do not offer the
@@ -214,6 +214,10 @@ and the calling pattern are resolved in its constructor), so the script thread n
 inline execution; `-Djsblock.pids.canvasStats=true` shows the per-frame breakdown and the mode.
 
 ### PIDS Projector
+
+The projector has the same automatic preset switching as the boards: switch to a chosen display
+format N seconds before a train arrives, and N seconds before it leaves (or keep it until the doors
+close). The settings live on the block, not on the screen, so they survive a restart.
 
 JCM 2.x's PIDS Projector is ported: `jsblock:pids_projector` throws a passenger information panel into
 the air, wherever you point it.
